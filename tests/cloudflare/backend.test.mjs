@@ -172,7 +172,11 @@ before(async () => {
     "cloudflare/migrations/0005_personal_space.sql",
     "utf8",
   );
-  for (const statement of (sql + accountsSql + spaceSql)
+  const mobileSql = await readFile(
+    "cloudflare/migrations/0006_mobile.sql",
+    "utf8",
+  );
+  for (const statement of (sql + accountsSql + spaceSql + mobileSql)
     .split(";")
     .map((s) => s.trim())
     .filter(Boolean))
@@ -469,6 +473,7 @@ test("third-party Google email requires current email proof before linking", asy
     code: loginCode,
   });
   assert.equal(verified.status, 200);
+  const verifiedAccount = await verified.json();
   const auth = verified.headers.get("set-cookie").split(";")[0];
   const linking = await mf.dispatchFetch(origin + "/api/auth/google", {
     headers: { cookie: `${guest.cookie}; ${auth}` },
@@ -491,7 +496,7 @@ test("third-party Google email requires current email proof before linking", asy
       "SELECT user_id FROM auth_identities WHERE provider='google' AND subject='external-google-sub'",
     )
     .first();
-  assert.equal(identity.user_id, (await verified.json()).user.id);
+  assert.equal(identity.user_id, verifiedAccount.user.id);
 });
 test("real Worker + D1/R2 isolate private episodes, public checkpoints and byte ranges", async () => {
   const a = await visitor(),
@@ -641,7 +646,8 @@ test("multipart upload validates size/ownership and completes idempotently into 
 test("upload quota allows five active or completed files per account and frees cancellations", async () => {
   const guest = await visitor();
   assert.equal(
-    (await guest.request("/api/uploads", "POST", { title: "Guest", size: 44 })).status,
+    (await guest.request("/api/uploads", "POST", { title: "Guest", size: 44 }))
+      .status,
     401,
   );
   const a = await signedInAccount();
@@ -656,7 +662,9 @@ test("upload quota allows five active or completed files per account and frees c
   assert.equal(starts.filter((response) => response.status === 201).length, 5);
   assert.equal(starts.filter((response) => response.status === 429).length, 3);
   const accepted = await Promise.all(
-    starts.filter((response) => response.status === 201).map((response) => response.json()),
+    starts
+      .filter((response) => response.status === 201)
+      .map((response) => response.json()),
   );
   const anotherVisitor = await visitor(false);
   const sameAccount = await anotherVisitor.request(
@@ -672,7 +680,10 @@ test("upload quota allows five active or completed files per account and frees c
     size: 44,
   });
   assert.equal(otherAccount.status, 201, await otherAccount.clone().text());
-  assert.equal((await a.request(`/api/uploads/${accepted[0].id}`, "DELETE")).status, 200);
+  assert.equal(
+    (await a.request(`/api/uploads/${accepted[0].id}`, "DELETE")).status,
+    200,
+  );
   const replacement = await a.request("/api/uploads", "POST", {
     title: "Replacement after cancellation",
     size: 44,
@@ -680,7 +691,9 @@ test("upload quota allows five active or completed files per account and frees c
   assert.equal(replacement.status, 201, await replacement.clone().text());
   const day = new Date().toISOString().slice(0, 10);
   const quota = await db
-    .prepare("SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected')")
+    .prepare(
+      "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected')",
+    )
     .bind(a.id, day)
     .first();
   assert.equal(quota.count, 5);
@@ -688,27 +701,64 @@ test("upload quota allows five active or completed files per account and frees c
 test("parallel upload starts cannot exceed an account's storage cap", async () => {
   const a = await signedInAccount();
   const id = crypto.randomUUID();
-  await db.prepare("INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state) VALUES(?,?,?,?,?,?,?,?)")
-    .bind(id, a.id, "old", `episodes/${id}/original`, "Old", 20 * 1024 ** 3 - 100, "2020-01-01T00:00:00.000Z", "complete").run();
-  const results = await Promise.all([0, 1].map(() =>
-    a.request("/api/uploads", "POST", { title: "New", size: 80 })));
+  await db
+    .prepare(
+      "INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state) VALUES(?,?,?,?,?,?,?,?)",
+    )
+    .bind(
+      id,
+      a.id,
+      "old",
+      `episodes/${id}/original`,
+      "Old",
+      20 * 1024 ** 3 - 100,
+      "2020-01-01T00:00:00.000Z",
+      "complete",
+    )
+    .run();
+  const results = await Promise.all(
+    [0, 1].map(() =>
+      a.request("/api/uploads", "POST", { title: "New", size: 80 }),
+    ),
+  );
   assert.equal(results.filter((result) => result.status === 201).length, 1);
   assert.equal(results.filter((result) => result.status === 429).length, 1);
   const accepted = await results.find((result) => result.status === 201).json();
-  assert.equal((await a.request(`/api/uploads/${accepted.id}`, "DELETE")).status, 200);
-  await db.prepare("UPDATE uploads SET state='deleted' WHERE id=?").bind(id).run();
+  assert.equal(
+    (await a.request(`/api/uploads/${accepted.id}`, "DELETE")).status,
+    200,
+  );
+  await db
+    .prepare("UPDATE uploads SET state='deleted' WHERE id=?")
+    .bind(id)
+    .run();
 });
 test("personal Space isolates accounts and deletion removes private data without refunding a completed upload", async () => {
   const guest = await visitor(false);
   assert.equal((await guest.request("/api/space/episodes")).status, 401);
-  const a = await signedInAccount(), b = await signedInAccount();
+  const a = await signedInAccount(),
+    b = await signedInAccount();
   const id = crypto.randomUUID();
   await seed(id, a.id);
-  await db.prepare("INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state) VALUES(?,?,?,?,?,?,?,?)")
-    .bind(id, a.id, "uploaded", `episodes/${id}/original`, "Episode", 10, new Date().toISOString(), "complete")
+  await db
+    .prepare(
+      "INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state) VALUES(?,?,?,?,?,?,?,?)",
+    )
+    .bind(
+      id,
+      a.id,
+      "uploaded",
+      `episodes/${id}/original`,
+      "Episode",
+      10,
+      new Date().toISOString(),
+      "complete",
+    )
     .run();
-  await db.prepare("INSERT INTO checkpoints(owner_id,episode_id,value) VALUES(?,?,?)")
-    .bind(a.id, id, JSON.stringify({ positionMs: 1, revision: 0 })).run();
+  await db
+    .prepare("INSERT INTO checkpoints(owner_id,episode_id,value) VALUES(?,?,?)")
+    .bind(a.id, id, JSON.stringify({ positionMs: 1, revision: 0 }))
+    .run();
   const listed = await a.request("/api/space/episodes");
   assert.equal(listed.status, 200);
   const page = await listed.json();
@@ -717,13 +767,39 @@ test("personal Space isolates accounts and deletion removes private data without
   assert.equal(page.dailyLimit, 5);
   const otherPage = await (await b.request("/api/space/episodes")).json();
   assert.ok(!otherPage.episodes.some((episode) => episode.id === id));
-  assert.equal((await b.request(`/api/space/episodes/${id}`, "DELETE")).status, 404);
-  assert.equal((await a.request(`/api/space/episodes/${id}`, "DELETE")).status, 200);
+  assert.equal(
+    (await b.request(`/api/space/episodes/${id}`, "DELETE")).status,
+    404,
+  );
+  assert.equal(
+    (await a.request(`/api/space/episodes/${id}`, "DELETE")).status,
+    200,
+  );
   assert.equal((await a.request(`/api/episodes/${id}`)).status, 404);
   assert.equal(await bucket.head(`episodes/${id}/original`), null);
-  assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM checkpoints WHERE episode_id=?").bind(id).first()).count, 0);
-  assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM artifacts WHERE key LIKE ?").bind(`episodes/${id}/%`).first()).count, 0);
-  assert.equal((await a.request("/api/space/episodes").then((response) => response.json())).usedToday, 1);
+  assert.equal(
+    (
+      await db
+        .prepare("SELECT COUNT(*) AS count FROM checkpoints WHERE episode_id=?")
+        .bind(id)
+        .first()
+    ).count,
+    0,
+  );
+  assert.equal(
+    (
+      await db
+        .prepare("SELECT COUNT(*) AS count FROM artifacts WHERE key LIKE ?")
+        .bind(`episodes/${id}/%`)
+        .first()
+    ).count,
+    0,
+  );
+  assert.equal(
+    (await a.request("/api/space/episodes").then((response) => response.json()))
+      .usedToday,
+    1,
+  );
 });
 test("question stream, Live ownership and server-reserved quotas use network-only adapter", async () => {
   const a = await visitor(),
@@ -930,12 +1006,13 @@ test("real media probe accepts exactly five hours and rejects one second more be
     return wav;
   };
   try {
-    const send = (seconds) => app.inject({
-      method: "POST",
-      url: `/prepare?id=${crypto.randomUUID()}`,
-      headers: { "content-type": "application/octet-stream" },
-      payload: makeWav(seconds),
-    });
+    const send = (seconds) =>
+      app.inject({
+        method: "POST",
+        url: `/prepare?id=${crypto.randomUUID()}`,
+        headers: { "content-type": "application/octet-stream" },
+        payload: makeWav(seconds),
+      });
     const atLimit = await send(5 * 3600);
     assert.equal(atLimit.statusCode, 200, atLimit.body);
     assert.equal(atLimit.json().durationMs, 5 * 3600000);
@@ -956,12 +1033,35 @@ test("actual FFmpeg service extracts embedded artwork only when the file has one
   const mp3 = (name, picture) => {
     const path = join(root, name);
     execFileSync("ffmpeg", [
-      "-v", "error",
-      "-f", "lavfi", "-t", "1", "-i", "anullsrc=r=24000:cl=mono",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-t",
+      "1",
+      "-i",
+      "anullsrc=r=24000:cl=mono",
       ...(picture
-        ? ["-f", "lavfi", "-i", "color=c=red:s=1200x800:d=1", "-map", "0:a", "-map", "1:v", "-frames:v", "1", "-c:v", "png", "-disposition:v", "attached_pic"]
+        ? [
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=1200x800:d=1",
+            "-map",
+            "0:a",
+            "-map",
+            "1:v",
+            "-c:v",
+            "png",
+            "-disposition:v",
+            "attached_pic",
+          ]
         : []),
-      "-c:a", "libmp3lame", "-id3v2_version", "3", path,
+      "-c:a",
+      "libmp3lame",
+      "-id3v2_version",
+      "3",
+      path,
     ]);
     return readFile(path);
   };
@@ -1028,7 +1128,10 @@ test("analysis stores extracted artwork and never fails over a lost cover", asyn
     provider,
   );
   assert.equal((await store.episode(await store.row(kept))).cover, true);
-  assert.equal(await (await bucket.get(`episodes/${kept}/cover.jpg`)).text(), "jpeg");
+  assert.equal(
+    await (await bucket.get(`episodes/${kept}/cover.jpg`)).text(),
+    "jpeg",
+  );
   const lost = crypto.randomUUID();
   await seed(lost, "owner", false, false);
   await analyzeEpisode(
@@ -1073,23 +1176,52 @@ test("production Workflow orchestrates R2, model adapters, D1 and container bind
   assert.equal(await cover.text(), "jpeg bytes");
   const plain = crypto.randomUUID();
   await seed(plain, listener.id);
-  assert.equal((await listener.request(`/api/episodes/${plain}/cover`)).status, 404);
+  assert.equal(
+    (await listener.request(`/api/episodes/${plain}/cover`)).status,
+    404,
+  );
 });
 test("admission failure blocks an upload and removes its original before any model request", async () => {
   const id = crypto.randomUUID();
   await seed(id, "admission-owner", false, false);
   await bucket.put(`episodes/${id}/original`, "invalid-long");
-  await db.prepare("INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state) VALUES(?,?,?,?,?,?,?,?)")
-    .bind(id, "admission-owner", "complete", `episodes/${id}/original`, "Too long", 12, new Date().toISOString(), "complete").run();
+  await db
+    .prepare(
+      "INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state) VALUES(?,?,?,?,?,?,?,?)",
+    )
+    .bind(
+      id,
+      "admission-owner",
+      "complete",
+      `episodes/${id}/original`,
+      "Too long",
+      12,
+      new Date().toISOString(),
+      "complete",
+    )
+    .run();
   const calls = networkCalls.length;
   const bindings = await mf.getBindings();
-  const instance = await bindings.PROD_ANALYSIS.create({ id, params: { episodeId: id } });
-  await eventually(async () => ["errored", "complete"].includes((await instance.status()).status));
+  const instance = await bindings.PROD_ANALYSIS.create({
+    id,
+    params: { episodeId: id },
+  });
+  await eventually(async () =>
+    ["errored", "complete"].includes((await instance.status()).status),
+  );
   const episode = await new CloudStore(db, bucket).row(id);
   assert.equal(JSON.parse(episode.metadata).status, "blocked");
   assert.equal(JSON.parse(episode.metadata).error, "单个音频不能超过 5 小时");
   assert.equal(await bucket.head(`episodes/${id}/original`), null);
-  assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM uploads WHERE id=?").bind(id).first()).count, 0);
+  assert.equal(
+    (
+      await db
+        .prepare("SELECT COUNT(*) AS count FROM uploads WHERE id=?")
+        .bind(id)
+        .first()
+    ).count,
+    0,
+  );
   assert.equal(networkCalls.length, calls);
 });
 
@@ -1177,7 +1309,10 @@ test("trial proof is mandatory, bound to visitor/IP/hostname/action, and tokens 
   }
   const token = JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() });
   assert.equal((await a.request("/api/trial", "POST", { token })).status, 200);
-  const proof = await db.prepare("SELECT expires FROM trial_proofs WHERE owner=?").bind(a.id).first();
+  const proof = await db
+    .prepare("SELECT expires FROM trial_proofs WHERE owner=?")
+    .bind(a.id)
+    .first();
   assert.ok(proof.expires > Date.now() + 5 * 60 * 60 * 1000);
   assert.equal((await a.request("/api/trial", "POST", { token })).status, 403);
   calls = networkCalls.length;
@@ -1204,7 +1339,9 @@ test("signed-in accounts skip Turnstile but retain paid question quotas", async 
   const trial = await account.request("/api/trial");
   assert.equal(trial.status, 200);
   assert.equal((await trial.json()).verified, true);
-  const verifications = networkCalls.filter((path) => path.endsWith("/siteverify")).length;
+  const verifications = networkCalls.filter((path) =>
+    path.endsWith("/siteverify"),
+  ).length;
   const id = `account-trial-${crypto.randomUUID()}`;
   await seed(id, account.id);
   const payload = {
@@ -1213,11 +1350,22 @@ test("signed-in accounts skip Turnstile but retain paid question quotas", async 
     history: [{ role: "user", text: "Explain" }],
   };
   for (let i = 0; i < 5; i++) {
-    const response = await account.request(`/api/episodes/${id}/question`, "POST", payload);
+    const response = await account.request(
+      `/api/episodes/${id}/question`,
+      "POST",
+      payload,
+    );
     assert.equal(response.status, 200, await response.text());
   }
-  assert.equal((await account.request(`/api/episodes/${id}/question`, "POST", payload)).status, 429);
-  assert.equal(networkCalls.filter((path) => path.endsWith("/siteverify")).length, verifications);
+  assert.equal(
+    (await account.request(`/api/episodes/${id}/question`, "POST", payload))
+      .status,
+    429,
+  );
+  assert.equal(
+    networkCalls.filter((path) => path.endsWith("/siteverify")).length,
+    verifications,
+  );
 });
 test("five question reservations are enforced before providers; kill switch preserves playback", async () => {
   const a = await visitor();
@@ -1505,4 +1653,85 @@ test("D1 stores large Unicode artifacts atomically and keeps structured data out
     await db.prepare("DROP TRIGGER fail_record").run();
   }
   assert.equal(await bucket.head(key), null);
+});
+
+test("mobile bearer session shares the website account, enforces isolation, and revokes on logout", async () => {
+  const email = `mobile-${crypto.randomUUID()}@example.com`;
+  const post = (path, body, token) =>
+    mf.dispatchFetch(origin + path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  assert.equal(
+    (await post("/api/auth/mobile/email/start", { email })).status,
+    200,
+  );
+  const code = await setTestLoginCode(email);
+  const verified = await post("/api/auth/mobile/email/verify", { email, code });
+  assert.equal(verified.status, 200, await verified.clone().text());
+  const { token, user } = await verified.json();
+  assert.match(token, /^[a-f0-9]{64}$/);
+  assert.equal(
+    (await post("/api/auth/mobile/email/verify", { email, code })).status,
+    400,
+  );
+  await seed("mobile-private", user.id);
+  const get = (path, bearer = token) =>
+    mf.dispatchFetch(origin + path, {
+      headers: { Authorization: `Bearer ${bearer}` },
+    });
+  assert.equal((await get("/api/episodes/mobile-private/audio")).status, 200);
+  assert.equal(
+    (await get("/api/episodes/mobile-private/audio", "0".repeat(64))).status,
+    401,
+  );
+  assert.equal(
+    (await mf.dispatchFetch(origin + "/api/episodes/mobile-private/audio"))
+      .status,
+    404,
+  );
+  const cookiePretend = await mf.dispatchFetch(origin + "/api/profile", {
+    headers: { Cookie: `aside_auth=${token}` },
+  });
+  assert.equal(cookiePretend.status, 401);
+  assert.equal((await post("/api/auth/logout", {}, token)).status, 200);
+  assert.equal((await get("/api/profile")).status, 401);
+});
+
+test("checkpoint writes use compare-and-swap and cannot overwrite a newer device", async () => {
+  const account = await signedInAccount();
+  const id = "checkpoint-cas";
+  await seed(id, account.id);
+  const path = `/api/episodes/${id}/checkpoint`;
+  const first = await account.request(path, "PUT", {
+    positionMs: 100,
+    history: [],
+    version: 0,
+  });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).version, 1);
+  assert.equal(
+    (
+      await account.request(path, "PUT", {
+        positionMs: 200,
+        history: [],
+        version: 0,
+      })
+    ).status,
+    409,
+  );
+  const stored = await (await account.request(path)).json();
+  assert.equal(stored.positionMs, 100);
+  assert.equal(stored.version, 1);
+  const updated = await account.request(path, "PUT", {
+    positionMs: 200,
+    history: [],
+    version: 1,
+  });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).version, 2);
 });
