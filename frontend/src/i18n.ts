@@ -365,7 +365,7 @@ export const english: Record<string, string> = {
   "开启麦克风…": "Starting microphone…",
   "按住说话 · 待命": "Hold to talk · Ready",
   "● 本地监听": "● Listening locally",
-  "● 正在连接": "● Connecting",
+  "● Aside 正在加入": "● Aside is joining",
   "● 正在识别": "● Transcribing",
   "按住说话 · 可继续追问": "Hold to talk · Ask a follow-up",
   "● 语音交流中": "● Voice conversation",

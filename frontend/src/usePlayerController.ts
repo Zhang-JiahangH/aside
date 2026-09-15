@@ -128,6 +128,8 @@ export function usePlayerController() {
     debug,
     setDebug,
     audio: audio.attach,
+    audioLevels: (levels: Float32Array) => audio.levels(levels),
+    voiceLevels: (levels: Float32Array) => session.voiceLevels(levels),
     metadataLoaded: () => session.metadataLoaded(),
     audioTick: () => session.audioTick(),
     setPlaybackRate: (rate: number) => session.setPlaybackRate(rate),

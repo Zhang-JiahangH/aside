@@ -1,4 +1,5 @@
 import type { Turn } from "@aside/engine/core";
+import { readSpeechLevels } from "./audio-levels";
 export interface LiveCallbacks {
   onReady(): void;
   onOutput(active: boolean): void;
@@ -13,6 +14,7 @@ export class LiveConnection {
   private channel?: RTCDataChannel;
   private mic?: MediaStream;
   private ctx?: AudioContext;
+  private output?: AnalyserNode;
   private audio = new Audio();
   private timer?: number;
   private closeTimer?: number;
@@ -51,14 +53,13 @@ export class LiveConnection {
       await this.ctx.resume();
       this.peer = new RTCPeerConnection();
       this.audio.autoplay = true;
-      let output: AnalyserNode | undefined;
       this.peer.ontrack = (e) => {
         const stream = e.streams[0] ?? new MediaStream([e.track]);
         this.audio.srcObject = stream;
         void this.audio
           .play()
           .catch(() => this.callbacks.onError("请点击页面允许音频播放"));
-        output = this.ctx!.createAnalyser();
+        const output = (this.output = this.ctx!.createAnalyser());
         output.fftSize = 1024;
         this.ctx!.createMediaStreamSource(stream).connect(output);
       };
@@ -129,6 +130,7 @@ export class LiveConnection {
       this.timer = window.setInterval(() => {
         if (!this.ready || this.closing) return;
         const now = performance.now();
+        const output = this.output;
         const loud = output && rms(output) > 0.008;
         if (loud) {
           this.lastOutput = now;
@@ -153,6 +155,13 @@ export class LiveConnection {
       this.finish(false);
       throw err;
     }
+  }
+  /** Fills `levels` with the answer voice's speech bands; false unless it is audible. */
+  levels(levels: Float32Array) {
+    if (!this.output || !this.ready || this.closing || this.audio.muted)
+      return false;
+    readSpeechLevels(this.output, levels);
+    return true;
   }
   append(
     type: "thinking" | "commentary" | "instructions",

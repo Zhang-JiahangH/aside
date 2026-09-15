@@ -1660,10 +1660,44 @@ progress {
   min-width: 1px;
   border-radius: 2px;
   background: var(--line-strong);
-  transition: background-color 160ms ease;
+  transition: background-color 420ms ease var(--handoff-delay, 0ms);
+  will-change: transform;
 }
 .timeline-wave i.on {
   background: var(--olive);
+}
+/* Aside's turn: the wave takes the answer voice's colour, spreading out from the playhead. */
+.timeline-wave.is-agent i {
+  background: color-mix(in srgb, var(--wave-b) 60%, var(--line-strong));
+}
+.timeline-wave.is-agent i.on {
+  background: var(--wave-b);
+}
+.timeline-wave.is-joining::after {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+  border-radius: 6px;
+  background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--wave-b) 45%, transparent),
+      transparent
+    )
+    no-repeat;
+  background-size: 40% 100%;
+  animation: agent-join 1.4s ease-in-out infinite;
+}
+@keyframes agent-join {
+  from {
+    background-position: -70% 0;
+  }
+  to {
+    background-position: 170% 0;
+  }
+}
+.message.assistant.is-speaking .chat-avatar {
+  animation: voice-halo 1.8s ease-in-out infinite;
 }
 .timeline-wrap .timeline {
   position: absolute;
@@ -1808,6 +1842,12 @@ progress {
   .timeline-wave i,
   .conversation form {
     transition: none;
+  }
+  .message.assistant.is-speaking .chat-avatar {
+    animation: none;
+  }
+  .timeline-wave.is-joining::after {
+    display: none;
   }
 }
 .player-dock .controls .play.playing {

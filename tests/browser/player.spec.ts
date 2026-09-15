@@ -513,6 +513,27 @@ for (const manual of [false]) {
       (window as any).asideAnswerGain.gain.value = 0.15;
     });
     await expect(page.locator(".status")).toContainText("正在回答");
+    // Aside's audible answer takes over the dock waveform and marks its avatar.
+    await expect(page.locator(".timeline-wave")).toHaveClass(/is-agent/);
+    await expect(page.locator(".message.assistant.is-speaking")).toHaveCount(1);
+    await expect
+      .poll(() =>
+        page
+          .locator(".timeline-wave i")
+          .evaluateAll((bars) =>
+            Math.max(
+              ...bars.map((bar) =>
+                Number(
+                  /scaleY\(([\d.]+)\)/.exec((bar as HTMLElement).style.transform)?.[1] ?? 0,
+                ),
+              ),
+            ),
+          ),
+      )
+      .toBeGreaterThan(0.8);
+    await page
+      .locator(".player-dock")
+      .screenshot({ path: "test-results/dock-agent-answering.png" });
     await page.getByRole("button", { name: /开发观察/ }).click();
     await expect(page.locator(".debug")).toContainText('"connection": "cold"');
     await expect(page.locator(".followup-window")).not.toContainText(
@@ -602,6 +623,7 @@ for (const manual of [false]) {
         page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
       )
       .toBe(false);
+    await expect(page.locator(".timeline-wave")).not.toHaveClass(/is-agent/);
     expect(
       await page.evaluate(
         () => (window as any).asideTestMic.stream.getTracks()[0].readyState,
