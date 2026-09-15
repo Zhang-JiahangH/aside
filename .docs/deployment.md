@@ -241,3 +241,15 @@ npm run db:cloudflare:production
 生产 Worker `97ad594c-31bd-4d03-8efa-4b7e339ed815`（`--containers-rollout=none`，保留现有 Container），绑定仍含 `EMAIL`、`ALLOW_UPLOADS=true`。正式域名 `/` 与 `/space` 引用 `index-9zqOMr3U.js`、`index-BnkzDfhJ.css`，均 200 且 MIME 正确，bundle 含新文案；`/api/health` 200，`liveConfigured=true`、`uploadsEnabled=true`。线上浏览器以访客、未开麦克风的只听模式打开 LibriVox 示例并播放：波形逐帧变化、播放进度正常前进、暂停后复位，控制台无错误。
 
 未验证：没有在生产开麦克风做真实语音对话（会产生付费调用），所以加入/回答阶段的线上效果只由本地测试与截图覆盖；测试中 AI 声音是 440Hz 单音，真人语音下的波形节奏和扫光强度未人工看过；iOS Safari 上经 Web Audio 输出的音频在锁屏或后台时可能暂停，未在真机验证。
+
+## 账号上传额度改为每月 100 篇
+
+2026-09-14：登录账号的上传额度从每 UTC 日 5 篇改为每个 UTC 自然月 100 篇（上传中或已完成；取消、被拒不占名额，上个月的不计入），配置项 `DAILY_UPLOAD_LIMIT=5` 换成 `MONTHLY_UPLOAD_LIMIT=100`。`/api/space/episodes` 的 `usedToday`/`dailyLimit` 改为 `usedThisMonth`/`monthlyLimit`，前端与 Worker 同版本发布；侧栏显示「N / 100 篇本月已用」，超额返回「每个账号每月最多上传 100 篇音频」，中英文文案、试用说明与 `llms.txt` 同步。
+
+未改动：全站每 UTC 日 10 篇、每账号每日 10 次/全站 30 次上传尝试、每账号 20 GiB / 全站 100 GiB 存储。因此单个账号一天仍最多 10 篇，并可能占满当天全站名额；整站每月上传分析的费用上限仍由全站每日 10 篇决定，这次改动没有提高它。
+
+`npm run check`、94 项项目测试、28 项 Cloudflare 集成测试和 8 项 Space/账号/语言浏览器用例通过。额度集成用例预置本月另一日的 97 篇（避开全站每日计数）与上个月 3 篇，并发 8 个上传只接受 3 个，拒绝时返回月度提示，取消后可补传，Space 返回 100 / 100。
+
+生产 Worker `a972ee2a-948c-4292-8b66-b43a6f52ef92`（`--containers-rollout=none`，保留现有 Container），绑定显示 `MONTHLY_UPLOAD_LIMIT=100`、`GLOBAL_DAILY_UPLOAD_LIMIT=10`，仍含 `EMAIL`、`ALLOW_UPLOADS=true`。正式域名 `/` 与 `/space` 引用 `index-B8_QdQso.js`（200，`text/javascript`），bundle 含月度文案与字段、不再含 `usedToday`/「篇今日已用」；`/llms.txt` 为 100 uploads per UTC calendar month；`/api/health` 200、`uploadsEnabled=true`；未登录访问 `/api/space/episodes` 与 `POST /api/uploads` 均返回 401。
+
+未验证：没有用生产登录账号查看 Space 的月度字段或实际上传（会触发付费分析），月度计数与超额提示只由本地 Miniflare 集成测试覆盖。
