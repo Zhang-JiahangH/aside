@@ -37,8 +37,8 @@ test("email sign-in opens an editable profile and sign-out returns to guest", as
       return send({
         episodes: [],
         pending: [],
-        usedToday: 0,
-        dailyLimit: 5,
+        usedThisMonth: 0,
+        monthlyLimit: 100,
         usedStorage: 0,
         storageLimit: 20 * 1024 ** 3,
         nextCursor: null,

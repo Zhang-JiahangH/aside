@@ -22,6 +22,7 @@ export interface CloudPort {
   input(value: boolean): void;
   interrupt(): void;
   close(): Promise<void>;
+  levels?(levels: Float32Array): boolean;
 }
 export interface VoiceCallbacks extends Omit<
   LiveCallbacks,
@@ -364,6 +365,9 @@ export class OnDemandVoice {
     this.outputActive = false;
     this.clearTimers();
     this.cloud?.interrupt();
+  }
+  outputLevels(levels: Float32Array) {
+    return this.cloud?.levels?.(levels) ?? false;
   }
   async close() {
     this.enabled = false;

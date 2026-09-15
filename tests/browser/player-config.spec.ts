@@ -195,6 +195,17 @@ test("volume slider and mute button control the audio and survive reload", async
 }) => {
   await mockPlayer(page);
   await page.goto("/?episode=remote-a");
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  // The silent fixture should drive live analyser bars down to their minimum,
+  // while volume controls continue to work on the routed media element.
+  await expect
+    .poll(() =>
+      page
+        .locator(".timeline-wave i")
+        .first()
+        .evaluate((bar) => bar.style.transform),
+    )
+    .toBe("scaleY(0.28)");
   const volume = page.getByRole("slider", { name: "Podcast volume" });
   await volume.focus();
   await page.keyboard.press("Home");
@@ -212,6 +223,20 @@ test("volume slider and mute button control the audio and survive reload", async
       page.locator("audio").evaluate((a: HTMLAudioElement) => a.muted),
     )
     .toBe(true);
+  await expect
+    .poll(() =>
+      page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
+    )
+    .toBe(false);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect
+    .poll(() =>
+      page
+        .locator(".timeline-wave i")
+        .first()
+        .evaluate((bar) => bar.style.transform),
+    )
+    .toBe("");
   await page.goto("/?episode=remote-a");
   await expect(volume).toHaveValue("40");
   await expect(mute).toHaveAttribute("aria-pressed", "true");

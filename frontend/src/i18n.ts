@@ -187,10 +187,10 @@ export const english: Record<string, string> = {
   "把想听的音频放在这里，听到疑问时随时聊两句。":
     "Bring your audio here. Ask whenever curiosity strikes.",
   上传音频: "Upload audio",
-  篇今日已用: "used today",
+  篇本月已用: "used this month",
   "拖入音频，或选择文件": "Drop audio here, or choose a file",
-  "单个音频最长 5 小时 · 文件最大 1 GiB · 每天最多 5 篇":
-    "Up to 5 hours and 1 GiB per file · 5 uploads a day",
+  "单个音频最长 5 小时 · 文件最大 1 GiB · 每月最多 100 篇":
+    "Up to 5 hours and 1 GiB per file · 100 uploads a month",
   选择音频: "Choose audio",
   "音频文件需小于 1 GiB": "The audio file must be under 1 GiB.",
   "文件不能超过 1 GiB": "The file cannot exceed 1 GiB.",
@@ -228,8 +228,8 @@ export const english: Record<string, string> = {
   "上传暂未开放，已保存的音频仍可收听。":
     "Uploads are not open yet. You can still listen to saved audio.",
   验证并上传: "Verify to upload",
-  "完成验证后即可上传。每个账号每天最多 5 篇，上传完成后自动分析。":
-    "Verify to upload. Each account can upload 5 files a day; analysis starts automatically.",
+  "完成验证后即可上传。每个账号每月最多 100 篇，上传完成后自动分析。":
+    "Verify to upload. Each account can upload 100 files a month; analysis starts automatically.",
   "登录 / 注册": "Sign in",
   编辑个人资料: "Edit profile",
   关闭: "Close",
@@ -370,7 +370,7 @@ export const english: Record<string, string> = {
   "开启麦克风…": "Starting microphone…",
   "按住说话 · 待命": "Hold to talk · Ready",
   "● 本地监听": "● Listening locally",
-  "● 正在连接": "● Connecting",
+  "● Aside 正在加入": "● Aside is joining",
   "● 正在识别": "● Transcribing",
   "按住说话 · 可继续追问": "Hold to talk · Ask a follow-up",
   "● 语音交流中": "● Voice conversation",

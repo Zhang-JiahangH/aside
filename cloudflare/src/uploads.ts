@@ -59,15 +59,17 @@ export async function uploadRoute(
       throw new HttpError(413, "文件不能超过 1 GiB");
     const createdAt = new Date().toISOString();
     const day = createdAt.slice(0, 10);
-    const dailyLimit = positiveLimit(env.DAILY_UPLOAD_LIMIT, 5);
-    const globalLimit = positiveLimit(env.GLOBAL_DAILY_UPLOAD_LIMIT, 10);
+    const month = createdAt.slice(0, 7);
+    const monthlyLimit = positiveLimit(env.MONTHLY_UPLOAD_LIMIT, 100);
+    const globalLimit = positiveLimit(env.GLOBAL_DAILY_UPLOAD_LIMIT, 2000);
     const accountStorageLimit = positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3);
     const globalStorageLimit = positiveLimit(env.GLOBAL_STORAGE_LIMIT_BYTES, 100 * 1024 ** 3);
-    // Rejected or cancelled files do not occupy the five-file library quota,
-    // but still consume R2/Container work. Cap starts independently.
+    // Rejected or cancelled files do not occupy the account's monthly library quota,
+    // but still consume R2/Container work. Cap starts independently; the
+    // site-wide allowance scales with the daily upload cap so it never binds first.
     try {
       await store.reserve(`upload-init:${day}:${owner}`, 10);
-      await store.reserve(`upload-init:${day}:global`, 30);
+      await store.reserve(`upload-init:${day}:global`, globalLimit * 3);
     } catch (error) {
       if (error instanceof HttpError && error.status === 429)
         throw new HttpError(429, "今天的上传尝试次数已用完，请明天再试");
@@ -80,7 +82,7 @@ export async function uploadRoute(
       const inserted = await env.DB.prepare(
         `INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at)
          SELECT ?,?,?,?,?,?,?
-         WHERE (SELECT COUNT(*) FROM uploads WHERE owner_id=? AND substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected'))<?
+         WHERE (SELECT COUNT(*) FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected'))<?
            AND (SELECT COUNT(*) FROM uploads WHERE substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected'))<?
            AND COALESCE((SELECT SUM(size) FROM uploads WHERE owner_id=? AND state IN ('pending','complete')),0)+?<=?
            AND COALESCE((SELECT SUM(size) FROM uploads WHERE state IN ('pending','complete')),0)+?<=?
@@ -95,8 +97,8 @@ export async function uploadRoute(
           data.size,
           createdAt,
           owner,
-          day,
-          dailyLimit,
+          month,
+          monthlyLimit,
           day,
           globalLimit,
           owner,
@@ -111,14 +113,14 @@ export async function uploadRoute(
           "SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE owner_id=? AND state IN ('pending','complete')",
         ).bind(owner).first<{ bytes: number }>();
         const own = await env.DB.prepare(
-          "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected')",
+          "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected')",
         )
-          .bind(owner, day)
+          .bind(owner, month)
           .first<{ count: number }>();
         throw new HttpError(
           429,
-          (own?.count ?? 0) >= dailyLimit
-            ? `每个账号每天最多上传 ${dailyLimit} 篇音频`
+          (own?.count ?? 0) >= monthlyLimit
+            ? `每个账号每月最多上传 ${monthlyLimit} 篇音频`
             : (stored?.bytes ?? 0) + data.size > accountStorageLimit
               ? "个人空间已达到 20 GiB 存储上限，请删除不需要的音频"
               : "今天的全站上传或存储额度已满，请稍后再试",

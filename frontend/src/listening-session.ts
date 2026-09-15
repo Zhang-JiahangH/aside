@@ -44,7 +44,8 @@ export type VoicePort = Pick<
   | "append"
   | "activity"
   | "setWorking"
->;
+> &
+  Partial<Pick<OnDemandVoice, "outputLevels">>;
 type VoiceFactory = (
   microphone: MicrophoneConfig,
   config: VoiceLifecycleConfig,
@@ -212,6 +213,9 @@ export class ListeningSession {
   setError(message: string) {
     this.error = message;
     this.publish();
+  }
+  voiceLevels(levels: Float32Array) {
+    return this.voice?.outputLevels?.(levels) ?? false;
   }
   setQuestion(text: string) {
     this.conversation.setDraft(text);
