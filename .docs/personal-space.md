@@ -38,7 +38,7 @@
 
 `POST /api/uploads`、分片 PUT 与 complete 先检查账号、额度和大小；complete 验证 R2 对象大小后自动启动 Workflow。Container 用 `ffprobe` 读取真实时长，超过 5 小时或没有可读音轨就标记为不可处理并删除原件，不进入付费模型步骤。通过准入后写入时长与 MIME，继续自动分析。分析重试只针对已通过准入的音频。删除使用账号限定的 `DELETE /api/space/episodes/:id`。
 
-Container 接受最多 1 GiB / 5 小时，静音扫描限时 25 分钟，Workflow `prepare` step 限时 30 分钟；每个 4 分钟编码分块最多 5 分钟。5 小时会产生约 75 段，分析可能持续很久，费用也会随时长增加。Cloudflare `standard-1` Container 提供 8 GB 临时磁盘，[实例限制](https://developers.cloudflare.com/containers/platform/limits/)；Workflow 的 [step 超时建议](https://developers.cloudflare.com/workflows/build/rules-of-workflows/) 为不超过 30 分钟。
+Container 接受最多 1 GiB / 5 小时，静音扫描限时 25 分钟，Workflow `prepare` step 限时 30 分钟；转码与切段在「切分音频」这一个 step 内一次完成（ffmpeg 解码与转码限时 25 分钟），之后每段约 4 分钟的转录与分析并发执行。5 小时会产生约 75 段，分析可能持续很久，费用也会随时长增加。Cloudflare `standard-1` Container 提供 8 GB 临时磁盘，[实例限制](https://developers.cloudflare.com/containers/platform/limits/)；Workflow 的 [step 超时建议](https://developers.cloudflare.com/workflows/build/rules-of-workflows/) 为不超过 30 分钟。
 
 ## 已验证与未覆盖
 

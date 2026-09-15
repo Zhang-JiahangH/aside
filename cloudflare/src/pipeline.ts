@@ -2,7 +2,7 @@ import { enabled } from "./trial.js";
 import { makeAnalysis, type AnalysisPort } from "@aside/engine/server";
 import type { Episode, Passage } from "@aside/engine/core";
 import { AudioProvider } from "../../backend/src/audio-provider.js";
-import { CloudStore } from "./store.js";
+import { CloudStore, positiveLimit } from "./store.js";
 import type { Env } from "./env.js";
 export interface Manifest {
   durationMs: number;
@@ -15,15 +15,20 @@ export interface Manifest {
 export interface Steps {
   do(name: string, callback: () => Promise<string>): Promise<string>;
 }
-export interface MediaProcessor {
-  prepare(id: string): Promise<Manifest>;
-  chunk(id: string, index: number): Promise<Uint8Array>;
-  cover(id: string): Promise<Uint8Array | undefined>;
-  cleanup(id: string): Promise<void>;
+/** Media prepared on one container instance; valid only inside the step that opened it. */
+export interface MediaSession {
+  manifest: Manifest;
+  segment(index: number): Promise<Uint8Array>;
+  cover(): Promise<Uint8Array | undefined>;
+  close(): Promise<void>;
 }
+export interface MediaProcessor {
+  open(id: string): Promise<MediaSession>;
+}
+const DEFAULT_CONCURRENCY = 6;
 /** Step outputs are keys; structured records live in D1, audio bytes in R2. */
 export async function analyzeEpisode(
-  env: Pick<Env, "DB" | "AUDIO" | "OPENAI_API_KEY" | "AI_ENABLED">,
+  env: Pick<Env, "DB" | "AUDIO" | "OPENAI_API_KEY" | "AI_ENABLED" | "ANALYSIS_CONCURRENCY">,
   id: string,
   step: Steps,
   media: MediaProcessor,
@@ -44,8 +49,10 @@ export async function analyzeEpisode(
   ) {
     const row = await store.row(id);
     const episode = JSON.parse(row.metadata) as Episode;
+    // Segments finish out of order, so progress within one status never moves back.
+    episode.progress =
+      episode.status === status ? Math.max(episode.progress, progress) : progress;
     episode.stage = stage;
-    episode.progress = progress;
     episode.status = status;
     delete episode.error;
     await store.update(episode);
@@ -55,32 +62,52 @@ export async function analyzeEpisode(
     if (!env.OPENAI_API_KEY && !suppliedProvider)
       throw Error("Analysis provider not configured");
     const provider = suppliedProvider ?? new AudioProvider(env.OPENAI_API_KEY!);
-    await step.do("prepare", async () => {
-      await update("检查音频与分块", 0.02);
-      const key = `${prefix}/manifest.json`;
-      if (!(await store.records.has(key)))
-        await write(key, await media.prepare(id));
-      return key;
-    });
-    const manifest = await read<Manifest>(`${prefix}/manifest.json`);
+    const manifestKey = `${prefix}/manifest.json`;
+    const segmentKey = (index: number) => `${prefix}/chunk-${index}.mp3`;
     const coverKey = `episodes/${id}/cover.jpg`;
-    if (manifest.cover)
-      await step.do("cover", async () => {
-        if (!(await env.AUDIO.head(coverKey))) {
-          let bytes: Uint8Array | undefined;
+    // The only step that needs the container. It leaves every segment in R2
+    // before it ends, so a lost instance costs a retry of this step and nothing later.
+    await step.do("segment-audio", async () => {
+      if (await store.records.has(manifestKey)) {
+        const saved = await read<Manifest>(manifestKey);
+        const present = await Promise.all(
+          saved.plan.map((_, index) => env.AUDIO.head(segmentKey(index))),
+        );
+        if (present.every(Boolean)) return manifestKey;
+      }
+      await update("检查音频与分块", 0.02);
+      const session = await media.open(id);
+      try {
+        const { manifest } = session;
+        for (let index = 0; index < manifest.plan.length; index++) {
+          if (await env.AUDIO.head(segmentKey(index))) continue;
+          const bytes = await session.segment(index);
+          await store.row(id);
+          await env.AUDIO.put(segmentKey(index), bytes, {
+            httpMetadata: { contentType: "audio/mpeg" },
+          });
+        }
+        let cover = false;
+        if (manifest.cover)
           try {
-            bytes = await media.cover(id);
+            const bytes = await session.cover();
+            if (bytes) {
+              await store.row(id);
+              await env.AUDIO.put(coverKey, bytes, {
+                httpMetadata: { contentType: "image/jpeg" },
+              });
+              cover = true;
+            }
           } catch {
             // Artwork is decorative; losing it must not fail the analysis.
           }
-          await store.row(id);
-          if (bytes)
-            await env.AUDIO.put(coverKey, bytes, {
-              httpMetadata: { contentType: "image/jpeg" },
-            });
-        }
-        return coverKey;
-      });
+        await write(manifestKey, { ...manifest, cover });
+      } finally {
+        await session.close().catch(() => {});
+      }
+      return manifestKey;
+    });
+    const manifest = await read<Manifest>(manifestKey);
     {
       const row = await store.row(id);
       const episode = JSON.parse(row.metadata) as Episode;
@@ -95,28 +122,20 @@ export async function analyzeEpisode(
         status: "analyzing",
       });
     }
-    for (let i = 0; i < manifest.plan.length; i++) {
-      const chunk = `${prefix}/chunk-${i}.mp3`,
+    const total = manifest.plan.length;
+    let finishedSteps = 0;
+    const report = () =>
+      update(
+        `已完成 ${Math.floor(finishedSteps / 2)}/${total} 段`,
+        0.05 + (0.85 * finishedSteps) / (2 * total),
+      );
+    const analyzeSegment = async (i: number) => {
+      const chunk = segmentKey(i),
         transcript = `${prefix}/transcript-${i}.json`,
         enriched = `${prefix}/enriched-${i}.json`;
-      await step.do(`encode-${i}`, async () => {
-        await store.row(id);
-        if (!(await env.AUDIO.head(chunk))) {
-          const bytes = await media.chunk(id, i);
-          await store.row(id);
-          await env.AUDIO.put(chunk, bytes, {
-            httpMetadata: { contentType: "audio/mpeg" },
-          });
-        }
-        return chunk;
-      });
       await step.do(`transcribe-${i}`, async () => {
-        await update(
-          `转录第 ${i + 1}/${manifest.plan.length} 段`,
-          0.05 + (0.85 * i) / manifest.plan.length,
-        );
         if (!(await store.records.has(transcript))) {
-          await store.row(id);
+          await report();
           if (!(await enabled(env))) throw Error("AI processing disabled");
           const object = await env.AUDIO.get(chunk);
           if (!object) throw Error("Missing audio chunk");
@@ -129,13 +148,10 @@ export async function analyzeEpisode(
         }
         return transcript;
       });
+      finishedSteps++;
       await step.do(`enrich-${i}`, async () => {
-        await update(
-          `分析第 ${i + 1}/${manifest.plan.length} 段`,
-          0.05 + (0.85 * (i + 0.5)) / manifest.plan.length,
-        );
         if (!(await store.records.has(enriched))) {
-          await store.row(id);
+          await report();
           if (!(await enabled(env))) throw Error("AI processing disabled");
           const object = await env.AUDIO.get(chunk);
           if (!object) throw Error("Missing audio chunk");
@@ -153,7 +169,29 @@ export async function analyzeEpisode(
         }
         return enriched;
       });
-    }
+      finishedSteps++;
+    };
+    // Segments are independent; each keeps transcribe before enrich. After a
+    // failure no new segment starts, but steps already running finish first.
+    const workers = Math.min(
+      total,
+      positiveLimit(env.ANALYSIS_CONCURRENCY, DEFAULT_CONCURRENCY),
+    );
+    let next = 0;
+    let failure: { error: unknown } | undefined;
+    await Promise.all(
+      Array.from({ length: workers }, async () => {
+        while (!failure && next < total) {
+          const index = next++;
+          try {
+            await analyzeSegment(index);
+          } catch (error) {
+            failure ??= { error };
+          }
+        }
+      }),
+    );
+    if (failure) throw failure.error;
     await step.do("assemble", async () => {
       const all: Passage[] = [];
       const info: Awaited<ReturnType<AnalysisPort["enrich"]>> = {
@@ -223,8 +261,5 @@ export async function analyzeEpisode(
       return id;
     });
     throw error;
-  } finally {
-    // Cleanup is best effort; failure must not turn a completed analysis into a failed one.
-    await media.cleanup(id).catch(() => {});
   }
 }

@@ -487,6 +487,8 @@ export function message(text: string): string {
   );
   if (stage)
     return `${stage[1] === "转录" ? "Transcribing" : "Analyzing"} segment ${stage[2]} of ${stage[3]}`;
+  const finished = /^已完成 (\d+)\/(\d+) 段$/.exec(text);
+  if (finished) return `${finished[1]} of ${finished[2]} segments analyzed`;
   const suffix = "。可以继续听节目，或重新尝试提问。";
   if (text.endsWith(suffix))
     return `${message(text.slice(0, -suffix.length))} You can keep listening or try asking again.`;

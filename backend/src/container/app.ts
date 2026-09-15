@@ -3,17 +3,30 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, rm, stat, rename, readFile, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 import { z } from "zod";
 import { MAX_AUDIO_DURATION_MS, MAX_UPLOAD_BYTES } from "@aside/engine/core";
 import { probeAudio } from "../jobs.js";
 import { extractCover } from "../local-media.js";
-import { findSilences, planChunks } from "../media.js";
-const exec = promisify(execFile);
+import { cutSegments, encodeSpeechTrack, planChunks } from "../media.js";
 const idSchema = z.string().uuid();
 class AdmissionError extends Error {}
-/** Internal binding only. No user-supplied URL/path/command is ever executed. */
+/** Bounds CPU, disk and model work before any encoding, independently of compressed size. */
+export async function admitAudio(path: string) {
+  let metadata: Awaited<ReturnType<typeof probeAudio>>;
+  try {
+    metadata = await probeAudio(path);
+  } catch {
+    throw new AdmissionError("文件不包含可读取的音轨");
+  }
+  if (metadata.durationMs > MAX_AUDIO_DURATION_MS)
+    throw new AdmissionError("单个音频不能超过 5 小时");
+  return metadata;
+}
+/**
+ * Internal binding only. No user-supplied URL/path/command is ever executed.
+ * `/prepare` produces every segment in one request; the caller reads them back
+ * within the same Workflow step, so nothing here has to outlive the instance.
+ */
 export function mediaApp(root: string) {
   const app = Fastify({ logger: false });
   let busy = false;
@@ -32,6 +45,8 @@ export function mediaApp(root: string) {
     busy = true;
     const dir = join(root, id);
     try {
+      // A retried attempt starts from a clean directory.
+      await rm(dir, { recursive: true, force: true });
       await mkdir(dir, { recursive: true });
       let size = 0;
       await pipeline(
@@ -45,27 +60,19 @@ export function mediaApp(root: string) {
         },
         createWriteStream(join(dir, "upload")),
       );
-      await rename(join(dir, "upload"), join(dir, "original"));
-      let metadata: Awaited<ReturnType<typeof probeAudio>>;
-      try {
-        metadata = await probeAudio(join(dir, "original"));
-      } catch {
-        throw new AdmissionError("文件不包含可读取的音轨");
-      }
-      // Bound CPU/disk/model work independently of compressed upload size.
-      if (metadata.durationMs > MAX_AUDIO_DURATION_MS)
-        throw new AdmissionError("单个音频不能超过 5 小时");
-      const cover = await extractCover(
-        join(dir, "original"),
-        join(dir, "cover.jpg"),
+      const original = join(dir, "original");
+      await rename(join(dir, "upload"), original);
+      const metadata = await admitAudio(original);
+      const cover = await extractCover(original, join(dir, "cover.jpg"));
+      const track = join(dir, "speech.mp3");
+      const pauses = await encodeSpeechTrack(original, track);
+      const plan = await cutSegments(
+        track,
+        planChunks(metadata.durationMs, pauses),
+        dir,
       );
-      const pauses = await findSilences(join(dir, "original"));
-      const result = {
-        ...metadata,
-        cover,
-        pauses,
-        plan: planChunks(metadata.durationMs, pauses),
-      };
+      await Promise.all([rm(original), rm(track)]);
+      const result = { ...metadata, cover, pauses, plan };
       await writeFile(join(dir, "manifest.json"), JSON.stringify(result));
       return result;
     } catch (error) {
@@ -75,6 +82,15 @@ export function mediaApp(root: string) {
       busy = false;
     }
   });
+  const prepared = async (id: string) => {
+    try {
+      return JSON.parse(
+        await readFile(join(root, id, "manifest.json"), "utf8"),
+      ) as { cover?: boolean; plan: unknown[] };
+    } catch {
+      return undefined;
+    }
+  };
   app.get<{ Querystring: { id: string; index: string } }>(
     "/chunk",
     async (req, reply) => {
@@ -85,71 +101,27 @@ export function mediaApp(root: string) {
         .min(0)
         .max(1000)
         .parse(req.query.index);
-      if (busy) return reply.code(429).send({ error: "Media processor busy" });
-      busy = true;
-      const dir = join(root, id);
-      try {
-        let manifest: { plan: { offsetMs: number; durationMs: number }[] };
-        try {
-          manifest = JSON.parse(
-            await readFile(join(dir, "manifest.json"), "utf8"),
-          );
-        } catch {
-          return reply.code(409).send({ error: "Rehydrate source" });
-        }
-        const chunk = manifest.plan[index];
-        if (!chunk) return reply.code(400).send({ error: "Invalid chunk" });
-        const path = join(dir, `chunk-${index}.mp3`);
-        await exec(
-          "ffmpeg",
-          [
-            "-y",
-            "-v",
-            "error",
-            "-ss",
-            String(chunk.offsetMs / 1000),
-            "-i",
-            join(dir, "original"),
-            "-t",
-            String(chunk.durationMs / 1000),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "24000",
-            "-b:a",
-            "48k",
-            path,
-          ],
-          { timeout: 5 * 60000 },
-        );
-        const file = await stat(path);
-        reply.type("audio/mpeg").header("Content-Length", file.size);
-        // Release the processor after encoding; unique filenames keep concurrent streams safe.
-        return reply.send(createReadStream(path));
-      } finally {
-        busy = false;
-      }
+      const manifest = await prepared(id);
+      if (!manifest) return reply.code(409).send({ error: "Source not prepared" });
+      if (!manifest.plan[index])
+        return reply.code(400).send({ error: "Invalid chunk" });
+      const path = join(root, id, `segment-${index}.mp3`);
+      const file = await stat(path);
+      reply.type("audio/mpeg").header("Content-Length", file.size);
+      return reply.send(createReadStream(path));
     },
   );
   app.get<{ Querystring: { id: string } }>("/cover", async (req, reply) => {
     const id = idSchema.parse(req.query.id);
-    let manifest: { cover?: boolean };
-    try {
-      manifest = JSON.parse(
-        await readFile(join(root, id, "manifest.json"), "utf8"),
-      );
-    } catch {
-      return reply.code(409).send({ error: "Rehydrate source" });
-    }
+    const manifest = await prepared(id);
+    if (!manifest) return reply.code(409).send({ error: "Source not prepared" });
     if (!manifest.cover) return reply.code(404).send({ error: "No cover" });
     return reply
       .type("image/jpeg")
       .send(await readFile(join(root, id, "cover.jpg")));
   });
-  app.delete<{ Querystring: { id: string } }>("/source", async (req, reply) => {
+  app.delete<{ Querystring: { id: string } }>("/source", async (req) => {
     const id = idSchema.parse(req.query.id);
-    if (busy) return reply.code(429).send({ error: "Media processor busy" });
     await rm(join(root, id), { recursive: true, force: true });
     return { ok: true };
   });
