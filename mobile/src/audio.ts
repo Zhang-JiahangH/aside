@@ -119,6 +119,9 @@ export class NativePodcastAudio implements PodcastAudio {
 export async function microphonePermission() {
   const current = await AudioModule.getRecordingPermissionsAsync();
   if (current.granted) return true;
-  await AudioModule.requestRecordingPermissionsAsync();
+  if (!current.canAskAgain) throw Error("Microphone permission denied");
+  const requested = await AudioModule.requestRecordingPermissionsAsync();
+  if (!requested.granted && !requested.canAskAgain)
+    throw Error("Microphone permission denied");
   return false;
 }

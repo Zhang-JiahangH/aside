@@ -513,22 +513,28 @@ function Main() {
     );
   };
   const rawError = error || snapshot.error;
-  const visibleError = rawError.includes("录音尚未准备好")
+  const microphoneDenied = rawError.includes("Microphone permission denied");
+  const visibleError = microphoneDenied
     ? tr(
-        "麦克风还没准备好。请稍候，再按住录音。",
-        "The microphone isn't ready yet. Wait a moment, then hold to record again.",
+        "麦克风权限已关闭。请在设置中允许 Aside 使用麦克风。",
+        "Microphone access is off. Allow Aside to use it in Settings.",
       )
-    : rawError.includes("麦克风无法开始录音")
+    : rawError.includes("录音尚未准备好")
       ? tr(
-          "麦克风暂时无法录音，请检查音频输入后重试。",
-          "The microphone couldn't start. Check your audio input and try again.",
+          "麦克风还没准备好。请稍候，再按住录音。",
+          "The microphone isn't ready yet. Wait a moment, then hold to record again.",
         )
-      : locale === "en" && /[\u4e00-\u9fff]/.test(rawError)
+      : rawError.includes("麦克风无法开始录音")
         ? tr(
-            "",
-            "We couldn't complete that action. Please try again when you're ready.",
+            "麦克风暂时无法录音，请检查音频输入后重试。",
+            "The microphone couldn't start. Check your audio input and try again.",
           )
-        : rawError.replace(/^Error: /, "");
+        : locale === "en" && /[\u4e00-\u9fff]/.test(rawError)
+          ? tr(
+              "",
+              "We couldn't complete that action. Please try again when you're ready.",
+            )
+          : rawError.replace(/^Error: /, "");
   const textStyle = { color: colors.text };
   const list = collection === "private" ? privateEpisodes : episodes;
   return (
@@ -566,6 +572,14 @@ function Main() {
             >
               {visibleError}
             </Text>
+            {microphoneDenied
+              ? button(
+                  tr("设置", "Settings"),
+                  () => run(() => Linking.openSettings()),
+                  "microphone-settings",
+                  true,
+                )
+              : null}
             {button(
               tr("关闭", "Dismiss"),
               () => {

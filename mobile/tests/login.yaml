@@ -17,7 +17,7 @@ appId: com.asidefm.app.dev
 - tapOn:
     id: code
     waitToSettleTimeoutMs: 1000
-- inputText: '12345678'
+- inputText: "12345678"
 - waitForAnimationToEnd
 - tapOn:
     id: sign-in

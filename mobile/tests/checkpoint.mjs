@@ -1,5 +1,5 @@
 /** Test-fixture CLI: node mobile/tests/checkpoint.mjs email [positionMs]. */
-const base = "http://127.0.0.1:4311/api";
+const base = `http://127.0.0.1:${Number(process.env.PORT ?? 4311)}/api`;
 const email = process.argv[2];
 if (!email?.endsWith("@example.com"))
   throw Error("Use a local example.com fixture account");

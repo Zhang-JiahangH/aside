@@ -15,7 +15,8 @@ import { mediaApp } from "../../backend/src/container/app.ts";
 let mf, db, bucket;
 const root = await mkdtemp(join(tmpdir(), "aside-mobile-fixture-"));
 const media = mediaApp(join(root, "media"));
-const origin = "http://127.0.0.1:4311";
+const port = Number(process.env.PORT ?? 4311);
+const origin = `http://127.0.0.1:${port}`;
 const networkCalls = [],
   controlEvents = [],
   usedProofs = new Set();
@@ -54,7 +55,7 @@ const bundle = await build({
 });
 mf = new Miniflare(
   convertV4MiniflareOptions({
-    port: 4311,
+    port,
     host: "127.0.0.1",
     modules: true,
     script: bundle.outputFiles[0].text,
@@ -96,12 +97,18 @@ mf = new Miniflare(
     serviceBindings: { ASSETS: () => new Response("assets") },
     outboundService: async (request) => {
       networkCalls.push(new URL(request.url).pathname);
+      // Consume each synthetic upstream request before replying, including its
+      // complete recording body, as a real HTTP service would.
+      const payload = ["GET", "HEAD"].includes(request.method)
+        ? undefined
+        : Buffer.from(await request.arrayBuffer());
+      const bodyText = payload?.toString("utf8") ?? "";
       if (request.url === "https://oauth2.googleapis.com/token")
         return Response.json({ access_token: "google-test-access" });
       if (request.url === "https://openidconnect.googleapis.com/v1/userinfo")
         return Response.json(googleIdentity);
       if (request.url.endsWith("/siteverify")) {
-        const { response: token } = await request.json();
+        const { response: token } = JSON.parse(bodyText);
         const data = JSON.parse(token);
         const success = !usedProofs.has(token);
         usedProofs.add(token);
@@ -147,9 +154,7 @@ mf = new Miniflare(
           method: request.method,
           url: url.pathname + url.search,
           headers: Object.fromEntries(request.headers),
-          payload: ["GET", "HEAD"].includes(request.method)
-            ? undefined
-            : Buffer.from(await request.arrayBuffer()),
+          payload,
         });
         return new Response(result.rawPayload, {
           status: result.statusCode,
@@ -160,7 +165,7 @@ mf = new Miniflare(
         return fetch("http://127.0.0.1:4312/live", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: await request.text(),
+          body: bodyText,
         });
       }
       if (request.url.endsWith("/audio/transcriptions"))
