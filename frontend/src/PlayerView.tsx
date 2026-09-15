@@ -535,9 +535,7 @@ export function PlayerView({
                   <small>
                     {configured
                       ? listeningMode === "auto"
-                        ? t(
-                            "播放时自动监听，直接开口就能打断；暂停后停止监听。",
-                          )
+                        ? t("语音开启时保持实时连接，可用英语控制播放或提问。")
                         : listeningMode === "manual"
                           ? t("按住下方按钮说话，松开后回答。")
                           : t("安心听，也可以打字聊聊你的想法。")

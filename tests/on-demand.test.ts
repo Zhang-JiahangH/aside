@@ -8,7 +8,7 @@ import {
 } from "../frontend/src/on-demand-voice.js";
 import type { LiveCallbacks } from "../frontend/src/live.js";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-function setup(manual = false) {
+function setup(manual = false, continuous = false) {
   let speech!: (a: boolean) => void;
   let callbacks!: LiveCallbacks;
   let creates = 0,
@@ -101,7 +101,7 @@ function setup(manual = false) {
       return new Promise<string>((resolve) => (resolveText = resolve));
     },
   };
-  const voice = new OnDemandVoice(configs, cb, deps, manual);
+  const voice = new OnDemandVoice(configs, cb, deps, manual, continuous);
   return {
     voice,
     speech: (a: boolean) => speech(a),
@@ -329,4 +329,25 @@ test("manual resume cancels capture and rejects a late release or transcription"
   assert.deepEqual(s.questions, []);
   assert.equal(s.events.includes("input:true"), false);
   await s.voice.close();
+});
+
+test("continuous automatic listening warms Live before speech and retains it during playback", async () => {
+  const s = setup(false, true);
+  await s.voice.enable();
+  await tick();
+  assert.equal(s.creates, 1);
+  s.ready();
+  await tick();
+  assert.equal(s.voice.isWarm, true);
+  s.speech(true);
+  s.speech(false);
+  assert.equal(s.captures, 0);
+  assert.equal(s.signal, undefined);
+  s.voice.playbackResumed();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(s.closed, 0);
+  assert.ok(s.events.includes("input:true"));
+  await s.voice.close();
+  assert.equal(s.closed, 1);
+  assert.equal(s.micStopped, 1);
 });
