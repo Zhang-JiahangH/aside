@@ -8,22 +8,7 @@ appId: com.asidefm.app.dev
 - tapOn:
     id: choose-audio
     waitToSettleTimeoutMs: 1000
-- tapOn:
-    text: Show roots
-    waitToSettleTimeoutMs: 1000
-    retryTapIfNoChange: false
-- extendedWaitUntil:
-    visible: Open from
-    timeout: 5000
-- waitForAnimationToEnd
-- tapOn:
-    text: Downloads
-    waitToSettleTimeoutMs: 1000
-    retryTapIfNoChange: false
-- waitForAnimationToEnd
-- tapOn:
-    text: Aside-upload.wav
-    waitToSettleTimeoutMs: 1000
+- runFlow: select-android-download.yaml
 - extendedWaitUntil:
     visible:
       id: transcript
