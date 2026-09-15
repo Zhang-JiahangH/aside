@@ -267,7 +267,6 @@ function Main() {
         void save().catch(failure);
       }
     });
-    let wasPlaying = false;
     const nativeSubscription = audio.player.addListener(
       "playbackStatusUpdate",
       (status) => {
@@ -277,16 +276,9 @@ function Main() {
         }
         if (status.didJustFinish) session.stop();
         const mode = session.getSnapshot().state.mode;
-        if (
-          wasPlaying &&
-          status.isLoaded &&
-          !status.isBuffering &&
-          !status.playing &&
-          mode === "playing"
-        )
-          session.stop();
-        wasPlaying = status.playing;
-        if (status.playing && mode === "paused") session.start();
+        const command = audio.events.observe(status);
+        if (command === "pause" && mode === "playing") session.stop();
+        if (command === "play" && mode === "paused") session.start();
       },
     );
     const stateSubscription = AppState.addEventListener("change", (state) => {

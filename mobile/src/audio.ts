@@ -5,7 +5,7 @@ import {
   setIsAudioActiveAsync,
 } from "expo-audio";
 import type { PodcastAudio } from "@aside/player-runtime/ports";
-import { AudioSessionCoordinator } from "./audio-session";
+import { AudioSessionCoordinator, NativePlaybackEvents } from "./audio-session";
 /** Serializes transitions between media playback, capture and live response audio. */
 export class AudioCoordinator extends AudioSessionCoordinator {
   constructor() {
@@ -29,6 +29,7 @@ export class NativePodcastAudio implements PodcastAudio {
     updateInterval: 250,
     keepAudioSessionActive: true,
   });
+  readonly events = new NativePlaybackEvents();
   private target: number | undefined;
   private playRevision = 0;
   private cancelLoading?: () => void;
@@ -58,6 +59,7 @@ export class NativePodcastAudio implements PodcastAudio {
   }
   async play() {
     const revision = ++this.playRevision;
+    this.events.requestedPlay();
     this.cancelLoading?.();
     if (!this.player.isLoaded) {
       await new Promise<void>((resolve, reject) => {
@@ -93,6 +95,7 @@ export class NativePodcastAudio implements PodcastAudio {
     if (revision === this.playRevision) this.player.play();
   }
   pause() {
+    this.events.requestedPause();
     this.playRevision++;
     this.cancelLoading?.();
     this.player.pause();

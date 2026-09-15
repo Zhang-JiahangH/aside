@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AudioSessionCoordinator } from "../mobile/src/audio-session.js";
+import {
+  AudioSessionCoordinator,
+  NativePlaybackEvents,
+} from "../mobile/src/audio-session.js";
 
 function fixture() {
   const events: string[] = [];
@@ -88,4 +91,37 @@ test("a release queued during native preparation prevents late activation", asyn
   unblock();
   await Promise.all([recording, release]);
   assert.deepEqual(active, [false]);
+});
+
+test("a delayed native pause after seek cannot cancel a newly requested play", () => {
+  const events = new NativePlaybackEvents();
+  const status = (playing: boolean) => ({
+    playing,
+    isLoaded: true,
+    isBuffering: false,
+  });
+  events.requestedPlay();
+  assert.equal(events.observe(status(true)), null);
+  events.requestedPause();
+  events.requestedPlay();
+  assert.equal(events.observe(status(false)), null);
+  assert.equal(events.observe(status(true)), null);
+  assert.equal(events.observe(status(false)), "pause");
+  assert.equal(events.observe(status(true)), "play");
+});
+test("a delayed playing event after explicit pause cannot restart playback", () => {
+  const events = new NativePlaybackEvents();
+  events.requestedPause();
+  assert.equal(
+    events.observe({ playing: true, isLoaded: true, isBuffering: false }),
+    null,
+  );
+  assert.equal(
+    events.observe({ playing: false, isLoaded: true, isBuffering: false }),
+    null,
+  );
+  assert.equal(
+    events.observe({ playing: true, isLoaded: true, isBuffering: false }),
+    "play",
+  );
 });
