@@ -5,8 +5,9 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { t } from "./i18n";
+import type { PlayerConfig } from "@aside/engine/player";
 
-const rates = [
+const presets = [
   { value: 0.75, hint: "慢一点，适合外语" },
   { value: 1, hint: "原速" },
   { value: 1.25, hint: "稍快一点" },
@@ -14,11 +15,33 @@ const rates = [
 ] as const;
 
 export function SpeedSelect({
+  config,
   onChange,
 }: {
+  config: PlayerConfig;
   onChange: (rate: number) => void;
 }) {
-  const [rate, setRate] = useState<number>(1);
+  const rate = config.playbackRate;
+  const rates = [
+    ...new Set([
+      0.5,
+      0.75,
+      1,
+      1.25,
+      1.5,
+      1.75,
+      2,
+      config.minRate,
+      config.maxRate,
+      rate,
+    ]),
+  ]
+    .filter((value) => value >= config.minRate && value <= config.maxRate)
+    .sort((a, b) => a - b)
+    .map((value) => ({
+      value,
+      hint: presets.find((item) => item.value === value)?.hint,
+    }));
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -46,7 +69,6 @@ export function SpeedSelect({
   }, [open, selectedIndex]);
 
   const select = (value: number) => {
-    setRate(value);
     onChange(value);
     setOpen(false);
     triggerRef.current?.focus();
@@ -78,17 +100,18 @@ export function SpeedSelect({
         aria-label={t("播放速度")}
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
-          if (
-            !open &&
-            (event.key === "ArrowDown" || event.key === "ArrowUp")
-          ) {
+          if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
             event.preventDefault();
             setOpen(true);
           }
         }}
       >
         <span>{rate}×</span>
-        <svg className="speed-select-caret" viewBox="0 0 10 6" aria-hidden="true">
+        <svg
+          className="speed-select-caret"
+          viewBox="0 0 10 6"
+          aria-hidden="true"
+        >
           <path
             d="M1 1l4 4 4-4"
             fill="none"
@@ -128,7 +151,7 @@ export function SpeedSelect({
             >
               <span className="menu-option-text">
                 <b>{value}×</b>
-                <small>{t(hint)}</small>
+                {hint && <small>{t(hint)}</small>}
               </span>
               <svg
                 className="menu-check"

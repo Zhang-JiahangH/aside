@@ -1479,10 +1479,11 @@ progress {
   position: relative;
   isolation: isolate;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 1.5fr) minmax(70px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 1.5fr) auto;
+  grid-template-areas: "title transport speed" "title transport volume";
   align-items: center;
-  gap: 24px;
-  min-height: 96px;
+  gap: 4px 24px;
+  min-height: 108px;
   padding: 16px 60px;
 }
 .player-dock::before {
@@ -1500,6 +1501,7 @@ progress {
     0 18px 40px -20px color-mix(in srgb, var(--ink) 30%, transparent);
 }
 .dock-title {
+  grid-area: title;
   display: flex;
   align-items: center;
   min-width: 0;
@@ -1615,6 +1617,7 @@ progress {
 }
 /* Desktop: play sits beside the waveform on one line; narrow layouts regroup via grid areas. */
 .dock-transport {
+  grid-area: transport;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -1737,6 +1740,7 @@ progress {
   margin: 0;
 }
 .player-dock > .speed-select {
+  grid-area: speed;
   justify-self: end;
 }
 .speed-select {
@@ -1768,6 +1772,46 @@ progress {
 }
 .speed-select-option {
   grid-template-columns: 1fr auto;
+}
+.dock-volume {
+  grid-area: volume;
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 6px;
+  color: var(--ink-2);
+}
+.volume-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 50%;
+}
+.volume-toggle:hover,
+.volume-toggle[aria-pressed="true"] {
+  background: var(--fill-strong);
+}
+.volume-slider {
+  width: 80px;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--olive);
+  cursor: pointer;
+}
+.volume-value {
+  min-width: 38px;
+  font-size: 10px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.volume-toggle:focus-visible,
+.volume-slider:focus-visible {
+  outline: 2px solid var(--olive);
+  outline-offset: 3px;
 }
 .transcript-cue {
   position: relative;
@@ -1903,7 +1947,7 @@ progress {
 }
 @media (max-width: 1000px) {
   .shell .player-main {
-    padding-bottom: 136px;
+    padding-bottom: 180px;
   }
   .shell .player-main .player-card,
   .shell .player-main .player-card.compact {
@@ -1931,7 +1975,7 @@ progress {
     right: 0;
     bottom: 0;
     grid-template-columns: minmax(0, 1fr) auto auto;
-    grid-template-areas: "title controls speed" "progress progress progress";
+    grid-template-areas: "title controls speed" "progress progress progress" "volume volume volume";
     gap: 6px 13px;
     min-height: 0;
     padding: 16px 30px max(16px, env(safe-area-inset-bottom));
@@ -1955,6 +1999,8 @@ progress {
   .player-dock > .speed-select {
     grid-area: speed;
   }
+  .dock-volume { justify-self: center; }
+  .volume-slider { width: 110px; }
 }
 @media (max-width: 700px) {
   .space-page.shell .player-main .player-dock {
