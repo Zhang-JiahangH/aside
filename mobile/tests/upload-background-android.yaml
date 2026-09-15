@@ -13,6 +13,9 @@ appId: com.asidefm.app.dev
     text: Show roots
     waitToSettleTimeoutMs: 1000
     retryTapIfNoChange: false
+- extendedWaitUntil:
+    visible: Open from
+    timeout: 5000
 - waitForAnimationToEnd
 - tapOn:
     text: Downloads

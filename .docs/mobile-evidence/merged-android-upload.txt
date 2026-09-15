@@ -1,0 +1,11 @@
+Running on emulator-5554
+ > Flow aside-merge-android-pick-final
+Tap on "Show roots"... COMPLETED
+Assert that "Open from" is visible... COMPLETED
+Wait for animation to end... COMPLETED
+Tap on "Downloads"... COMPLETED
+Assert that "Aside-upload.wav" is visible... COMPLETED
+Tap on "Aside-upload.wav"... COMPLETED
+Assert that id: transcript is visible... COMPLETED
+Assert that "Aside-upload.wav" is visible... COMPLETED
+Take screenshot uploaded-private-audio... COMPLETED

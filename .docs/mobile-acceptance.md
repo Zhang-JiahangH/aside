@@ -4,14 +4,18 @@ Branch: `codex/mobile-cross-platform`. [Pull request #2](https://github.com/qiz0
 
 Installed **Release** builds were tested on iPhone 16 Pro and iPhone SE 3 simulators (iOS 18.3), and Pixel 6 / API 33 ARM64 Android emulator. JavaScript is embedded; Metro was not used. Tests exercised the real local Worker, D1, R2, FFmpeg media decoder and analysis workflow. External transcription/model results were deterministic fixtures; voice answers used a real receive-only WebRTC peer and audio/data transport.
 
+## Integration with current main
+
+The branch includes upstream `527bc64` (PR #1 player controls, live waveform, monthly upload quota and one-step media segmentation). Its command/configuration policy now lives in the shared listening runtime, retaining native asynchronous seeking, completed-history persistence and conflict protection. The native adapter applies rate, volume, mute and pitch configuration. After merging, both native Release packages were rebuilt and the expanded regression suites rerun. Expanded verification: [132 unit tests](mobile-evidence/merged-unit-tests.txt), [32 Worker tests](mobile-evidence/merged-cloudflare-tests.txt), [44 browser tests](mobile-evidence/merged-browser-tests.txt), [iOS smoke](mobile-evidence/merged-ios-smoke.txt), [Android smoke](mobile-evidence/merged-android-smoke.txt), [iOS voice](mobile-evidence/merged-ios-voice.txt), [Android voice](mobile-evidence/merged-android-voice.txt), [iOS upload](mobile-evidence/merged-ios-upload.txt), [Android upload](mobile-evidence/merged-android-upload.txt). The incoming browser fixture was updated to return versioned checkpoint writes instead of `null`, matching the new production contract.
+
 ## Results
 
 | Check | Result / evidence |
 | --- | --- |
 | TypeScript and shared/native import boundaries | Passed `npm run check` |
-| Unit and application regression | **110 passed**, including audio ownership, late events, fixed anchors, asynchronous seeking, cancellation, checkpoint races and real M4A validation |
-| Cloudflare integration | **30 passed**, including bearer expiry/revocation, private-media isolation, Range requests and checkpoint compare-and-swap |
-| Website browser regression | **36 passed**; production web build passed |
+| Unit and application regression | **132 passed**, including audio ownership, late events, fixed anchors, asynchronous seeking, cancellation, checkpoint races and real M4A validation |
+| Cloudflare integration | **32 passed**, including bearer expiry/revocation, private-media isolation, Range requests and checkpoint compare-and-swap |
+| Website browser regression | **44 passed**; production web build passed |
 | Native Release compilation / installation | Both platforms passed locally; standalone embedded JS |
 | Public library and transport | Both passed: playback/pause, seeking, speed, transcript and navigation |
 | Account and private media | Both passed: email code, locale, account, logout, native file picker, multipart upload, real analysis and private transcript/playback |
@@ -45,6 +49,7 @@ Screenshots are from installed applications, not design mockups. See [design dec
 | [Library](mobile-screenshots/ios-dark-large-library.png) · [Upload](mobile-screenshots/ios-dark-large-upload.png) | [Recording permission recovery](mobile-screenshots/android-microphone-denied.png) |
 | [Recording permission recovery](mobile-screenshots/ios-microphone-denied.png) | [Capped follow-up](mobile-screenshots/android-capped-followup.png) |
 | [Capped follow-up](mobile-screenshots/ios-capped-followup.png) | [Website synchronized conversation](mobile-screenshots/web-synchronized.png) |
+| [Light private player](mobile-screenshots/ios-light-private-player.png) · [Light account](mobile-screenshots/ios-light-account.png) · [Light library](mobile-screenshots/ios-light-library.png) | [Private player after merge](mobile-screenshots/android-merged-private-player.png) |
 | [Cancelled upload](mobile-screenshots/ios-upload-cancelled.png) · [Retry completed](mobile-screenshots/ios-upload-retried.png) | [Cancelled upload](mobile-screenshots/android-upload-cancelled.png) · [Retry completed](mobile-screenshots/android-upload-retried.png) |
 
 ## Fixes found through native acceptance
@@ -63,8 +68,8 @@ Initial incorrect-MIME iOS endurance attempts and transient model-fixture failur
 
 ## CI and installation artifacts
 
-- [CI: types, 110 unit/application tests, 30 Cloudflare tests, web build and Docker build](https://github.com/Zhang-JiahangH/aside/actions/runs/35017998250).
-- [Both native Release builds](https://github.com/Zhang-JiahangH/aside/actions/runs/35016408823).
+- [CI: types, 132 unit/application tests, 32 Cloudflare tests, web build and Docker build](https://github.com/Zhang-JiahangH/aside/actions/runs/35020001141).
+- [Both native Release builds](https://github.com/Zhang-JiahangH/aside/actions/runs/35020004213).
 - [iOS native metadata backport build](https://github.com/Zhang-JiahangH/aside/actions/runs/35018001221).
 
 CI runs on the contribution fork because the connected GitHub account has read access to the upstream repository. The PR targets `qiz029/aside:main`; no upstream branch protection or production settings were changed.

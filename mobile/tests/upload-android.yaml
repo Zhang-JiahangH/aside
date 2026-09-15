@@ -8,9 +8,18 @@ appId: com.asidefm.app.dev
 - tapOn:
     id: choose-audio
     waitToSettleTimeoutMs: 1000
-- tapOn: Show roots
+- tapOn:
+    text: Show roots
+    waitToSettleTimeoutMs: 1000
+    retryTapIfNoChange: false
+- extendedWaitUntil:
+    visible: Open from
+    timeout: 5000
 - waitForAnimationToEnd
-- tapOn: Downloads
+- tapOn:
+    text: Downloads
+    waitToSettleTimeoutMs: 1000
+    retryTapIfNoChange: false
 - waitForAnimationToEnd
 - tapOn:
     text: Aside-upload.wav
