@@ -27,3 +27,5 @@ On both installed Release apps, review Library, empty library, player transcript
 Record actual simulator screenshots and flow reports. Keep unverified device/signing scenarios explicit in the release report.
 
 Manual scrolling temporarily suspends transcript auto-follow. A labeled action returns to the current passage; advancing playback must never repeatedly pull a reader away from the section they chose.
+
+At accessibility text sizes, content remains scalable and scrollable. The brand, navigation labels and transport labels have bounded scaling so the controls retain space for reading; the upload page scrolls to keep file selection and cancellation reachable on an iPhone SE.

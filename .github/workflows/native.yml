@@ -1,13 +1,20 @@
 name: Native validation builds
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform to validate
+        type: choice
+        options: [both, ios, android]
+        default: both
 permissions:
   contents: read
 concurrency:
-  group: native-${{ github.ref }}
+  group: native-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: true
 jobs:
   ios-simulator:
+    if: inputs.platform != 'android'
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -42,6 +49,7 @@ jobs:
           name: ios-simulator-validation
           path: AsideDev-simulator.zip
   android:
+    if: inputs.platform != 'ios'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -55,6 +63,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.1.12297006'
       - run: npm ci
       # This ephemeral CI key is for build validation only. Distribution uses
