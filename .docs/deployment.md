@@ -229,3 +229,15 @@ npm run db:cloudflare:production
 本次**包含 Container 发布**（封面提取代码在容器内）：镜像 `sha256:b909d0f105ec43cdb1e34b58ac800553e6aa101e850e0a35fa4c8b168fe772a3`（取代 `a20de65a…`），Container app `a03cceeb-6ffb-4d0f-af94-ce14bd76c7a3` 已修改；生产 Worker `41070fe5-d155-495b-a1c1-96f16493c28a`。发布期间旧容器没有 `/cover`，Workflow 按无封面处理。正式域名 `/` 引用 `index-BuebBj1g.js`、`index-CZcQoEp4.css`，均 200 且 MIME 正确；`/api/health` 为 `liveConfigured=true`、`uploadsEnabled=true`；公开列表 8 条均无封面，`/api/episodes/luxun-ah-q/cover` 返回 404，音频 Range 返回 206。
 
 未验证：没有在生产上传带封面的真实文件走完整分析（会产生付费模型调用），因此云端提取、R2 写入和线上播放条显示封面都只由本地与 Miniflare 测试覆盖；未观察容器实例何时全部切换到新镜像；未在线上浏览器打开播放器核对。
+
+## 播放条波形跟随声音与 Aside 介入提示
+
+2026-09-14：底部播放条的 64 条波形原是按节目 id 生成的固定形状。现在节目音频经 Web Audio 分析器输出，播放时每条按人声频段（100–5000Hz）的实时音量伸缩，暂停后缓回原形。连接分析器后元素的声音只经 Web Audio 输出，所以只在 AudioContext 确认 running 后才接入，否则照常播放、波形静止。两套后端的音频都同源返回，分析器才能读到数据。
+
+同一条波形用来提示 Aside 语音助手（gpt-live-1）已经介入：从打断到请求续播期间波形变暖色（`--wave-b`），颜色从播放头向两侧扩散；连接/识别中有一道光横扫，麦克风状态改为「● Aside 正在加入」；回答时波形跟随 AI 语音的真实输出（复用 `LiveConnection` 原本用于判断出声的分析器），最新一条 Aside 消息的头像外圈发光；轮次之间低幅起伏。唱片只在节目真正出声时旋转。`prefers-reduced-motion` 下只保留颜色和文字。频段计算放在 `frontend/src/audio-levels.ts`，节目与语音共用。
+
+`npm run check`、94 项项目测试和 11 项播放器/监听/手机面板/语言浏览器用例通过；WebRTC 回环用例新增断言：AI 出声时波形进入 agent 状态、头像发光、至少一条被语音推到 0.8 以上（仅起伏达不到），续播后恢复节目颜色。本地另以挂起的 `/live` 请求截图核对了加入阶段的暖色、扫光和文案。
+
+生产 Worker `97ad594c-31bd-4d03-8efa-4b7e339ed815`（`--containers-rollout=none`，保留现有 Container），绑定仍含 `EMAIL`、`ALLOW_UPLOADS=true`。正式域名 `/` 与 `/space` 引用 `index-9zqOMr3U.js`、`index-BnkzDfhJ.css`，均 200 且 MIME 正确，bundle 含新文案；`/api/health` 200，`liveConfigured=true`、`uploadsEnabled=true`。线上浏览器以访客、未开麦克风的只听模式打开 LibriVox 示例并播放：波形逐帧变化、播放进度正常前进、暂停后复位，控制台无错误。
+
+未验证：没有在生产开麦克风做真实语音对话（会产生付费调用），所以加入/回答阶段的线上效果只由本地测试与截图覆盖；测试中 AI 声音是 440Hz 单音，真人语音下的波形节奏和扫光强度未人工看过；iOS Safari 上经 Web Audio 输出的音频在锁屏或后台时可能暂停，未在真机验证。
