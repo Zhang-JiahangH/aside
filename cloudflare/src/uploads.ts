@@ -61,14 +61,15 @@ export async function uploadRoute(
     const day = createdAt.slice(0, 10);
     const month = createdAt.slice(0, 7);
     const monthlyLimit = positiveLimit(env.MONTHLY_UPLOAD_LIMIT, 100);
-    const globalLimit = positiveLimit(env.GLOBAL_DAILY_UPLOAD_LIMIT, 10);
+    const globalLimit = positiveLimit(env.GLOBAL_DAILY_UPLOAD_LIMIT, 2000);
     const accountStorageLimit = positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3);
     const globalStorageLimit = positiveLimit(env.GLOBAL_STORAGE_LIMIT_BYTES, 100 * 1024 ** 3);
     // Rejected or cancelled files do not occupy the account's monthly library quota,
-    // but still consume R2/Container work. Cap starts independently.
+    // but still consume R2/Container work. Cap starts independently; the
+    // site-wide allowance scales with the daily upload cap so it never binds first.
     try {
       await store.reserve(`upload-init:${day}:${owner}`, 10);
-      await store.reserve(`upload-init:${day}:global`, 30);
+      await store.reserve(`upload-init:${day}:global`, globalLimit * 3);
     } catch (error) {
       if (error instanceof HttpError && error.status === 429)
         throw new HttpError(429, "今天的上传尝试次数已用完，请明天再试");
