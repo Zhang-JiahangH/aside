@@ -1,35 +1,78 @@
-# Mobile acceptance — in progress
+# Mobile acceptance — September 15, 2026
 
-Branch: `codex/mobile-cross-platform`. No production deployment or Apple distribution has been completed. Native tests use installed Release binaries with embedded JavaScript, a real local Worker/D1/R2/media service and a synthetic external model/WebRTC peer.
+Branch: `codex/mobile-cross-platform`. [Pull request #2](https://github.com/qiz029/aside/pull/2).
 
-## Completed checks
+Installed **Release** builds were tested on iPhone 16 Pro and iPhone SE 3 simulators (iOS 18.3), and Pixel 6 / API 33 ARM64 Android emulator. JavaScript is embedded; Metro was not used. Tests exercised the real local Worker, D1, R2, FFmpeg media decoder and analysis workflow. External transcription/model results were deterministic fixtures; voice answers used a real receive-only WebRTC peer and audio/data transport.
 
-- TypeScript/import boundaries and production web build: passed.
-- Unit/application tests: **108 passed**, including real FFmpeg M4A validation, native audio ownership and checkpoint race regression tests.
-- Cloudflare integration: **30 passed**.
-- Web browser regression: **36 passed**.
-- Android Release on Pixel 6 / API 33: email login, public playback, seeking, speed, text answer/resume, locale, logout and native recording/voice answer/manual resume/background transition passed.
-- iOS Release on iPhone 16 Pro / iOS 18.3: complete smoke flow passed. iPhone SE 3: small-screen login, actual M4A capture/transcription, receive-only voice answer and natural resume passed.
-- Native system file selection, upload, real media analysis and private transcript/playback passed on both platforms.
-- Completed Android conversation restored in iOS and the website with the same account.
-- Website conflict choices were verified against real Worker versions: use remote seeks to the remote position; keep local writes the chosen local position with the observed remote version.
+## Results
 
-## Fixes validated during acceptance
+| Check | Result / evidence |
+| --- | --- |
+| TypeScript and shared/native import boundaries | Passed `npm run check` |
+| Unit and application regression | **110 passed**, including audio ownership, late events, fixed anchors, asynchronous seeking, cancellation, checkpoint races and real M4A validation |
+| Cloudflare integration | **30 passed**, including bearer expiry/revocation, private-media isolation, Range requests and checkpoint compare-and-swap |
+| Website browser regression | **36 passed**; production web build passed |
+| Native Release compilation / installation | Both platforms passed locally; standalone embedded JS |
+| Public library and transport | Both passed: playback/pause, seeking, speed, transcript and navigation |
+| Account and private media | Both passed: email code, locale, account, logout, native file picker, multipart upload, real analysis and private transcript/playback |
+| Voice question and follow-up | Both passed: native M4A capture, transcription, receive-only RTC answer, manual continuation and natural continuation |
+| Recording cap | iOS capture **29.538 s**, Android **29.522 s**; automatically submitted; service checkpoint grew from one complete pair to two complete pairs |
+| Permission denial / cancellation | Both passed: denied permission gives Settings recovery, slide-out cancellation, question background cancellation, foreground remains paused |
+| Upload background cancellation / retry | Both passed with delayed upload parts: server-side multipart deletion, localized retry explanation, then explicit retry completed analysis and opened the transcript |
+| Progress and conversation synchronization | Completed Android history restored in iOS and website; both conflict choices verified against actual Worker versions, including native iOS selection |
+| Visual and interaction review | Both: light/dark, Chinese/English, large text, keyboard avoidance, scroll reachability. iPhone SE small-screen verification included |
+| Media container | Actual image built and started; `/health` passed; M4A decoded to 16 kHz mono PCM WAV; invalid and 31-second inputs rejected with 422; no question temporary directories remained |
 
-- Native recorder options are flattened correctly, and recording readiness is checked before showing a timer.
-- Audio-session ownership replaces delayed automatic deactivation; old voice cleanup cannot stop a new recording or resumed podcast.
-- Numeric verification entry dismisses its keyboard when the full code is entered, keeping submission reachable on small screens.
-- React Native upload cancellation checks `signal.aborted`, because SDK 54 does not provide `throwIfAborted`.
-- Episode/checkpoint replacement publishes one complete state; pending cache writes and queued saves cannot overwrite a newly selected or remote checkpoint.
-- The generated M4A long-playback fixture now uses `audio/mp4`. The previous incorrect `audio/mpeg` response was rejected by native AVPlayer. Those earlier iOS background attempts are **not** accepted evidence.
-- A transient local model-fixture request timed out; its failed turn remained paused until explicit continuation. Subsequent newly recorded voice answers and natural resume passed. No automatic paid-request retry was added.
+Upload evidence: [iOS cancellation](mobile-evidence/ios-upload-cancelled.txt), [Android cancellation](mobile-evidence/android-upload-cancelled.txt), [iOS retry](mobile-evidence/ios-upload-retry.txt), [Android retry](mobile-evidence/android-upload-retry.txt), [server cancellation/completion requests](mobile-evidence/upload-cancellation-server.txt). The final binaries containing the localized cancellation copy were rebuilt, installed and tested on both platforms.
 
-## Verification still running
+## Sustained background playback and system controls
 
-- Thirty minutes of sustained native **locked-screen** playback, followed by system controls and native position checks. Android started around 12:07 and corrected iOS around 12:16 on September 15, 2026 (local test-host time). Exact timestamps are retained in Maestro reports.
-- Native conflict choices, dark appearance / large text, cancellation and foreground recovery checks.
-- Final branch push, CI results and completed PR.
+A real 31-minute silent AAC file was played without JS-dependent background timing. Timestamps below are test-host PDT on September 15, 2026.
 
-## Separately pending device/distribution checks
+- **Android:** screen off from approximately 12:07:33; at 12:37:35 native playback exceeded 30 minutes. Subsequent media-session state showed playing at 1,825,251 ms, paused at 1,828,178 ms after a system pause, and playback resumed after a system play command. [Playing state](mobile-evidence/android-background-playing.txt), [paused state](mobile-evidence/android-background-paused.txt), [foreground position](mobile-screenshots/android-30min-paused.png).
+- **iOS:** playback started at 12:34:31; device locked at 12:35:09–11. At 13:05:14 the system pause command changed the native AVPlayer from Playing to Paused; system play at 13:05:17 and pause at 13:05:21 produced the corresponding native transitions. Reopening showed **30:47**. [Native control log](mobile-evidence/ios-background-controls.txt), [command timestamps](mobile-evidence/ios-system-commands.txt), [foreground position](mobile-screenshots/ios-30min-paused.png).
+- The endurance iOS binary preceded the small SDK metadata backport: its old system metadata still said rate 1 while native playback was paused. The final rebuilt binary was separately verified to report rate **0** on pause. Native audio ownership/transport behavior is unchanged by that backport.
+- These iOS simulators did not render the visible lock-screen media card, including with an independent plain AVPlayer/MPRemoteCommandCenter probe. Native Now Playing registration, commands and actual playback were verified. Visible lock-screen card layout remains a physical-device check; a simulator screenshot is not claimed as proof of that card.
 
-Personal Team installation/trust, physical calls/headphones, Ad Hoc registered-device installation and TestFlight require their actual devices/signing environments. Paid Apple membership is still pending. Simulator installation does not prove these signing channels or real-model response quality/latency.
+## Visual evidence
+
+Screenshots are from installed applications, not design mockups. See [design decisions and Apple HIG references](mobile-design.md).
+
+| iOS | Android |
+| --- | --- |
+| [Small-screen player, dark / large text](mobile-screenshots/ios-dark-large-player.png) | [Player, dark / large text](mobile-screenshots/android-dark-large-player.png) |
+| [Account](mobile-screenshots/ios-dark-large-account.png) | [Account](mobile-screenshots/android-dark-large-account.png) |
+| [Library](mobile-screenshots/ios-dark-large-library.png) · [Upload](mobile-screenshots/ios-dark-large-upload.png) | [Recording permission recovery](mobile-screenshots/android-microphone-denied.png) |
+| [Recording permission recovery](mobile-screenshots/ios-microphone-denied.png) | [Capped follow-up](mobile-screenshots/android-capped-followup.png) |
+| [Capped follow-up](mobile-screenshots/ios-capped-followup.png) | [Website synchronized conversation](mobile-screenshots/web-synchronized.png) |
+| [Cancelled upload](mobile-screenshots/ios-upload-cancelled.png) · [Retry completed](mobile-screenshots/ios-upload-retried.png) | [Cancelled upload](mobile-screenshots/android-upload-cancelled.png) · [Retry completed](mobile-screenshots/android-upload-retried.png) |
+
+## Fixes found through native acceptance
+
+- Flattened native recorder options and verified actual recording readiness before showing its timer.
+- Serialized audio-session ownership. Late answer cleanup and delayed playback events cannot stop a new capture or restart an intentionally paused episode.
+- Kept the native audio session active through ownership transitions instead of allowing SDK delayed deactivation to stop recording.
+- Waited for loaded native media before playback; stale async seek/play work is fenced by revisions.
+- Dismissed numeric verification keyboard after all eight digits, and kept controls reachable on iPhone SE and at large text sizes.
+- Published episode/checkpoint replacement atomically and fenced stale cache writes/queued saves. Conflicts require an explicit choice.
+- Used `signal.aborted` for SDK 54 upload cancellation and provided a localized cancellation explanation with retry.
+- Backported upstream expo/expo#44974 so paused Now Playing metadata stops advancing.
+- Updated media Docker workspace manifests and excluded generated native projects, artifacts and signing credentials from its context.
+
+Initial incorrect-MIME iOS endurance attempts and transient model-fixture failures were excluded from accepted results. The corrected long fixture uses `audio/mp4`. The native fixture fully consumes upstream request bodies; repeated native voice turns were rerun against it. Failed paid questions remain paused and are never automatically retried.
+
+## CI and installation artifacts
+
+- [CI: types, 110 unit/application tests, 30 Cloudflare tests, web build and Docker build](https://github.com/Zhang-JiahangH/aside/actions/runs/35017998250).
+- [Both native Release builds](https://github.com/Zhang-JiahangH/aside/actions/runs/35016408823).
+- [iOS native metadata backport build](https://github.com/Zhang-JiahangH/aside/actions/runs/35018001221).
+
+CI runs on the contribution fork because the connected GitHub account has read access to the upstream repository. The PR targets `qiz029/aside:main`; no upstream branch protection or production settings were changed.
+
+Local `mobile/artifacts/AsideDev-simulator-validation.zip` and `aside-validation-arm64.apk` are ARM64 simulator/emulator validation artifacts pointing to localhost:4311. They use the local bundle identifier. The local Android key persists in ignored credentials and supports updates. CI's Android key is ephemeral and is for build validation only. See [native harness instructions](../mobile/tests/README.md). Production API builds and signing commands are documented in [mobile setup](mobile.md).
+
+## Separate device / distribution acceptance
+
+No production deployment or Apple distribution is claimed. Apply migration `0006_mobile.sql`, deploy the media container, then enable `MOBILE_AUDIO_ENABLED` on the Worker before production native voice use.
+
+Personal Team installation/trust, physical calls/headphone and Bluetooth interruptions, visible iOS lock-screen controls, battery behavior, Ad Hoc registered-device installation and TestFlight need their actual device/signing environments. Apple paid membership is pending. The local/internal/testflight configurations and separate build/submit commands are present; Ad Hoc and TestFlight are **pending signing acceptance**. Synthetic model fixtures do not establish real-model response quality or end-to-end production latency.

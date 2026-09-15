@@ -21,3 +21,11 @@ maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice
 The fixture uses the actual production Worker, D1/R2, media decoder and analysis workflow. External transcription/model output is deterministic; the RTC peer transports real audio and data channels. These checks do not measure production model quality/latency, physical audio routes, Apple signing or distribution.
 
 Native CI builds are a separate manually dispatched workflow. Its APK uses an ephemeral validation key and is **not** an update to distributed builds. Local delivery and EAS must retain their fixed private signing credentials.
+
+## Background upload cancellation
+
+To make cancellation observable, run the fixture with `PORT=4313`, then `node mobile/tests/upload-proxy.mjs` on port 4311. Point installed validation binaries at 4311 (and reverse that port on Android). Create the switch file printed by the proxy to delay each upload part for 20 seconds. The proxy consumes request bodies, preserves bearer headers and strips already-decoded compression headers; it contains no production behavior.
+
+Copy `Aside-upload.wav` into Android Downloads / iOS app Documents. Run `upload-background-android.yaml`, or open iOS Files to the app's Documents folder and run `upload-background-ios.yaml` on an iPhone 16 Pro. Verify the localized cancellation message, retry action and server-side `DELETE /uploads/:id` after pressing Home. Remove the switch file and run `upload-retry.yaml`; the selected local file should upload, finish real media analysis and open its transcript. Do not run simultaneous UI flows on one device.
+
+`permission-denied.yaml` explicitly sets `launchApp.permissions.all: deny`: Maestro otherwise grants permissions at launch. `cancel-capture.yaml` and `background-question.yaml` verify cancellation, and reopening must leave the episode paused. For the 30-second cap, retain native recorder start/stop timestamps and read the checkpoint before/after; a previously rendered answer is insufficient evidence of a newly completed turn.

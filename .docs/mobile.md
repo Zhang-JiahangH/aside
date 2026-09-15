@@ -6,6 +6,8 @@ React Native / Expo SDK 54, iOS 15.1+ and Android 7+. Web and mobile share `@asi
 
 Use Node 24 (`package.json` pins Volta), npm, Xcode 16.2+, Java 17, Android SDK and FFmpeg/ffprobe. Run `npm ci`. For iOS install the pinned CocoaPods/JSON gems using `bundle install` inside `mobile`, then use `bundle exec pod install` inside the generated `mobile/ios` directory. UTF-8 locale (`LANG=en_US.UTF-8`) is required by CocoaPods.
 
+The root postinstall applies the one-line upstream [expo-audio paused Now Playing fix](https://github.com/expo/expo/pull/44974) to the pinned SDK 54 dependency. The script is idempotent and requires review if the upstream implementation changes. Without it, iOS system metadata reports a playback rate of 1 while paused. The media Docker image installs only backend/engine workspaces and skips native installation scripts.
+
 - `npm run ios:device -w @aside/mobile`: local iPhone Release build/install. Sign with your Personal Team in Xcode and enable Developer Mode on the phone. Profile expiry requires re-signing, normally after seven days.
 - `npm run ios -w @aside/mobile`: select an iOS simulator for Release testing.
 - `npm run build:apk:local -w @aside/mobile`: generate an Android Release APK. Requires `JAVA_HOME`, `ANDROID_HOME`, `keytool`, and an installed Android SDK. It creates a persistent private signing key under ignored `mobile/.credentials`; keep a private backup to preserve update compatibility. Losing this key means existing installs cannot accept updates signed with another key.
@@ -50,7 +52,7 @@ On background entry, podcast playback continues using OS media services and lock
 - `npm run test:cloudflare`: real local Worker/D1/R2 with model transport fixtures, including bearer revocation and cross-device writes.
 - `npm run build`: website regression build.
 - Install `mobile/tests/requirements.txt` into an isolated Python environment and run `mobile/tests/rtc.py` for the synthetic WebRTC peer.
-- From the repository root run `node --import tsx mobile/tests/server.mjs`. It binds only localhost:4311, seeds a public audio fixture and fixes test-only email codes to `12345678`. Production code never includes this code-delivery override.
+- From the repository root run `node --import tsx mobile/tests/server.mjs`. It binds only localhost:4311 (override with `PORT`), seeds public audio fixtures and fixes test-only email codes to `12345678`. Production code never includes this code-delivery override.
 - Build simulator binaries with `EXPO_PUBLIC_API_URL=http://127.0.0.1:4311` and `ASIDE_TEST_API=1`. Android requires `adb reverse tcp:4311 tcp:4311` and `adb reverse tcp:4312 tcp:4312` as needed for control transport. Peer ICE connectivity still uses local networking.
 - Run Maestro flows in `mobile/tests` on each simulator and save reports outside Git. These exercise production app screens, native playback/recording, real Worker routes and a synthetic model peer; they do not prove real-model answer quality or production speech latency.
 

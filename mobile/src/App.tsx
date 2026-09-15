@@ -405,6 +405,15 @@ function Main() {
       clearUploadFile();
       await refreshPrivate();
       await load(next.id);
+    } catch (error) {
+      if (abort.signal.aborted)
+        throw new Error(
+          tr(
+            "上传已取消。点击重试，并在上传期间保持 App 在前台。",
+            "Upload cancelled. Tap Retry upload and keep the app open.",
+          ),
+        );
+      throw error;
     } finally {
       uploadAbort.current = null;
       setUpload(null);
