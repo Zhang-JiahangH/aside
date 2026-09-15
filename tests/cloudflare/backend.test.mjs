@@ -1,6 +1,6 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ import {
 } from "miniflare";
 import { CloudStore } from "../../cloudflare/src/store.ts";
 import { analyzeEpisode } from "../../cloudflare/src/pipeline.ts";
-import { mediaApp } from "../../backend/src/container/app.ts";
+import { admitAudio, mediaApp } from "../../backend/src/container/app.ts";
 let mf, db, bucket;
 let networkCalls = [];
 let acknowledgeClose = true;
@@ -643,7 +643,7 @@ test("multipart upload validates size/ownership and completes idempotently into 
   );
   assert.equal(badPart.status, 400);
 });
-test("upload quota allows five active or completed files per account and frees cancellations", async () => {
+test("upload quota allows 100 active or completed files per account per UTC month and frees cancellations", async () => {
   const guest = await visitor();
   assert.equal(
     (await guest.request("/api/uploads", "POST", { title: "Guest", size: 44 }))
@@ -651,6 +651,25 @@ test("upload quota allows five active or completed files per account and frees c
     401,
   );
   const a = await signedInAccount();
+  const now = new Date().toISOString();
+  const month = now.slice(0, 7);
+  // Earlier uploads this month count; they sit on another day so the site-wide daily cap stays free.
+  const earlierDay = now.slice(8, 10) === "01" ? "02" : "01";
+  const seedUploads = (count, createdAt, label) =>
+    db
+      .prepare(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?)
+       INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state)
+       SELECT ?||'-'||i,?,'seeded','episodes/'||?||'-'||i||'/original','Earlier',44,?,'complete' FROM n`,
+      )
+      .bind(count, `${label}-${a.id}`, a.id, `${label}-${a.id}`, createdAt)
+      .run();
+  await seedUploads(97, `${month}-${earlierDay}T00:00:00.000Z`, "this-month");
+  // Last month's uploads never count toward this month.
+  const lastMonth = new Date(
+    Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 2, 15),
+  );
+  await seedUploads(3, lastMonth.toISOString(), "last-month");
   const starts = await Promise.all(
     Array.from({ length: 8 }, (_, index) =>
       a.request("/api/uploads", "POST", {
@@ -659,8 +678,13 @@ test("upload quota allows five active or completed files per account and frees c
       }),
     ),
   );
-  assert.equal(starts.filter((response) => response.status === 201).length, 5);
-  assert.equal(starts.filter((response) => response.status === 429).length, 3);
+  assert.equal(starts.filter((response) => response.status === 201).length, 3);
+  const rejected = starts.filter((response) => response.status === 429);
+  assert.equal(rejected.length, 5);
+  assert.match(
+    (await rejected[0].json()).error,
+    /每个账号每月最多上传 100 篇音频/,
+  );
   const accepted = await Promise.all(
     starts
       .filter((response) => response.status === 201)
@@ -689,14 +713,16 @@ test("upload quota allows five active or completed files per account and frees c
     size: 44,
   });
   assert.equal(replacement.status, 201, await replacement.clone().text());
-  const day = new Date().toISOString().slice(0, 10);
   const quota = await db
     .prepare(
-      "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected')",
+      "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected')",
     )
-    .bind(a.id, day)
+    .bind(a.id, month)
     .first();
-  assert.equal(quota.count, 5);
+  assert.equal(quota.count, 100);
+  const page = await (await a.request("/api/space/episodes")).json();
+  assert.equal(page.usedThisMonth, 100);
+  assert.equal(page.monthlyLimit, 100);
 });
 test("parallel upload starts cannot exceed an account's storage cap", async () => {
   const a = await signedInAccount();
@@ -763,8 +789,8 @@ test("personal Space isolates accounts and deletion removes private data without
   assert.equal(listed.status, 200);
   const page = await listed.json();
   assert.ok(page.episodes.some((episode) => episode.id === id));
-  assert.equal(page.usedToday, 1);
-  assert.equal(page.dailyLimit, 5);
+  assert.equal(page.usedThisMonth, 1);
+  assert.equal(page.monthlyLimit, 100);
   const otherPage = await (await b.request("/api/space/episodes")).json();
   assert.ok(!otherPage.episodes.some((episode) => episode.id === id));
   assert.equal(
@@ -797,7 +823,7 @@ test("personal Space isolates accounts and deletion removes private data without
   );
   assert.equal(
     (await a.request("/api/space/episodes").then((response) => response.json()))
-      .usedToday,
+      .usedThisMonth,
     1,
   );
 });
@@ -857,7 +883,7 @@ test("analysis retries reuse durable transcript/audio, survive temporary media l
   await seed(id, "owner", false, false);
   let transcriptions = 0,
     enrichments = 0,
-    encodings = 0,
+    segmentReads = 0,
     fail = true;
   const provider = {
     async transcribeAudio() {
@@ -879,19 +905,22 @@ test("analysis retries reuse durable transcript/audio, survive temporary media l
     },
   };
   const media = {
-    async prepare() {
+    async open() {
       return {
-        durationMs: 1000,
-        mimeType: "audio/wav",
-        pauses: [],
-        plan: [{ offsetMs: 0, durationMs: 1000 }],
+        manifest: {
+          durationMs: 1000,
+          mimeType: "audio/wav",
+          pauses: [],
+          plan: [{ offsetMs: 0, durationMs: 1000 }],
+        },
+        async segment() {
+          segmentReads++;
+          return new TextEncoder().encode("encoded");
+        },
+        async cover() {},
+        async close() {},
       };
     },
-    async chunk() {
-      encodings++;
-      return new TextEncoder().encode("encoded");
-    },
-    async cleanup() {},
   };
   const steps = { do: (_name, fn) => fn() };
   await assert.rejects(
@@ -914,15 +943,15 @@ test("analysis retries reuse durable transcript/audio, survive temporary media l
     id,
     steps,
     {
-      ...media,
-      prepare() {
+      // Every segment is already in R2, so the retry never needs a container.
+      open() {
         throw Error("Source container is gone");
       },
     },
     provider,
   );
   assert.equal(transcriptions, 1);
-  assert.equal(encodings, 1);
+  assert.equal(segmentReads, 1);
   assert.equal(enrichments, 2);
   const store = new CloudStore(db, bucket),
     episode = await store.episode(await store.row(id));
@@ -941,7 +970,85 @@ test("analysis retries reuse durable transcript/audio, survive temporary media l
     2,
   );
 });
-test("actual FFmpeg service probes, encodes, rejects invalid media and detects restart cache misses", async () => {
+test("segments analyze concurrently up to ANALYSIS_CONCURRENCY and assemble in timeline order", async () => {
+  const id = crypto.randomUUID();
+  await seed(id, "owner", false, false);
+  const plan = Array.from({ length: 5 }, (_, i) => ({
+    offsetMs: i * 1000,
+    durationMs: 1000,
+  }));
+  let active = 0,
+    peak = 0;
+  const provider = {
+    async transcribeAudio(_bytes, offsetMs) {
+      active++;
+      peak = Math.max(peak, active);
+      // Later segments finish first.
+      await new Promise((resolve) => setTimeout(resolve, 40 - offsetMs / 200));
+      active--;
+      return [
+        {
+          id: `p-${offsetMs}`,
+          startMs: offsetMs + 100,
+          endMs: offsetMs + 900,
+          text: `S${offsetMs / 1000}`,
+          speaker: "s1",
+        },
+      ];
+    },
+    async enrichAudio(_bytes, passages) {
+      return {
+        summary: "",
+        hostStyle: "",
+        speakers: [],
+        groups: [{ firstId: passages[0].id, lastId: passages[0].id }],
+      };
+    },
+  };
+  const media = {
+    async open() {
+      return {
+        manifest: {
+          durationMs: 5000,
+          mimeType: "audio/mpeg",
+          pauses: [],
+          plan,
+        },
+        segment: async () => new TextEncoder().encode("encoded"),
+        cover: async () => undefined,
+        close: async () => {},
+      };
+    },
+  };
+  const store = new CloudStore(db, bucket);
+  const progress = [];
+  const steps = {
+    async do(_name, fn) {
+      const result = await fn();
+      progress.push(JSON.parse((await store.row(id)).metadata).progress);
+      return result;
+    },
+  };
+  await analyzeEpisode(
+    { DB: db, AUDIO: bucket, ANALYSIS_CONCURRENCY: "2" },
+    id,
+    steps,
+    media,
+    provider,
+  );
+  assert.equal(peak, 2);
+  const episode = await store.episode(await store.row(id));
+  assert.equal(episode.status, "ready");
+  assert.deepEqual(
+    episode.analysis.passages.map((p) => p.text),
+    ["S0", "S1", "S2", "S3", "S4"],
+  );
+  assert.deepEqual(
+    progress,
+    [...progress].sort((a, b) => a - b),
+  );
+});
+test("actual FFmpeg service probes, segments, rejects invalid media and reports an unprepared source", async () => {
   const root = await mkdtemp(join(tmpdir(), "aside-container-test-"));
   const app = mediaApp(root),
     id = crypto.randomUUID();
@@ -986,6 +1093,58 @@ test("actual FFmpeg service probes, encodes, rejects invalid media and detects r
     await rm(root, { recursive: true, force: true });
   }
 });
+test("actual FFmpeg service cuts contiguous segments at pauses from one speech track", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aside-segment-test-"));
+  const app = mediaApp(root),
+    id = crypto.randomUUID();
+  try {
+    const source = join(root, "talk.wav");
+    // 500 s of tone with a pause from 238 s to 241 s, around the first 240 s boundary.
+    execFileSync("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "aevalsrc=if(between(t\\,238\\,241)\\,0\\,0.3*sin(440*2*PI*t)):s=8000:d=500",
+      "-ac",
+      "1",
+      "-c:a",
+      "pcm_s16le",
+      source,
+    ]);
+    const prepare = await app.inject({
+      method: "POST",
+      url: `/prepare?id=${id}`,
+      headers: { "content-type": "application/octet-stream" },
+      payload: await readFile(source),
+    });
+    assert.equal(prepare.statusCode, 200, prepare.body);
+    const { plan, durationMs } = prepare.json();
+    assert.equal(plan.length, 3, JSON.stringify(plan));
+    assert.equal(plan[0].offsetMs, 0);
+    assert.ok(Math.abs(plan[1].offsetMs - 239500) < 100, JSON.stringify(plan));
+    for (let i = 1; i < plan.length; i++)
+      assert.ok(
+        Math.abs(
+          plan[i].offsetMs - (plan[i - 1].offsetMs + plan[i - 1].durationMs),
+        ) <= 2,
+        JSON.stringify(plan),
+      );
+    assert.ok(
+      Math.abs(plan.at(-1).offsetMs + plan.at(-1).durationMs - durationMs) <
+        100,
+    );
+    for (let i = 0; i < plan.length; i++) {
+      const chunk = await app.inject(`/chunk?id=${id}&index=${i}`);
+      assert.equal(chunk.statusCode, 200);
+      assert.ok(chunk.rawPayload.length > 1000);
+    }
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("real media probe accepts exactly five hours and rejects one second more before analysis", async () => {
   const root = await mkdtemp(join(tmpdir(), "aside-five-hour-test-"));
   const app = mediaApp(root);
@@ -1006,17 +1165,16 @@ test("real media probe accepts exactly five hours and rejects one second more be
     return wav;
   };
   try {
-    const send = (seconds) =>
-      app.inject({
-        method: "POST",
-        url: `/prepare?id=${crypto.randomUUID()}`,
-        headers: { "content-type": "application/octet-stream" },
-        payload: makeWav(seconds),
-      });
-    const atLimit = await send(5 * 3600);
-    assert.equal(atLimit.statusCode, 200, atLimit.body);
-    assert.equal(atLimit.json().durationMs, 5 * 3600000);
-    const over = await send(5 * 3600 + 1);
+    // The limit itself is checked on the probe; encoding five hours would dominate the suite.
+    const atLimit = join(root, "at-limit.wav");
+    await writeFile(atLimit, makeWav(5 * 3600));
+    assert.equal((await admitAudio(atLimit)).durationMs, 5 * 3600000);
+    const over = await app.inject({
+      method: "POST",
+      url: `/prepare?id=${crypto.randomUUID()}`,
+      headers: { "content-type": "application/octet-stream" },
+      payload: makeWav(5 * 3600 + 1),
+    });
     assert.equal(over.statusCode, 422, over.body);
     assert.match(over.json().error, /5 小时/);
   } finally {
@@ -1105,16 +1263,18 @@ test("analysis stores extracted artwork and never fails over a lost cover", asyn
     }),
   };
   const media = (cover) => ({
-    prepare: async () => ({
-      durationMs: 1000,
-      mimeType: "audio/mpeg",
-      cover: true,
-      pauses: [],
-      plan: [{ offsetMs: 0, durationMs: 1000 }],
+    open: async () => ({
+      manifest: {
+        durationMs: 1000,
+        mimeType: "audio/mpeg",
+        cover: true,
+        pauses: [],
+        plan: [{ offsetMs: 0, durationMs: 1000 }],
+      },
+      segment: async () => new TextEncoder().encode("encoded"),
+      cover,
+      close: async () => {},
     }),
-    chunk: async () => new TextEncoder().encode("encoded"),
-    cover,
-    cleanup: async () => {},
   });
   const steps = { do: (_name, fn) => fn() };
   const store = new CloudStore(db, bucket);

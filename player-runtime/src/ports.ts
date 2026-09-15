@@ -10,11 +10,12 @@ import type {
   QuestionResult,
   QuestionPhase,
 } from "@aside/engine/contracts";
+import type { PlayerConfig } from "@aside/engine/player";
 export interface PodcastAudio {
   positionMs: number;
   play(): Promise<void>;
   pause(): void;
-  setRate(rate: number): void;
+  configure(config: PlayerConfig): void;
   seek?(atMs: number): Promise<void>;
 }
 export interface PlayerBackend {
@@ -79,6 +80,7 @@ export interface VoicePort {
   ): void;
   activity(): void;
   setWorking(value: boolean): void;
+  outputLevels?(levels: Float32Array): boolean;
 }
 export type VoiceFactory = (
   microphone: MicrophoneConfig,

@@ -317,7 +317,7 @@ export function Space({
                 !page ||
                 checking ||
                 progress !== null ||
-                page.usedToday >= page.dailyLimit ||
+                page.usedThisMonth >= page.monthlyLimit ||
                 page.usedStorage >= page.storageLimit
               }
               onClick={() => input.current?.click()}
@@ -339,10 +339,10 @@ export function Space({
             />
             <p id="space-upload-limit" className="space-sidebar-limit">
               {page
-                ? `${page.usedToday} / ${page.dailyLimit} ${t("篇今日已用")}`
+                ? `${page.usedThisMonth} / ${page.monthlyLimit} ${t("篇本月已用")}`
                 : t("正在加载…")}
               <span>
-                {t("单个音频最长 5 小时 · 文件最大 1 GiB · 每天最多 5 篇")}
+                {t("单个音频最长 5 小时 · 文件最大 1 GiB · 每月最多 100 篇")}
               </span>
             </p>
             {!uploadEnabled && (

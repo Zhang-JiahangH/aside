@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./core": "./src/core.ts",
+    "./player": "./src/player.ts",
     "./server": "./src/server.ts",
     "./contracts": "./src/contracts.ts"
   },

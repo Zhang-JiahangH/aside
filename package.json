@@ -14,6 +14,7 @@
     "build": "npm run check && npm run build -w @aside/frontend",
     "check": "tsc --noEmit && node scripts/check-boundaries.mjs && npm run check:cloudflare && npm run check:mobile",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:player-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='engine/src/player.ts' --test-coverage-include='frontend/src/podcast-audio.ts' --test-coverage-include='frontend/src/player-preferences.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/player-config.test.ts tests/podcast-audio.test.ts tests/player-preferences.test.ts",
     "demo": "node --import tsx scripts/create-demo.ts",
     "prepare:og": "node scripts/prepare-og-image.mjs",
     "format": "prettier --write engine backend frontend scripts tests *.json",

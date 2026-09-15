@@ -1,3 +1,4 @@
+import type { PlayerConfig } from "@aside/engine/player";
 import {
   AudioModule,
   createAudioPlayer,
@@ -101,8 +102,11 @@ export class NativePodcastAudio implements PodcastAudio {
     this.player.pause();
     void this.coordinator.pausePodcast().catch(() => {});
   }
-  setRate(rate: number) {
-    this.player.setPlaybackRate(rate);
+  configure(config: PlayerConfig) {
+    this.player.shouldCorrectPitch = config.preservesPitch;
+    this.player.volume = config.volume;
+    this.player.muted = config.muted;
+    this.player.setPlaybackRate(config.playbackRate);
   }
   clear() {
     this.pause();

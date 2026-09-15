@@ -22,8 +22,10 @@ export interface Env {
   ASIDE_BACKEND_MODEL?: string;
   APP_ORIGIN: string;
   ALLOW_UPLOADS?: string;
-  DAILY_UPLOAD_LIMIT?: string;
+  MONTHLY_UPLOAD_LIMIT?: string;
   GLOBAL_DAILY_UPLOAD_LIMIT?: string;
   ACCOUNT_STORAGE_LIMIT_BYTES?: string;
   GLOBAL_STORAGE_LIMIT_BYTES?: string;
+  /** Segments transcribed and analysed at once; defaults to 6. */
+  ANALYSIS_CONCURRENCY?: string;
 }

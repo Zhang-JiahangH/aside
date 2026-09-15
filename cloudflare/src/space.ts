@@ -92,18 +92,18 @@ export async function spaceRoute(
     const pending = await env.DB.prepare(
       "SELECT id,title,size,created_at AS createdAt FROM uploads WHERE owner_id=? AND state='pending' ORDER BY created_at DESC",
     ).bind(owner).all<{ id: string; title: string; size: number; createdAt: string }>();
-    const day = new Date().toISOString().slice(0, 10);
+    const month = new Date().toISOString().slice(0, 7);
     const usage = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected')",
-    ).bind(owner, day).first<{ count: number }>();
+      "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected')",
+    ).bind(owner, month).first<{ count: number }>();
     const storage = await env.DB.prepare(
       "SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE owner_id=? AND state IN ('pending','complete')",
     ).bind(owner).first<{ bytes: number }>();
     return json({
       episodes: page.map((row) => JSON.parse(row.metadata) as Episode),
       pending: pending.results,
-      usedToday: usage?.count ?? 0,
-      dailyLimit: positiveLimit(env.DAILY_UPLOAD_LIMIT, 5),
+      usedThisMonth: usage?.count ?? 0,
+      monthlyLimit: positiveLimit(env.MONTHLY_UPLOAD_LIMIT, 100),
       usedStorage: storage?.bytes ?? 0,
       storageLimit: positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3),
       nextCursor: results.length > PAGE_SIZE

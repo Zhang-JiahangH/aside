@@ -8,7 +8,7 @@ sample library needs no account; a signed-in personal space adds uploads,
 transcripts and per-audio conversation history.
 
 - Interface languages: Chinese and English. Answers follow the language of the question.
-- Audio: public samples play immediately; signed-in accounts can upload their own audio (up to 5 hours / 1 GiB per file, 5 uploads per UTC day).
+- Audio: public samples play immediately; signed-in accounts can upload their own audio (up to 5 hours / 1 GiB per file, 100 uploads per UTC calendar month).
 - Voice: a live session is opened on demand when you speak; voice-activity detection runs locally in the browser.
 - Platform: Cloudflare Workers, D1 for text and state, R2 for audio.
 

@@ -23,6 +23,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      - run: npm run test:player-coverage
       - run: npm run test:cloudflare
       - run: npm run build -w @aside/frontend
       - run: docker build -f cloudflare/Dockerfile -t aside-media:ci .

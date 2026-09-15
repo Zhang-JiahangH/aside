@@ -88,6 +88,7 @@ tests/        单元/API 测试与浏览器集成测试
 - [用户账号与个人资料](.docs/accounts.md)：邮件/Google 登录、profile、配置与上线边界。
 - [个人 Space](.docs/personal-space.md)：上传、私人音频库、额度与删除清理。
 - [开发与验证](.docs/development.md)：运行命令、测试前提、配置和故障定位。
+- [播放器配置与遥控底层](.docs/player-controls.md)：播放器级配置、倍速/音量、跳转/重播、暂停与停止，以及后续语音指令接入。
 - [ADR 0001 · 初始架构](.docs/adr/0001-interactive-podcast-architecture.md)
 - [ADR 0002 · 按需 Live 会话](.docs/adr/0002-on-demand-live-sessions.md)
 - [ADR 0003 · 收听与问答状态归属](.docs/adr/0003-listening-and-question-ownership.md)

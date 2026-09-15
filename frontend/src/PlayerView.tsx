@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
@@ -72,6 +73,8 @@ export function PlayerView({
     metadataLoaded,
     audioTick,
     setPlaybackRate,
+    playerConfig,
+    executePlayerCommand,
     setError,
     setDebug,
     setQuestion,
@@ -94,6 +97,68 @@ export function PlayerView({
     () => waveShape(episode?.id ?? ""),
     [episode?.id],
   );
+  const waveBars = useRef<HTMLSpanElement>(null);
+  const audioPlaying = state.mode === "playing";
+  // Aside is in the conversation from the interruption until playback is asked to resume.
+  const agentPresent = !!state.interruption && !state.resumeRequested;
+  const agentJoining =
+    agentPresent && ["connecting", "transcribing"].includes(liveStatus);
+  const agentSpeaking = state.mode === "answering";
+  const waveMotion = audioPlaying
+    ? "podcast"
+    : agentSpeaking
+      ? "voice"
+      : agentPresent && !agentJoining
+        ? "idle"
+        : "rest";
+  const playheadBar =
+    episode && episode.durationMs > 0
+      ? (state.positionMs / episode.durationMs) * WAVE_BARS
+      : 0;
+  const readLevels = useRef(player.audioLevels);
+  readLevels.current = player.audioLevels;
+  const readVoiceLevels = useRef(player.voiceLevels);
+  readVoiceLevels.current = player.voiceLevels;
+  const waveScales = useRef(new Float32Array(WAVE_BARS).fill(1));
+  // Bars follow whoever is audible: the podcast, or Aside's answer voice. Between turns
+  // they breathe low while Aside is present, then ease back to the drawn shape.
+  useEffect(() => {
+    const bars = waveBars.current?.children;
+    if (
+      !bars?.length ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    const levels = new Float32Array(bars.length);
+    const scales = waveScales.current;
+    let frame = 0;
+    const draw = (now: number) => {
+      const live =
+        waveMotion === "podcast"
+          ? readLevels.current(levels)
+          : waveMotion === "voice" && readVoiceLevels.current(levels);
+      let settled = waveMotion === "rest";
+      for (let i = 0; i < bars.length; i++) {
+        const target = live
+          ? 0.28 + 0.72 * levels[i]
+          : waveMotion === "rest"
+            ? 1
+            : 0.5 + 0.1 * Math.sin(now / 420 + i * 0.45);
+        const current = scales[i];
+        scales[i] += (target - current) * (target > current ? 0.45 : 0.14);
+        if (Math.abs(scales[i] - target) > 0.005) settled = false;
+        (bars[i] as HTMLElement).style.transform =
+          `scaleY(${scales[i].toFixed(3)})`;
+      }
+      if (settled) {
+        for (const bar of bars) (bar as HTMLElement).style.transform = "";
+        return;
+      }
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [waveMotion, waveHeights]);
   const [mobileTab, setMobileTab] = useState<"transcript" | "chat" | null>(
     "transcript",
   );
@@ -438,7 +503,7 @@ export function PlayerView({
                     listeningMode === "manual"
                       ? t("按住说话 · 待命")
                       : t("● 本地监听"),
-                  connecting: t("● 正在连接"),
+                  connecting: t("● Aside 正在加入"),
                   transcribing: t("● 正在识别"),
                   on:
                     listeningMode === "manual"
@@ -490,7 +555,10 @@ export function PlayerView({
                 </div>
               ) : (
                 history.map((turn, i) => (
-                  <div key={i} className={`message ${turn.role}`}>
+                  <div
+                    key={i}
+                    className={`message ${turn.role}${agentSpeaking && turn.role === "assistant" && i === history.length - 1 ? " is-speaking" : ""}`}
+                  >
                     <span
                       className={`chat-avatar${turn.role === "user" && !chatUser ? " is-guest" : ""}`}
                       aria-hidden="true"
@@ -649,7 +717,7 @@ export function PlayerView({
       <div className="player-dock" aria-label={t("播放控制")}>
         <div className="dock-title" title={episode.title}>
           <span
-            className={`dock-art${listeningActive ? " playing" : ""}${showCover ? " has-cover" : ""}`}
+            className={`dock-art${audioPlaying ? " playing" : ""}${showCover ? " has-cover" : ""}`}
             aria-hidden="true"
           >
             {showCover && (
@@ -666,7 +734,11 @@ export function PlayerView({
           <div className="dock-progress">
             <span>{formatPlayerTime(state.positionMs)}</span>
             <div className="timeline-wrap">
-              <span className="timeline-wave" aria-hidden="true">
+              <span
+                className={`timeline-wave${agentPresent ? " is-agent" : ""}${agentJoining ? " is-joining" : ""}`}
+                aria-hidden="true"
+                ref={waveBars}
+              >
                 {waveHeights.map((height, index) => (
                   <i
                     key={index}
@@ -677,7 +749,12 @@ export function PlayerView({
                         ? "on"
                         : undefined
                     }
-                    style={{ height: `${Math.round(height * 100)}%` }}
+                    style={
+                      {
+                        height: `${Math.round(height * 100)}%`,
+                        "--handoff-delay": `${Math.round(Math.abs(index + 0.5 - playheadBar) * 14)}ms`,
+                      } as CSSProperties
+                    }
                   />
                 ))}
               </span>
@@ -769,7 +846,67 @@ export function PlayerView({
             )}
           </div>
         </div>
-        <SpeedSelect onChange={setPlaybackRate} />
+        <SpeedSelect config={playerConfig} onChange={setPlaybackRate} />
+        <div className="dock-volume" role="group" aria-label={t("音量控制")}>
+          <button
+            type="button"
+            className="volume-toggle btn btn-quiet btn-icon"
+            aria-label={t("静音")}
+            aria-pressed={playerConfig.muted}
+            title={playerConfig.muted ? t("取消静音") : t("静音")}
+            onClick={() =>
+              executePlayerCommand({
+                type: "set_muted",
+                muted: !playerConfig.muted,
+              })
+            }
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="19"
+              height="19"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+              {playerConfig.muted ? (
+                <path d="m16 9 6 6m0-6-6 6" />
+              ) : playerConfig.volume > 0 ? (
+                <>
+                  <path d="M15 9a5 5 0 0 1 0 6" />
+                  {playerConfig.volume > 0.5 && (
+                    <path d="M18 5a10 10 0 0 1 0 14" />
+                  )}
+                </>
+              ) : null}
+            </svg>
+          </button>
+          <input
+            type="range"
+            className="volume-slider"
+            aria-label={t("播客音量")}
+            aria-valuetext={`${Math.round(playerConfig.volume * 100)}%${playerConfig.muted ? ` · ${t("已静音")}` : ""}`}
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(playerConfig.volume * 100)}
+            onChange={(e) =>
+              executePlayerCommand({
+                type: "set_volume",
+                volume: Number(e.target.value) / 100,
+              })
+            }
+          />
+          <span className="volume-value" aria-hidden="true">
+            {playerConfig.muted
+              ? t("已静音")
+              : `${Math.round(playerConfig.volume * 100)}%`}
+          </span>
+        </div>
       </div>
       <button
         className="debug-toggle"

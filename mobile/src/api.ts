@@ -25,8 +25,8 @@ export interface AudioFile {
 export interface SpacePage {
   episodes: Episode[];
   nextCursor: string | null;
-  usedToday: number;
-  dailyLimit: number;
+  usedThisMonth: number;
+  monthlyLimit: number;
   usedStorage: number;
   storageLimit: number;
 }
