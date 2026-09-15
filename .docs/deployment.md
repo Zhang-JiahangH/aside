@@ -253,3 +253,13 @@ npm run db:cloudflare:production
 生产 Worker `a972ee2a-948c-4292-8b66-b43a6f52ef92`（`--containers-rollout=none`，保留现有 Container），绑定显示 `MONTHLY_UPLOAD_LIMIT=100`、`GLOBAL_DAILY_UPLOAD_LIMIT=10`，仍含 `EMAIL`、`ALLOW_UPLOADS=true`。正式域名 `/` 与 `/space` 引用 `index-B8_QdQso.js`（200，`text/javascript`），bundle 含月度文案与字段、不再含 `usedToday`/「篇今日已用」；`/llms.txt` 为 100 uploads per UTC calendar month；`/api/health` 200、`uploadsEnabled=true`；未登录访问 `/api/space/episodes` 与 `POST /api/uploads` 均返回 401。
 
 未验证：没有用生产登录账号查看 Space 的月度字段或实际上传（会触发付费分析），月度计数与超额提示只由本地 Miniflare 集成测试覆盖。
+
+## 全站每日上传上限提高到 2000 篇
+
+2026-09-14：按用户要求，`GLOBAL_DAILY_UPLOAD_LIMIT` 从 10 提高到 2000（两份 Wrangler 配置与代码默认值同步），避免单个账号占满全站当天名额。原先固定为 30 的全站每日上传尝试次数改为全站上限的 3 倍（6000），否则会先于 2000 生效；每账号每天 10 次尝试、每月 100 篇、每账号 20 GiB / 全站 100 GiB 存储、全站每日 10 次分析重试均不变。`npm run check` 与 28 项 Cloudflare 集成测试通过。
+
+生产 Worker `b464f6b4-59d9-4ae1-a3ee-bf0b8a721b04`（`--containers-rollout=none`，保留现有 Container），绑定显示 `GLOBAL_DAILY_UPLOAD_LIMIT=2000`、`MONTHLY_UPLOAD_LIMIT=100`，仍含 `EMAIL`、`ALLOW_UPLOADS=true`；前端无变化，没有上传新静态资源，首页仍引用 `index-B8_QdQso.js`。`/api/health` 200、`liveConfigured=true`、`uploadsEnabled=true`；未登录 `POST /api/uploads` 返回 401。
+
+费用提示：按每小时音频约 $2.2 的分析成本估算，全站每日上限现在允许每天约 $4,400（1 小时节目）到 $22,000（5 小时文件）的分析费用。实际的剩余约束是全站 100 GiB 保留存储（删除会释放）与每账号每月 100 篇（新账号只需邮箱）。建议在 OpenAI 后台设置月度花费上限作为兜底。
+
+未验证：线上没有做登录上传或全站额度耗尽测试。
