@@ -1,6 +1,8 @@
 appId: com.asidefm.app.dev
 ---
-- launchApp
+- launchApp:
+    permissions:
+      all: deny
 - tapOn:
     id: public-library
     waitToSettleTimeoutMs: 1000

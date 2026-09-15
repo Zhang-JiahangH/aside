@@ -28,7 +28,8 @@
     "deploy:cloudflare": "npm run build && wrangler deploy --config wrangler.production.jsonc",
     "db:cloudflare:production": "wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc",
     "export:demo": "node --import tsx scripts/export-public-demo.ts",
-    "check:mobile": "npm run check -w @aside/mobile"
+    "check:mobile": "npm run check -w @aside/mobile",
+    "postinstall": "node mobile/scripts/patch-audio.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260911.1",
