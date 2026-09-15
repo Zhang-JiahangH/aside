@@ -75,6 +75,7 @@ export class OnDemandVoice {
     private cb: VoiceCallbacks,
     private deps: VoiceDependencies,
     private manual = false,
+    private continuous = false,
   ) {
     this.mic = deps.microphone(
       (a) => {
@@ -106,6 +107,8 @@ export class OnDemandVoice {
       }
       this.microphoneReady = true;
       this.setStatus("armed");
+      if (this.continuous && !this.manual)
+        void this.ensureCloud().catch(() => {});
     } catch (error) {
       this.fail((error as Error).message);
     }
@@ -187,7 +190,6 @@ export class OnDemandVoice {
           this.cb.onTranscript(role, text);
         },
         onDelegation: (id) => {
-          if (this.working) return;
           if (this.cloud !== cloud || version !== this.version || this.cold)
             return;
           this.activity();
@@ -296,6 +298,7 @@ export class OnDemandVoice {
   }
   activity() {
     clearTimeout(this.idleTimer);
+    if (this.continuous && !this.manual) return;
     if (
       this.cloud &&
       !this.cold &&
@@ -326,7 +329,7 @@ export class OnDemandVoice {
     this.mic.discard();
     this.mute(true);
     this.clearTimers();
-    if (this.cloud || this.connecting)
+    if (!this.continuous && (this.cloud || this.connecting))
       this.graceTimer = setTimeout(() => this.endCloud(), this.config.graceMs);
   }
   private endCloud() {
@@ -404,5 +407,6 @@ export function createOnDemandVoice(
       cloud: (callbacks) => new LiveConnection(callbacks),
     },
     manual,
+    !manual,
   );
 }

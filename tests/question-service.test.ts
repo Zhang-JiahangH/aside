@@ -173,3 +173,197 @@ test("tool budget and cancellation stop further model work", async () => {
   );
   assert.equal(calls, 5);
 });
+
+test("given a live playback request, controls return in one model round with playback context", async () => {
+  const { createPlayerConfig } = await import("@aside/engine/player");
+  const player = {
+    turnId: "turn-1",
+    source: "voice" as const,
+    positionMs: 1800,
+    wasPlaying: true,
+    audibleSource: "podcast" as const,
+    config: createPlayerConfig(),
+  };
+  let calls = 0;
+  const model: QuestionModel = {
+    async reply(input) {
+      calls++;
+      assert.deepEqual(input.context?.player, player);
+      assert.ok(
+        input.tools.some(
+          (tool) => tool.type === "function" && tool.name === "control_podcast",
+        ),
+      );
+      return reply({
+        calls: [
+          {
+            id: "control",
+            name: "control_podcast",
+            arguments: JSON.stringify({
+              commands: [
+                { type: "adjust_rate", direction: "slower" },
+                { type: "repeat" },
+              ],
+            }),
+          },
+        ],
+      });
+    },
+  };
+  const result = await new QuestionService(model).answer(analysis, {
+    ...request,
+    player,
+  });
+  assert.equal(result.action, "player_control");
+  if (result.action !== "player_control")
+    assert.fail("expected playback command");
+  assert.deepEqual(result.commands, [
+    { type: "adjust_rate", direction: "slower" },
+    { type: "repeat" },
+  ]);
+  assert.equal(result.commandId, "turn-1:control");
+  assert.equal(result.answer, "");
+  assert.equal(calls, 1);
+});
+
+test("given invalid playback arguments, no partial operation escapes validation", async () => {
+  for (const commands of [
+    [],
+    [{ type: "set_volume", volume: 2 }],
+    [{ type: "pause" }, { type: "seek", atMs: "bad" }],
+    Array(5).fill({ type: "repeat" }),
+  ]) {
+    let calls = 0;
+    const model: QuestionModel = {
+      async reply(input) {
+        if (calls++ === 0)
+          return reply({
+            calls: [
+              {
+                id: "bad",
+                name: "control_podcast",
+                arguments: JSON.stringify({ commands }),
+              },
+            ],
+          });
+        assert.deepEqual(input.toolResults, [
+          { callId: "bad", value: { error: "Invalid tool arguments" } },
+        ]);
+        return reply();
+      },
+    };
+    assert.equal(
+      (await new QuestionService(model).answer(analysis, request)).action,
+      "answer",
+    );
+  }
+});
+
+test("given bystander or incomplete speech, the backend returns silence without searching", async () => {
+  for (const [name, action] of [
+    ["ignore_input", "ignore"],
+    ["wait_for_input", "wait"],
+  ]) {
+    const phases: string[] = [];
+    const service = new QuestionService({
+      async reply() {
+        return reply({ calls: [{ id: "quiet", name, arguments: "{}" }] });
+      },
+    });
+    const result = await service.answer(analysis, request, undefined, (p) =>
+      phases.push(p),
+    );
+    assert.equal(result.action, action);
+    assert.equal(result.answer, "");
+    assert.deepEqual(phases, ["working"]);
+  }
+});
+
+test("given an ambient voice saying continue, the model still checks the addressee", async () => {
+  const { createPlayerConfig } = await import("@aside/engine/player");
+  const result = await new QuestionService({
+    async reply() {
+      return reply({
+        calls: [{ id: "quiet", name: "ignore_input", arguments: "{}" }],
+      });
+    },
+  }).answer(analysis, {
+    ...request,
+    history: [{ role: "user", text: "continue" }],
+    player: {
+      turnId: "voice",
+      source: "voice",
+      positionMs: 0,
+      wasPlaying: true,
+      audibleSource: "podcast",
+      config: createPlayerConfig(),
+    },
+  });
+  assert.equal(result.action, "ignore");
+});
+
+test("conflicting terminal decisions cannot execute a control, and excessive tool calls are rejected", async () => {
+  let count = 0;
+  const service = new QuestionService({
+    async reply(input) {
+      if (count++ === 0)
+        return reply({
+          calls: [
+            {
+              id: "control",
+              name: "control_podcast",
+              arguments: '{"commands":[{"type":"pause"}]}',
+            },
+            { id: "ignore", name: "ignore_input", arguments: "{}" },
+          ],
+        });
+      assert.equal(input.toolResults.length, 2);
+      assert.ok(
+        input.toolResults.every((r) =>
+          JSON.stringify(r.value).includes("one decision"),
+        ),
+      );
+      return reply({
+        calls: [{ id: "ignore", name: "ignore_input", arguments: "{}" }],
+      });
+    },
+  });
+  assert.equal((await service.answer(analysis, request)).action, "ignore");
+  await assert.rejects(
+    new QuestionService({
+      async reply() {
+        return reply({
+          calls: Array.from({ length: 9 }, (_, i) => ({
+            id: String(i),
+            name: "get_passage",
+            arguments: "{}",
+          })),
+        });
+      },
+    }).answer(analysis, request),
+    /Tool call limit/,
+  );
+});
+
+test("a combined request returns its control immediately and preserves the content question", async () => {
+  const result = await new QuestionService({
+    async reply() {
+      return reply({
+        calls: [
+          {
+            id: "mixed",
+            name: "control_podcast",
+            arguments: JSON.stringify({
+              commands: [{ type: "pause" }],
+              followUpQuestion: "Why did he say that?",
+            }),
+          },
+        ],
+      });
+    },
+  }).answer(analysis, request);
+  assert.equal(result.action, "player_control");
+  if (result.action !== "player_control")
+    assert.fail("expected remote command");
+  assert.equal(result.followUpQuestion, "Why did he say that?");
+});

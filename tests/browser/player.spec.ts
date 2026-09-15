@@ -226,7 +226,7 @@ test("real demo playback, interruption, sentence rewind and responsive layout", 
   expect(errors).toEqual([]);
 });
 
-test("local AudioWorklet is armed without cloud; first speech captures WAV and starts one connection", async ({
+test("automatic listening preconnects; speech during startup uses WAV fallback without pausing", async ({
   page,
 }) => {
   let creates = 0,
@@ -288,22 +288,8 @@ test("local AudioWorklet is armed without cloud; first speech captures WAV and s
   await page.getByRole("button", { name: /给思考留一点空间/ }).click();
   await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
   await page.getByRole("button", { name: "播放", exact: true }).click();
-  await expect(
-    page.getByRole("status").filter({ hasText: "● 本地监听" }),
-  ).toBeVisible();
-  await page.waitForTimeout(900);
-  expect(creates).toBe(0);
+  await expect.poll(() => creates).toBe(1);
   expect(transcriptions).toBe(0);
-  await page.getByRole("button", { name: "暂停", exact: true }).click();
-  expect(
-    await page.evaluate(
-      () => (window as any).asideTestMic.stream.getTracks()[0].readyState,
-    ),
-  ).toBe("ended");
-  await page.getByRole("button", { name: "播放", exact: true }).click();
-  await expect(
-    page.getByRole("status").filter({ hasText: "● 本地监听" }),
-  ).toBeVisible();
   await page.evaluate(() => {
     (window as any).asideTestMic.gain.gain.value = 0.15;
   });
@@ -315,7 +301,7 @@ test("local AudioWorklet is armed without cloud; first speech captures WAV and s
   ).toBe("live");
   expect(
     await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
-  ).toBe(true);
+  ).toBe(false);
   await page.waitForTimeout(400);
   await page.evaluate(() => {
     (window as any).asideTestMic.gain.gain.value = 0;
@@ -379,7 +365,7 @@ for (const manual of [false]) {
       await route.fulfill({
         json: {
           revision: q.revision,
-          action: "answer",
+          action: q.history.at(-1)?.text === "Okay, go on." ? "resume" : "answer",
           answer: "散步给思考留下一点空间。",
           sources: [],
           tools: ["search_podcast"],
@@ -475,11 +461,8 @@ for (const manual of [false]) {
     await page.getByRole("button", { name: /给思考留一点空间/ }).click();
     await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
     await page.getByRole("button", { name: "播放", exact: true }).click();
-    if (!manual)
-      await expect(
-        page.getByRole("status").filter({ hasText: "● 本地监听" }),
-      ).toBeVisible();
-    expect(creates).toBe(0);
+    await expect(page.getByRole("status").filter({ hasText: "● 语音交流中" })).toBeVisible();
+    expect(creates).toBe(1);
     if (manual) {
       await page.getByRole("button", { name: "按住说话", exact: true }).focus();
       await page.keyboard.down("Space");
@@ -490,6 +473,11 @@ for (const manual of [false]) {
     }
     await expect.poll(() => creates).toBe(1);
     await page.waitForTimeout(250);
+    if (!manual) await page.evaluate(() => {
+      const channel = (window as any).asideCloudChannel;
+      channel.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "为什么散步会带来灵感？" }));
+      channel.send(JSON.stringify({ type: "session.delegation.created", delegation: { target: "client", id: "question-1" } }));
+    });
     if (manual) await page.keyboard.up("Space");
     else
       await page.evaluate(() => {
@@ -535,7 +523,7 @@ for (const manual of [false]) {
       .locator(".player-dock")
       .screenshot({ path: "test-results/dock-agent-answering.png" });
     await page.getByRole("button", { name: /开发观察/ }).click();
-    await expect(page.locator(".debug")).toContainText('"connection": "cold"');
+    await expect(page.locator(".debug")).toContainText('"connection": "warm"');
     await expect(page.locator(".followup-window")).not.toContainText(
       "秒后继续播放",
     );
@@ -550,7 +538,7 @@ for (const manual of [false]) {
     expect(
       await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
     ).toBe(true);
-    // A warm-session spoken command is handled locally without another backend question.
+    // A warm-session spoken command is delegated without standalone transcription.
     if (manual) {
       await page.getByRole("button", { name: "按住说话", exact: true }).focus();
       await page.keyboard.down("Space");
@@ -571,6 +559,7 @@ for (const manual of [false]) {
             delta: "Okay, go on.",
           }),
         );
+        (window as any).asideCloudChannel.send(JSON.stringify({ type: "session.delegation.created", delegation: { target: "client", id: "resume-1" } }));
       });
     }
     await expect(page.locator(".status")).toContainText("回到音频");
@@ -612,7 +601,8 @@ for (const manual of [false]) {
         .filter({ hasText: manual ? "麦克风未监听" : "● 本地监听" }),
     ).toBeVisible();
     await expect.poll(() => usage.length).toBe(1);
-    expect(questions).toBe(1);
+    expect(questions).toBe(2);
+    expect(transcriptions).toBe(0);
     expect(usage[0]).toMatchObject({
       sessionId: "loopback-test-session",
       finalized: true,

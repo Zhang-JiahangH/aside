@@ -2,7 +2,7 @@
 
 播放器遥控与人物对话是独立功能。`@aside/engine/player` 提供配置、运行时命令校验和纯计算规则；`ListeningSession` 执行音频操作并协调已有问答的取消。它不依赖人物 profile、模型连接或转录结果，未分析的音频也可执行基础控制。
 
-本轮实现命令执行层，尚未接入英文自然语言识别。后续识别器把用户意图转换成 `PlayerCommand`，与按钮共用 `executePlayerCommand()`；不直接操作 DOM 或复制播放状态机。此模块只控制播客原音频，AI 实时语音的语速与重说属于另一条音频链路。
+英文语音遥控复用 GPT-Live 的 client delegation：现有后端工具把意图转换成经过校验的 `PlayerCommand`，通过问答 NDJSON 结果传给前端，再使用同一播放器执行层；不直接操作 DOM 或复制播放状态机。此模块只控制播客原音频，AI 实时语音的语速与重说属于另一条音频链路。
 
 ## PlayerConfig
 
@@ -61,7 +61,7 @@ const { playerConfig, state } = session.getSnapshot();
 
 `pause` 不会主动开启原本关闭的麦克风，也不把已有语音服务配置变成遥控器的前置条件。`listeningActive` 表示整个收听会话是否开启，`state.mode` 表示节目/问答状态；遥控暂停时可以是 `listeningActive: true`、`mode: "paused"`。主播放按钮保留既有“停止整个收听”的行为，调用 `stop`。进度条定位后暂停，显式使用 `playback: "pause"`；Transcript 的“从这句播放”在定位后开始播放。
 
-定位、重播和遥控暂停会撤销旧转录/问答、静音旧语音输出、清除旧续播锚点并递增播放 revision。迟到回答不能改变新位置。音量与速度调整不取消无关问答。播放器配置在媒体 metadata 加载时重新应用，避免换源后 DOM 默认速度覆盖配置。
+定位、重播和遥控暂停会撤销旧转录/问答、静音旧语音输出、清除旧续播锚点并递增播放 revision。迟到回答不能改变新位置。前端手动操作会取消尚未完成的远程判断，避免旧指令覆盖用户的新选择。语音音量与速度调整可在播放中完成。播放器配置在媒体 metadata 加载时重新应用，避免换源后 DOM 默认速度覆盖配置。
 
 ## 验证
 
@@ -74,3 +74,37 @@ npm run test:player-coverage
 ```
 
 浏览器验证只需启动前端 `npm run dev -w @aside/frontend`，运行 `npx playwright test tests/browser/player-config.spec.ts`。这组测试用模拟 API 和本地 WAV 验证真实音频元素、倍速菜单、换集与刷新，不需要后端、演示数据或模型 API key。
+
+
+## Live 遥控链路
+
+自动语音模式在用户开启语音并开始收听时提前建立 GPT-Live 连接，连接就绪后麦克风直接通过 WebRTC 送入 Live，不再为正常连续发言单独调用转写。播放恢复后保留该连接，直到用户停止收听、关闭语音、切节目或离开页面；相较原先按需连接，这会增加按时长计费的 Live 用量。按住说话仍使用录音转写；若自动模式下用户在连接就绪前开口，保留原有 WAV/Whisper 首句兜底，不能保证这条冷启动路径达到增量语音延迟。
+
+`session.input_transcript.delta` 累积到当前输入；`session.delegation.created` 触发现有 question 请求，不等待本地 VAD 的 speech-end。后续有意义的转写增量取消旧请求，并用 120ms 防抖合并后重新判断。委派先于转写到达时，等待转写事件补齐；不重复处理同一委派。用户讲话时记录原始位置、发声对象、播放状态和 turnId，意图判断使用这个快照。
+
+检测到声音只开始一轮输入，不暂停播客，也不降音量。Live 和后端都有明确的对话对象指令：和第三方聊天应保持静默，不能把播客内容、引用、否定句当成命令。后端可以返回 `ignore` 或 `wait`；未被确认是系统输入的文字不展示或写入节目 checkpoint。是否正确理解真实车内对话仍需模型音频评测，自动化替身测试不构成语义准确率保证。未新增自动降音量偏好；当前旁边聊天保持用户原有音量。
+
+### NDJSON 合约
+
+复用 `/api/episodes/:id/question` 和现有 `application/x-ndjson`，不增加独立指令连接。请求可选的 `player` 携带 turnId、source、positionMs、wasPlaying、audibleSource、config；老客户端仍然可以不传。
+
+模型通过 `control_podcast` 返回 1–4 个完整、按顺序执行的指令。服务器在整个指令批次校验通过后立即结束模型工具循环，不再请求模型生成确认话语，直接返回终结事件：
+
+```json
+{"type":"result","result":{"revision":7,"action":"player_control","commandId":"turn:call","commands":[{"type":"adjust_rate","direction":"slower"}],"answer":"","sources":[],"tools":["control_podcast"]}}
+```
+
+`ignore` 和 `wait` 同样作为 result.action 返回，但没有 commands。`wait` 允许同一轮后续转写继续判断；`ignore` 静默结束本轮。混合请求可以带 `followUpQuestion`：前端先执行遥控，再启动内容问答，避免解释生成阻塞暂停等操作。现有 `answer` / `resume` 结果保持兼容。
+
+前端按完整 NDJSON 行解析并校验 revision。当前节目、会话 epoch、请求取消状态一起拦截迟到结果；commandId 与已处理的当前输入防止重复调速。手动定位、调音量、切节目或停止会撤销旧请求。`repeat` 使用用户开口时的位置选择语义锚点。批次先完整校验再执行；反馈为 dispatched，不会把异步 play() 尚未成功的状态宣称为播放成功。播放器自身的 play() 拒绝仍走已有错误处理。
+
+AI 发言速度与原音频倍速严格区分，前者尚未实现。标准播放调整不需要 spoken confirmation。默认仍由后端模型决定是否忽略无关语音，因此必须评测误触发，而非仅看指令格式有效。
+
+### 验证 Live 遥控
+
+```bash
+npm run test:remote-coverage
+npx playwright test tests/browser/voice-remote.spec.ts tests/browser/player-config.spec.ts
+```
+
+浏览器用真实 AudioWorklet、WebRTC 回环和 `<audio>`，只模拟云端转写/委派事件与后端 NDJSON。测试不会调用付费模型；实际 GPT-Live 委派时机、对话对象判断、否定/改口、回声以及端到端延迟需要真实音频评测。

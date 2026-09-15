@@ -371,8 +371,17 @@ test("warm transcript and delegation cancel countdown, then resume survives clou
   s.callbacks.onOutput(false);
   s.callbacks.onSpeech(true);
   s.callbacks.onTranscript("user", "继续");
+  s.callbacks.onDelegation("resume-request");
   s.callbacks.onSpeech(false);
   s.clock.advance(450);
+  s.requests[2].resolve({
+    revision: s.requests[2].data.revision,
+    action: "resume",
+    answer: "",
+    sources: [],
+    tools: [],
+  });
+  await flush();
   assert.equal(s.session.getSnapshot().state.mode, "resuming");
   s.callbacks.onError("connection failed");
   s.callbacks.onClose(false, 1, "s", false);
@@ -383,7 +392,7 @@ test("warm transcript and delegation cancel countdown, then resume survives clou
   s.clock.advance(1);
   await flush();
   assert.equal(s.audio.playing, true);
-  assert.equal(s.requests.length, 2);
+  assert.equal(s.requests.length, 3);
   assert.equal(
     s.session
       .getSnapshot()
@@ -582,5 +591,254 @@ test("a play failure from before a remote seek cannot stop the new playback", as
   assert.equal(s.audio.positionMs, 41000);
   assert.equal(s.audio.playing, true);
   assert.equal(s.session.getSnapshot().error, "");
+  s.session.dispose();
+});
+
+function remoteResult(
+  s: ReturnType<typeof setup>,
+  index: number,
+  commands: Extract<QuestionResult, { action: "player_control" }>["commands"],
+  commandId = "remote-command",
+) {
+  s.requests[index].resolve({
+    revision: s.requests[index].data.revision,
+    action: "player_control",
+    commandId,
+    commands,
+    answer: "",
+    sources: [],
+    tools: ["control_podcast"],
+  });
+}
+
+async function liveInput(
+  s: ReturnType<typeof setup>,
+  text: string,
+  delegation = "remote",
+) {
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onSpeech(true);
+  s.callbacks.onTranscript("user", text);
+  s.callbacks.onDelegation(delegation);
+  s.clock.advance(0);
+}
+
+test("given ongoing speech, a Live delegation adjusts speed without pausing or waiting for speech end", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Could you slow the podcast down");
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.session.getSnapshot().state.interruption, undefined);
+  assert.equal(s.requests.length, 1);
+  assert.equal(s.requests[0].data.player?.positionMs, 31000);
+  assert.equal(s.requests[0].data.player?.audibleSource, "podcast");
+  remoteResult(s, 0, [{ type: "adjust_rate", direction: "slower" }]);
+  await flush();
+  assert.equal(s.audio.config.playbackRate, 0.9);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.plays, 1);
+  s.callbacks.onDelegation("duplicate-delegation");
+  s.callbacks.onSpeech(false);
+  s.clock.advance(1000);
+  assert.equal(s.requests.length, 1);
+  assert.equal(s.audio.config.playbackRate, 0.9);
+  s.session.dispose();
+});
+
+test("given unrelated speech, listening and ignore leave podcast position, volume and playback alone", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Honey, what should we have for dinner?");
+  s.clock.advance(2000);
+  assert.equal(s.audio.playing, true);
+  assert.equal(
+    s.commands.some((c) => c.startsWith("commentary:")),
+    false,
+  );
+  s.requests[0].resolve({
+    revision: s.requests[0].data.revision,
+    action: "ignore",
+    answer: "",
+    sources: [],
+    tools: [],
+  });
+  await flush();
+  s.callbacks.onSpeech(false);
+  s.clock.advance(10000);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, 31000);
+  assert.equal(s.audio.config.volume, 1);
+  assert.equal(s.session.getSnapshot().state.interruption, undefined);
+  assert.equal(
+    s.session.getSnapshot().history.some((t) => t.text.includes("dinner")),
+    false,
+  );
+  s.session.dispose();
+});
+
+test("given incomplete speech, wait remains silent and a later delta can finish the same delegation", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Could you");
+  s.requests[0].resolve({
+    revision: s.requests[0].data.revision,
+    action: "wait",
+    answer: "",
+    sources: [],
+    tools: [],
+  });
+  await flush();
+  s.callbacks.onTranscript("user", " pause the podcast?");
+  s.clock.advance(120);
+  assert.equal(s.requests.length, 2);
+  remoteResult(s, 1, [{ type: "pause" }]);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.enabled, true);
+  s.clock.advance(10000);
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
+test("given incremental correction, obsolete commands cannot apply while the newer text is being interpreted", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Turn the volume");
+  s.callbacks.onTranscript("user", " down to forty percent");
+  assert.equal(s.requests[0].signal.aborted, true);
+  remoteResult(s, 0, [{ type: "set_volume", volume: 0.8 }]);
+  await flush();
+  assert.equal(s.audio.config.volume, 1);
+  s.clock.advance(120);
+  remoteResult(s, 1, [{ type: "set_volume", volume: 0.4 }]);
+  await flush();
+  assert.equal(s.audio.config.volume, 0.4);
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("given a late repeat command, replay uses the user's original speaking position", async () => {
+  const s = setup("auto");
+  await liveInput(s, "I missed that last part");
+  s.audio.positionMs = 55000;
+  s.session.audioTick();
+  remoteResult(s, 0, [{ type: "repeat" }]);
+  await flush();
+  assert.equal(s.audio.positionMs, 20000);
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("manual settings, navigation and episode switches supersede pending remote commands", async () => {
+  for (const change of ["volume", "seek", "episode"] as const) {
+    const s = setup("auto");
+    await liveInput(s, "A little slower please");
+    if (change === "volume")
+      s.session.executePlayerCommand({ type: "set_volume", volume: 0.4 });
+    else if (change === "seek") s.session.seek(50000);
+    else s.session.load({ ...episode, id: "new" }, null);
+    assert.equal(s.requests[0].signal.aborted, true);
+    remoteResult(s, 0, [{ type: "adjust_rate", direction: "slower" }]);
+    await flush();
+    assert.equal(s.audio.config.playbackRate, 1);
+    s.session.dispose();
+  }
+});
+
+test("an accepted answer pauses at the speaking origin, while mere voice output cannot interrupt playback", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Why did he say that?");
+  s.callbacks.onOutput(true);
+  assert.equal(s.audio.playing, true);
+  s.audio.positionMs = 35000;
+  s.callbacks.onSpeech(false);
+  s.answer(0);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().state.interruption?.atMs, 31000);
+  assert.ok(s.commands.some((c) => c.startsWith("commentary:")));
+  s.session.dispose();
+});
+
+test("a combined control and question applies the control before starting the answer request", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Pause, and why did he say that?");
+  s.requests[0].resolve({
+    revision: s.requests[0].data.revision,
+    action: "player_control",
+    commandId: "mixed",
+    commands: [{ type: "pause" }],
+    followUpQuestion: "Why did he say that?",
+    answer: "",
+    sources: [],
+    tools: [],
+  });
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.requests.length, 2);
+  assert.equal(s.requests[1].data.history.at(-1)?.text, "Why did he say that?");
+  s.answer(1);
+  await flush();
+  assert.ok(s.commands.some((c) => c.startsWith("commentary:")));
+  s.session.dispose();
+});
+
+test("a new delegated clause in the same speech turn receives the already-handled prefix", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Slow the podcast down");
+  remoteResult(s, 0, [{ type: "adjust_rate", direction: "slower" }], "slow");
+  await flush();
+  s.callbacks.onTranscript(
+    "user",
+    ", and turn the volume down to forty percent",
+  );
+  s.callbacks.onDelegation("additional-volume");
+  s.clock.advance(0);
+  assert.equal(s.requests.length, 2);
+  assert.equal(s.requests[1].data.player?.handledText, "Slow the podcast down");
+  assert.equal(s.requests[1].data.player?.config.playbackRate, 0.9);
+  remoteResult(s, 1, [{ type: "set_volume", volume: 0.4 }], "volume");
+  await flush();
+  assert.equal(s.audio.config.playbackRate, 0.9);
+  assert.equal(s.audio.config.volume, 0.4);
+  s.session.dispose();
+});
+
+test("manual configuration commands restore the exact position if playback was active before recording", async () => {
+  const s = setup("manual");
+  s.session.start();
+  await s.session.beginManual();
+  s.session.endManual();
+  s.callbacks.onFirstQuestion("Turn the podcast down to forty percent");
+  assert.equal(s.requests[0].data.player?.wasPlaying, true);
+  remoteResult(s, 0, [{ type: "set_volume", volume: 0.4 }]);
+  await flush();
+  assert.equal(s.audio.config.volume, 0.4);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, 31000);
+  s.session.dispose();
+});
+
+test("a second breath preserves pending context without exposing unclassified speech in the chat", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Slow the podcast down");
+  assert.equal(s.session.getSnapshot().history.length, 0);
+  s.callbacks.onSpeech(false);
+  s.callbacks.onSpeech(true);
+  s.callbacks.onTranscript("user", "and lower the volume too");
+  assert.equal(s.session.getSnapshot().history.length, 0);
+  assert.equal(s.requests[0].signal.aborted, true);
+  s.callbacks.onDelegation("second-breath");
+  s.clock.advance(0);
+  assert.deepEqual(
+    s.requests[1].data.history.map((turn) => turn.text),
+    ["Slow the podcast down", "and lower the volume too"],
+  );
+  remoteResult(s, 1, [
+    { type: "adjust_rate", direction: "slower" },
+    { type: "set_volume", volume: 0.8 },
+  ]);
+  await flush();
+  assert.equal(s.audio.config.playbackRate, 0.9);
+  assert.equal(s.audio.config.volume, 0.8);
+  assert.equal(s.audio.playing, true);
   s.session.dispose();
 });

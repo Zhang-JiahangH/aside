@@ -3,7 +3,10 @@ import { z } from "zod";
 import { liveStartupHistory } from "@aside/engine/server";
 import type { Analysis, Turn } from "@aside/engine/core";
 import type { QuestionModel, ModelReply } from "./question-model.js";
-import { hostPerspective } from "./dialogue-policy.js";
+import {
+  hostPerspective,
+  playerInteractionInstructions,
+} from "./dialogue-policy.js";
 
 export class LiveCreationRejected extends Error {}
 
@@ -42,6 +45,7 @@ export class InteractiveProvider implements QuestionModel {
           ? request.tools.filter((tool) => tool.type !== "web_search")
           : request.tools,
         max_output_tokens: this.trial ? 600 : 1000,
+        parallel_tool_calls: false,
       },
       { signal: request.signal },
     );
@@ -113,7 +117,8 @@ export class InteractiveProvider implements QuestionModel {
           },
           instructions:
             hostPerspective +
-            "Wait silently at startup: the first question is being captured locally and the app will provide its backend answer. Do not greet or answer old history. Stay silent while podcast playback is active. Speak only when user asks. Determine spoken reply language ONLY from the latest actual user utterance or their explicit language request. English questions MUST receive spoken English answers; Chinese questions receive Chinese answers. Host style, metadata, control messages, summaries and previous assistant replies do not determine reply language. Preserve the language and concise length of backend answers instead of translating or expanding them. For simple questions use 2-3 short spoken sentences; expand only when asked or needed. No markdown, lists, greetings, repeated questions or automatic follow-up invitations. Let the app manage playback and follow-up waiting. Delegate factual questions and requests to resume playback to the backend. Remain available for follow-ups. Never interpret silence as permission to resume. If a lookup takes time give at most one brief concrete progress update. Host style: " +
+            playerInteractionInstructions +
+            "Wait silently at startup. Do not greet or answer old history. Listen during podcast playback, but do not speak over it. Ignore speech addressed to other people. Delegate addressed playback requests and substantive questions as soon as the actionable intent is clear, even while the user continues speaking. Remain silent while the app classifies or executes the request; the app controls whether playback pauses. If the app says a local recording is being handled, wait for its backend result instead of duplicating it. Determine spoken reply language ONLY from the latest actual user utterance or their explicit language request. English questions MUST receive spoken English answers; Chinese questions receive Chinese answers. Host style, metadata, control messages, summaries and previous assistant replies do not determine reply language. Preserve the language and concise length of backend answers instead of translating or expanding them. For simple questions use 2-3 short spoken sentences; expand only when asked or needed. No markdown, lists, greetings, repeated questions or automatic follow-up invitations. Let the app manage playback and follow-up waiting. Delegate factual questions and all playback requests (including rate, volume, mute, pause, seek and repeat) to the backend. Remain available for follow-ups. Never interpret silence as permission to resume. If a lookup takes time give at most one brief concrete progress update. Host style: " +
             a.hostStyle +
             " Initial playhead ms: " +
             atMs,

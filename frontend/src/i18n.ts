@@ -377,8 +377,8 @@ export const english: Record<string, string> = {
   对话记录: "Conversation",
   "不懂的概念，突然的好奇。": "An unfamiliar idea. A sudden curiosity.",
   "都可以在这里聊。": "There’s room for it here.",
-  "播放时自动监听，直接开口就能打断；暂停后停止监听。":
-    "Speak to interrupt while the audio plays. Pausing turns listening off.",
+  "语音开启时保持实时连接，可用英语控制播放或提问。":
+    "Voice mode stays connected. Speak in English to control playback or ask a question.",
   "按住下方按钮说话，松开后回答。":
     "Hold the button below to speak, then release for an answer.",
   "安心听节目，有问题也可以打字问。":

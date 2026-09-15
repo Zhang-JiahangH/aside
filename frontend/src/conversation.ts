@@ -1,10 +1,13 @@
 import {
-  explicitResume,
   type Episode,
   type PlaybackState,
   type Turn,
 } from "@aside/engine/core";
-import type { Source } from "@aside/engine/contracts";
+import type {
+  Source,
+  PlayerInput,
+  QuestionResult,
+} from "@aside/engine/contracts";
 import type { OnDemandVoice } from "./on-demand-voice";
 import type { PlayerBackend } from "./player-api";
 import { FollowupTimer } from "./followup-timer";
@@ -24,6 +27,13 @@ interface ConversationHost {
   episode(): Episode | undefined;
   voice(): ConversationVoice | undefined;
   resume(delayMs: number): void;
+  playerInput(): PlayerInput | undefined;
+  engage(): void;
+  followup(text: string, speak: boolean): void;
+  control(
+    result: Extract<QuestionResult, { action: "player_control" }>,
+    handledText: string,
+  ): void;
   textAnswered(): void;
   error(message: string): void;
   changed(): void;
@@ -32,6 +42,7 @@ interface ConversationHost {
 /** Owns a question turn from input through cancellation, answer and follow-up. */
 export class Conversation {
   private turns: Turn[] = [];
+  private provisionalTurns = new Set<string>();
   private references: Source[] = [];
   private draft = "";
   private held = false;
@@ -42,6 +53,10 @@ export class Conversation {
   private pending?: AbortController;
   private debounce?: () => void;
   private delegation?: string;
+  private settled = false;
+  private acceptedInput = true;
+  private submittedText = "";
+  private seenDelegations = new Set<string>();
   private streamIds: Partial<Record<Turn["role"], string>> = {};
   private longAnswer = false;
   private answerQueued = false;
@@ -62,10 +77,12 @@ export class Conversation {
   }
   get snapshot() {
     return {
-      history: this.turns,
+      history: this.turns.filter(
+        (turn) => !turn.id || !this.provisionalTurns.has(turn.id),
+      ),
       sources: this.references,
       question: this.draft,
-      busy: !!this.pending,
+      busy: !!this.pending && this.acceptedInput,
       resumeHeld: this.held,
       followupMs: this.waitMs,
       resumeSeconds:
@@ -81,11 +98,14 @@ export class Conversation {
   reset(history: Turn[] = []) {
     this.cancel();
     this.turns = history.slice(-100);
+    this.provisionalTurns.clear();
     this.references = [];
     this.draft = "";
     this.held = false;
     this.beganAt = null;
     this.streamIds = {};
+    this.acceptedInput = true;
+    this.seenDelegations.clear();
     this.host.changed();
   }
   cancel() {
@@ -103,12 +123,15 @@ export class Conversation {
     this.host.changed();
   }
   beginTurn(firstInterruption: boolean) {
+    this.acceptedInput = false;
     this.cancel();
     if (firstInterruption) {
       this.held = false;
       this.beganAt = this.clock.now();
     }
     this.longAnswer = false;
+    this.settled = false;
+    this.submittedText = "";
     this.streamIds = { user: crypto.randomUUID() };
   }
   continued() {
@@ -132,6 +155,9 @@ export class Conversation {
   }
   private history(turns: Turn[]) {
     this.turns = turns.slice(-100);
+    const retained = new Set(this.turns.map((turn) => turn.id));
+    for (const id of this.provisionalTurns)
+      if (!retained.has(id)) this.provisionalTurns.delete(id);
     this.host.changed();
   }
   private noteAnswer(text: string) {
@@ -139,29 +165,37 @@ export class Conversation {
       text.length > 350 || (text.match(/[\u3400-\u9fff]/g)?.length ?? 0) > 180;
   }
   private addUser(text: string) {
+    if (!this.acceptedInput && this.streamIds.user)
+      this.provisionalTurns.add(this.streamIds.user);
     this.history([
       ...this.turns,
       { id: this.streamIds.user, role: "user", text },
     ]);
   }
   submitText(text: string) {
+    this.acceptedInput = true;
     this.addUser(text);
     this.setDraft("");
     void this.answer();
   }
   firstQuestion(text: string) {
     this.addUser(text);
-    if (explicitResume(text)) this.host.resume(1500);
-    else void this.answer(undefined, true);
+    void this.answer(undefined, true);
   }
   speechEnded(connection: "cold" | "warm", coldCapture: boolean) {
     this.latency.questionEnded(connection);
     if (!coldCapture) this.scheduleQuestion(450);
   }
   transcript(role: Turn["role"], text: string) {
+    if (
+      (role === "user" && this.settled && !this.acceptedInput) ||
+      (role === "assistant" && !this.acceptedInput)
+    )
+      return;
     if (role === "user" && text.trim()) this.followup.cancel();
     const id =
       this.streamIds[role] ?? (this.streamIds[role] = crypto.randomUUID());
+    if (role === "user" && !this.acceptedInput) this.provisionalTurns.add(id);
     const turns = [...this.turns];
     const at = turns.findIndex((turn) => turn.id === id);
     if (at >= 0) turns[at] = { ...turns[at], text: turns[at].text + text };
@@ -171,24 +205,40 @@ export class Conversation {
       this.noteAnswer(turns.find((turn) => turn.id === id)!.text);
     else {
       if (this.delegation) this.pending?.abort();
-      this.scheduleQuestion(700);
+      this.scheduleQuestion(120);
     }
   }
   delegate(id: string) {
+    if (this.seenDelegations.has(id)) return;
+    if (this.settled) {
+      const latest = this.turns
+        .filter((turn) => turn.role === "user")
+        .at(-1)?.text;
+      if (!this.acceptedInput || !latest || latest === this.submittedText)
+        return;
+      this.settled = false;
+    }
+    this.seenDelegations.add(id);
+    if (this.seenDelegations.size > 100)
+      this.seenDelegations.delete(this.seenDelegations.values().next().value!);
     this.delegation = id;
     this.followup.cancel();
-    this.scheduleQuestion(350);
+    this.scheduleQuestion(0);
   }
   private scheduleQuestion(delayMs: number) {
     this.debounce?.();
     const epoch = this.epoch;
     this.debounce = this.clock.after(delayMs, () => {
-      if (epoch !== this.epoch || this.host.playback().userSpeaking) return;
+      if (epoch !== this.epoch || this.settled) return;
       const latest = this.turns
         .filter((turn) => turn.role === "user")
         .at(-1)?.text;
-      if (latest && explicitResume(latest)) this.host.resume(1500);
-      else if (this.delegation) void this.answer(this.delegation);
+      // Live delegates as soon as it has an actionable clause. Do not wait for
+      // local VAD speech-end; later transcript deltas cancel stale work.
+      if (latest?.trim() && latest !== this.submittedText && this.delegation) {
+        this.submittedText = latest;
+        void this.answer(this.delegation);
+      }
     });
   }
   outputStarted() {
@@ -242,6 +292,9 @@ export class Conversation {
     const episode = this.host.episode();
     if (!episode) return;
     this.pending?.abort();
+    this.submittedText =
+      this.turns.filter((turn) => turn.role === "user").at(-1)?.text ?? "";
+    const handledText = this.submittedText;
     const controller = (this.pending = new AbortController());
     const epoch = this.epoch,
       revision = this.host.playback().revision;
@@ -252,7 +305,13 @@ export class Conversation {
       this.host.episode()?.id === episode.id &&
       this.host.playback().revision === revision;
     const progress = new QuestionProgress((phase) => {
-      if (!valid() || !(delegationId || speak)) return;
+      // Unclassified speech must never provoke filler, pauses or audible replies.
+      if (
+        !valid() ||
+        !(delegationId || speak) ||
+        !this.host.playback().interruption
+      )
+        return;
       const latest =
         this.turns.filter((turn) => turn.role === "user").at(-1)?.text ?? "";
       this.host
@@ -283,9 +342,13 @@ export class Conversation {
       const result = await this.backend.question(
         episode.id,
         {
-          atMs: state.interruption?.atMs ?? state.positionMs,
+          atMs:
+            this.host.playerInput()?.positionMs ??
+            state.interruption?.atMs ??
+            state.positionMs,
           revision,
           history: this.turns,
+          player: this.host.playerInput(),
         },
         controller.signal,
         (phase) => progress.update(phase),
@@ -293,6 +356,54 @@ export class Conversation {
       progress.close();
       if (!valid()) return;
       if (result.revision !== revision) throw Error("回答轮次不匹配，请重试");
+      if (result.action === "wait") {
+        this.host
+          .voice()
+          ?.append(
+            "thinking",
+            "The app needs more of the utterance. Keep listening silently; no playback action was taken.",
+            delegationId ?? null,
+          );
+        return;
+      }
+      this.settled = true;
+      if (result.action === "ignore") {
+        this.history(
+          this.turns.filter((turn) => turn.id !== this.streamIds.user),
+        );
+        this.host
+          .voice()
+          ?.append(
+            "instructions",
+            "This speech was not addressed to the app. Remain silent. Do not acknowledge or ask a clarification. No playback action was taken.",
+            delegationId ?? null,
+          );
+        this.delegation = undefined;
+        return;
+      }
+      this.acceptedInput = true;
+      if (this.streamIds.user)
+        this.provisionalTurns.delete(this.streamIds.user);
+      if (result.action === "player_control") {
+        this.host.control(result, handledText);
+        this.host.voice()?.append(
+          "thinking",
+          JSON.stringify({
+            commandId: result.commandId,
+            status: "dispatched",
+            player: this.host.playerInput(),
+            note: "The app dispatched these commands. Do not repeat them or announce playback success before actual playback. No spoken confirmation is needed.",
+          }),
+          delegationId ?? null,
+        );
+        this.delegation = undefined;
+        if (result.followUpQuestion)
+          this.host.followup(
+            result.followUpQuestion,
+            !!(delegationId || speak),
+          );
+        return;
+      }
       this.references = result.sources;
       this.noteAnswer(result.answer);
       this.host.log(`tools: ${result.tools.join(", ") || "context"}`);
@@ -300,6 +411,7 @@ export class Conversation {
         this.host.resume(1500);
         return;
       }
+      this.host.engage();
       const voice = this.host.voice();
       if ((delegationId || speak) && voice) {
         this.answerQueued = true;
@@ -322,7 +434,7 @@ export class Conversation {
         this.host.error(
           `${error instanceof Error ? error.message : String(error)}。可以继续听节目，或重新尝试提问。`,
         );
-        if (delegationId || speak)
+        if ((delegationId || speak) && this.host.playback().interruption)
           this.host
             .voice()
             ?.append(

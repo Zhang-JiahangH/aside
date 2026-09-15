@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { playerCommandSchema, playerConfigSchema } from "./player.js";
 
 export const turnSchema = z.object({
   id: z.string().optional(),
@@ -8,10 +9,22 @@ export const turnSchema = z.object({
 const historySchema = z.array(turnSchema).max(100);
 const positionSchema = z.number().finite().nonnegative();
 const revisionSchema = z.number().int().nonnegative();
+export const playerInputSchema = z.object({
+  turnId: z.string().min(1).max(100),
+  source: z.enum(["text", "voice"]),
+  positionMs: positionSchema,
+  wasPlaying: z.boolean(),
+  audibleSource: z.enum(["podcast", "assistant", "none"]),
+  config: playerConfigSchema,
+  handledText: z.string().max(12000).optional(),
+});
+export type PlayerInput = z.infer<typeof playerInputSchema>;
+export const playerCommandsSchema = z.array(playerCommandSchema).min(1).max(4);
 export const questionSchema = z.object({
   atMs: positionSchema,
   revision: revisionSchema,
   history: historySchema,
+  player: playerInputSchema.optional(),
 });
 export const liveSchema = z.object({
   history: historySchema.default([]),
@@ -28,13 +41,25 @@ export const sourceSchema = z.object({
   startMs: positionSchema.optional(),
   url: z.string().url().optional(),
 });
-export const questionResultSchema = z.object({
+const answerFields = {
   revision: revisionSchema,
   answer: z.string(),
-  action: z.enum(["answer", "resume"]),
   sources: z.array(sourceSchema),
   tools: z.array(z.string()),
-});
+};
+export const questionResultSchema = z.discriminatedUnion("action", [
+  z.object({ ...answerFields, action: z.literal("answer") }),
+  z.object({ ...answerFields, action: z.literal("resume") }),
+  z.object({ ...answerFields, action: z.literal("ignore") }),
+  z.object({ ...answerFields, action: z.literal("wait") }),
+  z.object({
+    ...answerFields,
+    action: z.literal("player_control"),
+    commandId: z.string().min(1).max(240),
+    commands: playerCommandsSchema,
+    followUpQuestion: z.string().trim().min(1).max(2000).optional(),
+  }),
+]);
 export const questionPhaseSchema = z.enum([
   "working",
   "searching",
