@@ -19,8 +19,8 @@ import { MAX_UPLOAD_BYTES } from "@aside/engine/core";
 export interface SpacePage {
   episodes: Episode[];
   pending: { id: string; title: string; size: number; createdAt: string }[];
-  usedToday: number;
-  dailyLimit: number;
+  usedThisMonth: number;
+  monthlyLimit: number;
   usedStorage: number;
   storageLimit: number;
   nextCursor: string | null;

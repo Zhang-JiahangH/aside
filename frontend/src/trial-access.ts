@@ -52,7 +52,7 @@ async function verify(upload: boolean) {
     dialog.setAttribute("aria-labelledby", heading.id);
     const copy = document.createElement("p");
     copy.textContent = t(upload
-      ? "完成验证后即可上传。每个账号每天最多 5 篇，上传完成后自动分析。"
+      ? "完成验证后即可上传。每个账号每月最多 100 篇，上传完成后自动分析。"
       : "完成验证即可提问。每天 5 次提问，每次语音连接最多 2 分钟。");
     const target = document.createElement("div");
     const cancel = document.createElement("button");

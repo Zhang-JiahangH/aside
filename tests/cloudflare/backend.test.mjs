@@ -638,13 +638,27 @@ test("multipart upload validates size/ownership and completes idempotently into 
   );
   assert.equal(badPart.status, 400);
 });
-test("upload quota allows five active or completed files per account and frees cancellations", async () => {
+test("upload quota allows 100 active or completed files per account per UTC month and frees cancellations", async () => {
   const guest = await visitor();
   assert.equal(
     (await guest.request("/api/uploads", "POST", { title: "Guest", size: 44 })).status,
     401,
   );
   const a = await signedInAccount();
+  const now = new Date().toISOString();
+  const month = now.slice(0, 7);
+  // Earlier uploads this month count; they sit on another day so the site-wide daily cap stays free.
+  const earlierDay = now.slice(8, 10) === "01" ? "02" : "01";
+  const seedUploads = (count, createdAt, label) =>
+    db.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?)
+       INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at,state)
+       SELECT ?||'-'||i,?,'seeded','episodes/'||?||'-'||i||'/original','Earlier',44,?,'complete' FROM n`,
+    ).bind(count, `${label}-${a.id}`, a.id, `${label}-${a.id}`, createdAt).run();
+  await seedUploads(97, `${month}-${earlierDay}T00:00:00.000Z`, "this-month");
+  // Last month's uploads never count toward this month.
+  const lastMonth = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 2, 15));
+  await seedUploads(3, lastMonth.toISOString(), "last-month");
   const starts = await Promise.all(
     Array.from({ length: 8 }, (_, index) =>
       a.request("/api/uploads", "POST", {
@@ -653,8 +667,10 @@ test("upload quota allows five active or completed files per account and frees c
       }),
     ),
   );
-  assert.equal(starts.filter((response) => response.status === 201).length, 5);
-  assert.equal(starts.filter((response) => response.status === 429).length, 3);
+  assert.equal(starts.filter((response) => response.status === 201).length, 3);
+  const rejected = starts.filter((response) => response.status === 429);
+  assert.equal(rejected.length, 5);
+  assert.match((await rejected[0].json()).error, /每个账号每月最多上传 100 篇音频/);
   const accepted = await Promise.all(
     starts.filter((response) => response.status === 201).map((response) => response.json()),
   );
@@ -678,12 +694,14 @@ test("upload quota allows five active or completed files per account and frees c
     size: 44,
   });
   assert.equal(replacement.status, 201, await replacement.clone().text());
-  const day = new Date().toISOString().slice(0, 10);
   const quota = await db
-    .prepare("SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected')")
-    .bind(a.id, day)
+    .prepare("SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected')")
+    .bind(a.id, month)
     .first();
-  assert.equal(quota.count, 5);
+  assert.equal(quota.count, 100);
+  const page = await (await a.request("/api/space/episodes")).json();
+  assert.equal(page.usedThisMonth, 100);
+  assert.equal(page.monthlyLimit, 100);
 });
 test("parallel upload starts cannot exceed an account's storage cap", async () => {
   const a = await signedInAccount();
@@ -713,8 +731,8 @@ test("personal Space isolates accounts and deletion removes private data without
   assert.equal(listed.status, 200);
   const page = await listed.json();
   assert.ok(page.episodes.some((episode) => episode.id === id));
-  assert.equal(page.usedToday, 1);
-  assert.equal(page.dailyLimit, 5);
+  assert.equal(page.usedThisMonth, 1);
+  assert.equal(page.monthlyLimit, 100);
   const otherPage = await (await b.request("/api/space/episodes")).json();
   assert.ok(!otherPage.episodes.some((episode) => episode.id === id));
   assert.equal((await b.request(`/api/space/episodes/${id}`, "DELETE")).status, 404);
@@ -723,7 +741,7 @@ test("personal Space isolates accounts and deletion removes private data without
   assert.equal(await bucket.head(`episodes/${id}/original`), null);
   assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM checkpoints WHERE episode_id=?").bind(id).first()).count, 0);
   assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM artifacts WHERE key LIKE ?").bind(`episodes/${id}/%`).first()).count, 0);
-  assert.equal((await a.request("/api/space/episodes").then((response) => response.json())).usedToday, 1);
+  assert.equal((await a.request("/api/space/episodes").then((response) => response.json())).usedThisMonth, 1);
 });
 test("question stream, Live ownership and server-reserved quotas use network-only adapter", async () => {
   const a = await visitor(),

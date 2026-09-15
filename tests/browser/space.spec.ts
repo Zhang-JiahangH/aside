@@ -31,7 +31,7 @@ test("personal Space uploads into a private list and starts analysis automatical
     stage: string;
     progress: number;
   }[] = [];
-  let usedToday = 0;
+  let usedThisMonth = 0;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -74,9 +74,9 @@ test("personal Space uploads into a private list and starts analysis automatical
       return send({
         episodes,
         pending: [],
-        usedToday,
-        dailyLimit: 5,
-        usedStorage: usedToday * 4800,
+        usedThisMonth,
+        monthlyLimit: 100,
+        usedStorage: usedThisMonth * 4800,
         storageLimit: 20 * 1024 ** 3,
         nextCursor: null,
       });
@@ -97,7 +97,7 @@ test("personal Space uploads into a private list and starts analysis automatical
         stage: "等待分析",
         progress: 0,
       });
-      usedToday++;
+      usedThisMonth++;
       return send(episodes[0], 201);
     }
     if (path.startsWith("/api/space/episodes/") && method === "DELETE") {
@@ -116,7 +116,7 @@ test("personal Space uploads into a private list and starts analysis automatical
   await page.getByRole("button", { name: "音频库", exact: true }).click();
   await page.locator(".space-upload-options > summary").click();
   await expect(page.locator(".space-sidebar-limit")).toContainText(
-    "0 / 5 篇今日已用",
+    "0 / 100 篇本月已用",
   );
   await expect(page.locator(".space-sidebar-limit")).toContainText(
     "单个音频最长 5 小时",
@@ -143,7 +143,7 @@ test("personal Space uploads into a private list and starts analysis automatical
   await expect(page.locator(".audio-library-list")).toContainText("等待分析");
   await expect(page.getByRole("dialog", { name: "我的音频" })).toBeVisible();
   await expect(page.locator(".space-sidebar-limit")).toContainText(
-    "1 / 5 篇今日已用",
+    "1 / 100 篇本月已用",
   );
   await expect(page.getByText("你的音频，你可以加入的对话。")).toBeVisible();
   expect(
@@ -288,8 +288,8 @@ test("Space keeps the private library beside its player, transcript, and convers
                   ? [queued, episode, other]
                   : [episode, other],
                 pending: [],
-                usedToday: uploaded ? 3 : 2,
-                dailyLimit: 5,
+                usedThisMonth: uploaded ? 3 : 2,
+                monthlyLimit: 100,
                 usedStorage: 2,
                 storageLimit: 20 * 1024 ** 3,
                 nextCursor: null,
@@ -389,7 +389,7 @@ test("Space keeps the private library beside its player, transcript, and convers
     "等待分析",
   );
   await expect(sidebar.locator(".space-sidebar-limit")).toContainText(
-    "3 / 5 篇今日已用",
+    "3 / 100 篇本月已用",
   );
   await expect(page).toHaveURL(/\/space\?episode=44444444/);
   await sidebar.getByRole("button", { name: "关闭音频库" }).click();
@@ -471,8 +471,8 @@ test("loaded library pages remain visible after the automatic refresh", async ({
                     : episode("new", "New recording"),
                 ],
                 pending: [],
-                usedToday: 2,
-                dailyLimit: 5,
+                usedThisMonth: 2,
+                monthlyLimit: 100,
                 usedStorage: 2,
                 storageLimit: 20 * 1024 ** 3,
                 nextCursor: url.searchParams.has("cursor") ? null : "next",
@@ -543,8 +543,8 @@ test("library drawer retains retry, upload cancellation, and analysis progress",
             ? {
                 episodes,
                 pending,
-                usedToday: 2,
-                dailyLimit: 5,
+                usedThisMonth: 2,
+                monthlyLimit: 100,
                 usedStorage: 0,
                 storageLimit: 100000,
                 nextCursor: null,
