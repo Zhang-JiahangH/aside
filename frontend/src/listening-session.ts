@@ -9,6 +9,13 @@ import {
   type VoiceLifecycleConfig,
 } from "@aside/engine/core";
 import type { Checkpoint } from "@aside/engine/contracts";
+import {
+  createPlayerConfig,
+  clampPlayerPosition,
+  resolvePlayerCommand,
+  type PlayerConfig,
+  type PlayerCommand,
+} from "@aside/engine/player";
 import { Conversation } from "./conversation";
 import {
   createOnDemandVoice,
@@ -46,6 +53,7 @@ type VoiceFactory = (
   manual?: boolean,
 ) => VoicePort;
 interface SessionOptions {
+  playerConfig?: Partial<PlayerConfig>;
   mode?: ListeningMode;
   followupMs?: number;
   clock?: RuntimeClock;
@@ -53,6 +61,7 @@ interface SessionOptions {
 }
 /** Owns complete listening actions. React and DOM code never coordinate device order. */
 export class ListeningSession {
+  private playerConfig: PlayerConfig;
   private playback = initialPlayback();
   private episode?: Episode;
   private voice?: VoicePort;
@@ -82,6 +91,8 @@ export class ListeningSession {
     private backend: PlayerBackend,
     options: SessionOptions = {},
   ) {
+    this.playerConfig = createPlayerConfig(options.playerConfig);
+    this.audio.configure(this.playerConfig);
     this.clock = options.clock ?? systemClock;
     this.makeVoice = options.voiceFactory ?? createOnDemandVoice;
     this.mode = options.mode ?? "auto";
@@ -117,6 +128,7 @@ export class ListeningSession {
     return {
       ...this.conversation.snapshot,
       state: this.playback,
+      playerConfig: this.playerConfig,
       listeningMode: this.mode,
       configured: this.configured,
       listeningActive: this.active,
@@ -174,7 +186,10 @@ export class ListeningSession {
     this.stop();
     this.episode = episode;
     this.playback = initialPlayback(
-      checkpoint?.resumeMs ?? checkpoint?.positionMs ?? 0,
+      clampPlayerPosition(
+        checkpoint?.resumeMs ?? checkpoint?.positionMs ?? 0,
+        episode.durationMs,
+      ),
     );
     this.contextAt = -1;
     this.conversation.reset(checkpoint?.history);
@@ -209,6 +224,7 @@ export class ListeningSession {
     this.conversation.setWait(delayMs);
   }
   metadataLoaded() {
+    this.audio.configure(this.playerConfig);
     this.audio.positionMs = this.playback.positionMs;
   }
   audioTick() {
@@ -216,11 +232,60 @@ export class ListeningSession {
     this.sendContext();
   }
   setPlaybackRate(rate: number) {
-    this.audio.setRate(rate);
+    this.executePlayerCommand({ type: "set_rate", rate });
   }
   seek(atMs: number) {
+    // Transcript and timeline clicks retain their existing pause-on-seek behavior.
+    this.executePlayerCommand({ type: "seek", atMs, playback: "pause" });
+  }
+  configurePlayer(patch: Partial<PlayerConfig>) {
+    const config = createPlayerConfig(patch, this.playerConfig);
+    this.audio.configure(config);
+    this.playerConfig = config;
+    this.publish();
+  }
+  executePlayerCommand(command: PlayerCommand) {
+    const effect = resolvePlayerCommand(command, {
+      config: this.playerConfig,
+      positionMs: this.audio.positionMs,
+      durationMs: this.episode?.durationMs ?? 0,
+      anchors: this.episode?.analysis?.anchors ?? [],
+    });
+    switch (effect.type) {
+      case "configure":
+        this.configurePlayer(effect.config);
+        break;
+      case "play":
+        if (this.episode) this.start();
+        break;
+      case "pause":
+        this.movePlayback(
+          clampPlayerPosition(
+            this.audio.positionMs,
+            this.episode?.durationMs ?? 0,
+          ),
+          false,
+        );
+        break;
+      case "stop":
+        this.stop();
+        break;
+      case "seek":
+        if (this.episode)
+          this.movePlayback(
+            effect.atMs,
+            effect.playback === "play" ||
+              (effect.playback === "preserve" &&
+                (this.playback.mode === "playing" ||
+                  this.playback.mode === "resuming")),
+          );
+        break;
+    }
+  }
+  private movePlayback(atMs: number, play: boolean) {
     this.cancelWork();
     this.cancelManual();
+    this.voice?.interrupt();
     this.voice?.playbackResumed();
     this.audio.pause();
     this.voice?.mute(true);
@@ -228,6 +293,8 @@ export class ListeningSession {
     this.audio.positionMs = atMs;
     this.conversation.continued();
     this.startHeartbeat();
+    this.sendContext(true);
+    if (play) this.start();
   }
   submitQuestion(text: string) {
     if (!text.trim() || !this.episode?.analysis || !this.configured) return;

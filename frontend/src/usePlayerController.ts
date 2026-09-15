@@ -1,10 +1,12 @@
 import { requestMicrophonePermission } from "./microphone";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Episode } from "@aside/engine/core";
+import type { PlayerCommand, PlayerConfig } from "@aside/engine/player";
 import { ListeningSession, type ListeningMode } from "./listening-session";
 import { BrowserPodcastAudio } from "./podcast-audio";
 import { episodeLibrary, playerBackend } from "./player-api";
 import { prepareTrial } from "./trial-access";
+import { loadPlayerConfig, savePlayerConfig } from "./player-preferences";
 export const names = {
   paused: "已暂停",
   playing: "正在播放",
@@ -23,11 +25,16 @@ function savePreference(key: string, value: string) {
 export function usePlayerController() {
   const [runtime] = useState(() => {
     const audio = new BrowserPodcastAudio();
-    const session = new ListeningSession(audio, playerBackend);
+    const session = new ListeningSession(audio, playerBackend, {
+      playerConfig: loadPlayerConfig(),
+    });
     return { audio, session };
   });
   const { session, audio } = runtime;
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  useEffect(() => {
+    savePlayerConfig(snapshot.playerConfig);
+  }, [snapshot.playerConfig]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [episodesLoading, setEpisodesLoading] = useState(true);
   const [episode, setEpisode] = useState<Episode>();
@@ -130,15 +137,19 @@ export function usePlayerController() {
     audio: audio.attach,
     metadataLoaded: () => session.metadataLoaded(),
     audioTick: () => session.audioTick(),
+    configurePlayer: (config: Partial<PlayerConfig>) =>
+      session.configurePlayer(config),
+    executePlayerCommand: (command: PlayerCommand) =>
+      session.executePlayerCommand(command),
     setPlaybackRate: (rate: number) => session.setPlaybackRate(rate),
     seek: (atMs: number) => session.seek(atMs),
     submitQuestion: () =>
       session.submitQuestion(session.getSnapshot().question),
     setQuestion: (text: string) => session.setQuestion(text),
     setError: (error: string) => session.setError(error),
-    startListening: () => session.start(),
-    stopListening: () => session.stop(),
-    requestResume: () => session.start(),
+    startListening: () => session.executePlayerCommand({ type: "play" }),
+    stopListening: () => session.executePlayerCommand({ type: "stop" }),
+    requestResume: () => session.executePlayerCommand({ type: "play" }),
     beginManual: () => session.beginManual(),
     endManual: () => session.endManual(),
     holdResume: () => session.holdResume(),

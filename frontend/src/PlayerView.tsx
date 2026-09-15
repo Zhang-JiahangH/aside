@@ -72,6 +72,8 @@ export function PlayerView({
     metadataLoaded,
     audioTick,
     setPlaybackRate,
+    playerConfig,
+    executePlayerCommand,
     setError,
     setDebug,
     setQuestion,
@@ -90,7 +92,10 @@ export function PlayerView({
   const [brokenCover, setBrokenCover] = useState("");
   const showCover = !!episode?.cover && brokenCover !== episode.id;
   const panelId = useId();
-  const waveHeights = useMemo(() => waveShape(episode?.id ?? ""), [episode?.id]);
+  const waveHeights = useMemo(
+    () => waveShape(episode?.id ?? ""),
+    [episode?.id],
+  );
   const [mobileTab, setMobileTab] = useState<"transcript" | "chat" | null>(
     "transcript",
   );
@@ -757,7 +762,67 @@ export function PlayerView({
             )}
           </div>
         </div>
-        <SpeedSelect onChange={setPlaybackRate} />
+        <SpeedSelect config={playerConfig} onChange={setPlaybackRate} />
+        <div className="dock-volume" role="group" aria-label={t("音量控制")}>
+          <button
+            type="button"
+            className="volume-toggle btn btn-quiet btn-icon"
+            aria-label={t("静音")}
+            aria-pressed={playerConfig.muted}
+            title={playerConfig.muted ? t("取消静音") : t("静音")}
+            onClick={() =>
+              executePlayerCommand({
+                type: "set_muted",
+                muted: !playerConfig.muted,
+              })
+            }
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="19"
+              height="19"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+              {playerConfig.muted ? (
+                <path d="m16 9 6 6m0-6-6 6" />
+              ) : playerConfig.volume > 0 ? (
+                <>
+                  <path d="M15 9a5 5 0 0 1 0 6" />
+                  {playerConfig.volume > 0.5 && (
+                    <path d="M18 5a10 10 0 0 1 0 14" />
+                  )}
+                </>
+              ) : null}
+            </svg>
+          </button>
+          <input
+            type="range"
+            className="volume-slider"
+            aria-label={t("播客音量")}
+            aria-valuetext={`${Math.round(playerConfig.volume * 100)}%${playerConfig.muted ? ` · ${t("已静音")}` : ""}`}
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(playerConfig.volume * 100)}
+            onChange={(e) =>
+              executePlayerCommand({
+                type: "set_volume",
+                volume: Number(e.target.value) / 100,
+              })
+            }
+          />
+          <span className="volume-value" aria-hidden="true">
+            {playerConfig.muted
+              ? t("已静音")
+              : `${Math.round(playerConfig.volume * 100)}%`}
+          </span>
+        </div>
       </div>
       <button
         className="debug-toggle"
