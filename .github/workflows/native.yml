@@ -71,7 +71,7 @@ jobs:
       # the backed-up local key or the persistent EAS project credentials.
       - run: npm run build:apk:local -w @aside/mobile
         env:
-          APP_VARIANT: local
+          APP_VARIANT: production
           ASIDE_ANDROID_ARCHITECTURES: arm64-v8a
       - uses: actions/upload-artifact@v4
         with:

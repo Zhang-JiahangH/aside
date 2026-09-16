@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, access } from "node:fs/promises";
+import { mkdir, readFile, writeFile, access, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -50,6 +50,17 @@ try {
   ]);
 }
 run("npx", ["expo", "prebuild", "--platform", "android", "--no-install"]);
+// React Native keys this cache on package.json, which does not change when
+// APP_VARIANT switches application IDs. Regenerate only the derived linking
+// outputs so a production build cannot reference com.asidefm.app.dev.
+await rm(resolve(root, "android/build/generated/autolinking"), {
+  recursive: true,
+  force: true,
+});
+await rm(resolve(root, "android/app/build/generated/autolinking"), {
+  recursive: true,
+  force: true,
+});
 run(
   "./gradlew",
   [

@@ -29,6 +29,10 @@ After Apple Developer membership is approved:
 4. `npm run submit:testflight -w @aside/mobile` selects and uploads a build to the App Store Connect app. Configure the Apple team, ASC app ID and upload credentials through EAS; do not commit them.
 5. Maintain tester groups in App Store Connect. External testers require TestFlight beta review; builds expire after 90 days.
 
+To export an IPA file directly on a Mac, use `npm run build:ipa:internal -w @aside/mobile` for `mobile/Aside-internal.ipa`, or `npm run build:ipa:testflight -w @aside/mobile` for `mobile/Aside-testflight.ipa`. These use the same EAS signing profiles with local compilation and an explicit output file; they never submit automatically. The Ad Hoc IPA installs on registered devices. The TestFlight IPA goes through the separate submission command. Both require the approved Apple team, provisioning credentials and configured EAS project; a simulator `.app` cannot be repackaged into an installable device IPA. Personal Team installation uses the separate `ios:device` command while membership is pending. See [Apple's device-distribution guide](https://developer.apple.com/documentation/xcode/distributing-your-app-to-registered-devices).
+
+Android's local build command defaults to the production package `com.asidefm.app`, the online API and the persistent signing key. `APP_VARIANT=local` explicitly selects the separate development package. The build script regenerates native linking outputs when switching variants; it retains signing credentials and dependency build caches.
+
 EAS uses remote incrementing build numbers. Local builds use `BUILD_NUMBER`, default 1. No OTA JavaScript update channel is enabled. Builds from a different signing team or bundle identifier do not promise credential or local-storage migration; users sign in to recover server-side audio and checkpoints.
 
 ## Backend deployment and compatibility
