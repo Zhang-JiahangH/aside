@@ -236,11 +236,21 @@ export class LiveSupervisor extends DurableObject<Env> {
     );
     try {
       if (!state.session) {
-        if (state.closing || Date.now() >= state.deadline) {
-          await this.breaker(state);
-          // No session id exists to reconnect to; keep the breaker for operator reconciliation.
-          await this.ctx.storage.deleteAlarm();
-        }
+        if (!state.closing && Date.now() < state.deadline) return;
+        await this.breaker(state);
+        // A creation whose outcome is unknown has no session id to reconnect
+        // to, so nothing can ever confirm the close. The lease stays as the
+        // trace and the per-owner block, but the global pause must not.
+        if (Date.now() <= state.deadline + closeGraceMs) return;
+        console.error(
+          "Aside voice creation unconfirmed; releasing the global breaker",
+          { owner: state.owner, token: state.token },
+        );
+        await this.env.DB.prepare("DELETE FROM trial_breakers WHERE owner=?")
+          .bind(state.owner)
+          .run();
+        await this.ctx.storage.delete("state");
+        await this.ctx.storage.deleteAlarm();
         return;
       }
       await this.attach(state);

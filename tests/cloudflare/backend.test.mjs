@@ -21,6 +21,7 @@ let networkCalls = [];
 let acknowledgeClose = true;
 let attachGone = false;
 let attachBroken = false;
+let createUnknown = false;
 let rejectLive = false;
 let googleIdentity = {
   sub: "google-sub-1",
@@ -142,6 +143,9 @@ before(async () => {
               },
             ],
           });
+        // An ambiguous supplier failure: the session may or may not exist.
+        if (request.url.endsWith("/live/sessions") && createUnknown)
+          return new Response("upstream error", { status: 500 });
         if (request.url.endsWith("/live/sessions")) {
           if (rejectLive) return new Response("Invalid SDP", { status: 400 });
           return Response.json({
@@ -1625,6 +1629,41 @@ test("a session that cannot be confirmed within the grace window is released", a
   } finally {
     attachBroken = false;
   }
+});
+test("an unconfirmed creation stops pausing everyone after the grace window", async () => {
+  const a = await visitor();
+  createUnknown = true;
+  try {
+    const created = await a.request("/api/episodes/public/live", "POST", {
+      sdp: "offer",
+      atMs: 0,
+    });
+    assert.ok(created.status >= 400, "the ambiguous failure reaches the caller");
+  } finally {
+    createUnknown = false;
+  }
+  const bindings = await mf.getBindings(),
+    supervisor = bindings.LIVE.get(bindings.LIVE.idFromName(a.id));
+  await supervisor.expireAt(Date.now() - 60 * 60 * 1000);
+  // No session id means no close can ever be confirmed, so the global pause
+  // has to end on its own.
+  assert.ok(
+    !(await db
+      .prepare("SELECT owner FROM trial_breakers WHERE owner=?")
+      .bind(a.id)
+      .first()),
+    "the breaker must not outlive the grace window",
+  );
+  // The lease is the durable trace and keeps this visitor from opening a
+  // second session while the first one's fate is unknown.
+  assert.ok(
+    await db
+      .prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'")
+      .bind(a.id)
+      .first(),
+    "the unconfirmed lease stays for an operator",
+  );
+  assert.equal((await (await a.request("/api/trial")).json()).enabled, true);
 });
 test("oversized history and malformed/long WAV are rejected before any model call", async () => {
   const { validateWav } = await import("../../cloudflare/src/trial.ts");
