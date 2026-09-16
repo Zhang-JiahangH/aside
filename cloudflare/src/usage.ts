@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { QuestionTelemetry } from "../../backend/src/question-service.js";
 import type { Env } from "./env.js";
 import { HttpError, json } from "./http.js";
+import { readDailyStats } from "./stats.js";
 
 /** Rows older than this are dropped by the scheduled cleanup. */
 export const RETENTION_DAYS = 90;
@@ -118,6 +119,7 @@ export async function adminUsageRoute(request: Request, env: Env) {
     generatedAt: new Date().toISOString(),
     days,
     retentionDays: RETENTION_DAYS,
+    daily: await readDailyStats(env, days),
     totals: totals.results[0],
     byDay: byDay.results,
     byTier: byTier.results,

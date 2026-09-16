@@ -108,4 +108,32 @@ console.log("\nBy day");
 console.log(table(data.byDay, "day"));
 console.log("\nTop owners by output tokens");
 console.log(table(data.topOwners, "owner"));
+
+// Daily snapshots outlive the trial counters they are taken from, so they are
+// the only record of how many people tried the site on a given day.
+const daily = data.daily ?? [];
+if (daily.length) {
+  const days = [...new Set(daily.map((r) => r.day))].sort().reverse();
+  const metrics = [...new Set(daily.map((r) => r.metric))].sort();
+  const at = new Map(daily.map((r) => [`${r.day}|${r.metric}`, r.value]));
+  const head = ["day", ...metrics];
+  const body = days.map((day) => [
+    day,
+    ...metrics.map((m) => {
+      const v = at.get(`${day}|${m}`);
+      return v === undefined ? "-" : n(v);
+    }),
+  ]);
+  const width = head.map((_, i) =>
+    Math.max(head[i].length, ...body.map((r) => r[i].length)),
+  );
+  const line = (cells) =>
+    "  " + cells.map((c, i) => c.padEnd(width[i])).join("  ");
+  console.log("\nDaily snapshots  (trial_* are per-day activity; *_total are gauges)");
+  console.log(
+    [line(head), line(width.map((w) => "-".repeat(w))), ...body.map(line)].join(
+      "\n",
+    ),
+  );
+}
 console.log();
