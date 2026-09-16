@@ -139,7 +139,7 @@ npm run db:cloudflare:production
 
 `npm run check`、69 项项目测试和 2 项语言浏览器用例通过，生产构建产物包含四个静态文件。生产 Worker `89f194eb-bed9-46c3-bb39-3bfbe60f8b46` 已接收 100% 流量（`--containers-rollout=none`，保留现有 Container）。正式域名 `/`、`/robots.txt`、`/sitemap.xml`、`/llms.txt`、`/og-image.png` 均 HTTP 200，MIME 依次为 `text/html`、`text/plain`、`application/xml`、`text/plain`、`image/png`；`/api/health` 200 且 `uploadsEnabled=true`。浏览器实测中英文 title/robots/canonical 以及 `/space` 的 noindex 均生效。`/space` 的 noindex 仍由客户端注入，不执行 JS 的爬虫看不到，后续可改由 Worker 返回 `X-Robots-Tag`。
 
-2026-09-15（第二轮，实现与本地验证）：上一轮的客户端注入对不执行 JS 的爬虫无效，且整站正文、公共音频都只存在于 JS 里，六条样例没有可索引的独立 URL。本轮把 SEO 表层移到 Worker：
+2026-09-15（第二轮，实现与本地验证；2026-09-16 随 `0a32719` 发布）：上一轮的客户端注入对不执行 JS 的爬虫无效，且整站正文、公共音频都只存在于 JS 里，六条样例没有可索引的独立 URL。本轮把 SEO 表层移到 Worker：
 
 - `cloudflare/src/seo.ts` 接管 HTML 路由：`/`（英文）、`/zh`（中文）、`/episodes/<id>`、`/space`、`/sitemap.xml`，`/en` 301 到 `/`。`http://asidefm.com/...` 301 到 https（只对正式域名生效，本地 http 开发不受影响）。
 - `cloudflare/src/seo-html.ts` 是纯字符串构建层（head 片段、JSON-LD、sitemap、爬虫可见正文），不含 D1 依赖，便于在根 TypeScript 程序里类型检查。
@@ -351,3 +351,20 @@ node scripts/admin-usage.mjs --days 30 --json
 仍然没有边界的一处（未改动，符合现有文档）：`startSession()` 创建结果不明、`state` 里没有 session id 时，`tick()` 会写熔断并 `deleteAlarm()`，之后没有任何代码会清除它，只能人工核对。本次事故的 DO 也呈现「alarm 已停」的特征（`wrangler tail` 30 秒内没有 alarm 事件）。若要彻底消除全站停摆，需要让这条路径同样具备人工可见的告警或超时释放。
 
 未验证：没有用真实麦克风走完一次语音会话（需要 Turnstile 与真机），因此「修复后访客能正常开语音」只由 `enabled:true` 与租约/熔断清零推断。
+
+
+## SEO 第二轮与语音熔断的第三次修复：发布与线上验收（2026-09-16）
+
+发布内容：`0a32719`（SEO 第二轮 + 文案重复修复）与 `488b6c8`（「创建结果不明」的全局熔断同样有界）。Worker `9d32021f-ef3a-4034-9bc5-008a83ff9a8d`，`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container），上传 6 个新文件（含新的前端 bundle 与四个静态 SEO 文件）。`main` 已同步 origin。
+
+线上验收 14 项全部通过（curl，正式域名）：
+
+- `/` 返回注入后的 HTML：`<link rel="canonical" href="https://asidefm.com/" />`，并含 6 条英文录音的 `<a href="/episodes/...">`。
+- `/zh` 返回 `<html lang="zh-CN">` 与 `hreflang="zh"`，列出 8 条录音；`阿Q正传` 只出现在中文页，英文页为 0——与 `languageVisibility` 的过滤一致。
+- `/sitemap.xml` 含 `https://asidefm.com/episodes/<id>`；节目页返回 `"@type":"PodcastEpisode"` 且 canonical 自指。
+- `/episodes/does-not-exist` 与 `/no-such-page` 均 404（软 404 已消除）；`/space` 带 `X-Robots-Tag: noindex, nofollow`。
+- `/robots.txt`、静态资源 200；`http://asidefm.com/` 301 到 https；`/api/trial` 返回 `enabled:true`。
+
+未验证：仍未用真实麦克风走完一次语音会话（需要 Turnstile 与真机），因此「访客能正常开语音」只由 `enabled:true`、熔断与租约清零推断。
+
+至此 `trial_breakers` 的三条写入路径都有界：供应商 404（`74e9045`）、attach 无法确认（`dd2ce2c`，deadline 后 15 分钟）、创建结果不明（`488b6c8`，同样 15 分钟且保留租约作为痕迹）。三条都会 `console.error` 记录原因。
