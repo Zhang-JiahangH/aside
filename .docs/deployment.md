@@ -355,7 +355,7 @@ node scripts/admin-usage.mjs --days 30 --json
 
 ## SEO 第二轮与语音熔断的第三次修复：发布与线上验收（2026-09-16）
 
-发布内容：`0a32719`（SEO 第二轮 + 文案重复修复）与 `488b6c8`（「创建结果不明」的全局熔断同样有界）。Worker `9d32021f-ef3a-4034-9bc5-008a83ff9a8d`，`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container），上传 6 个新文件（含新的前端 bundle 与四个静态 SEO 文件）。`main` 已同步 origin。
+发布内容：`0a32719`（SEO 第二轮 + 文案重复修复）与 `488b6c8`（「创建结果不明」的全局熔断同样有界）。Worker `9d32021f-ef3a-4034-9bc5-008a83ff9a8d`（随后 `722394b` 只把释放日志里的租约 token 换成 owner，发布为 `45684f2d-4d18-487f-b3a5-a71ac750e2c8`），`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container），上传 6 个新文件（含新的前端 bundle 与四个静态 SEO 文件）。`main` 已同步 origin。
 
 线上验收 14 项全部通过（curl，正式域名）：
 
