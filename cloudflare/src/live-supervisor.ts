@@ -242,9 +242,11 @@ export class LiveSupervisor extends DurableObject<Env> {
         // to, so nothing can ever confirm the close. The lease stays as the
         // trace and the per-owner block, but the global pause must not.
         if (Date.now() <= state.deadline + closeGraceMs) return;
+        // The lease token is a credential: the log carries the owner only,
+        // which is enough to find the lease it left behind.
         console.error(
           "Aside voice creation unconfirmed; releasing the global breaker",
-          { owner: state.owner, token: state.token },
+          { owner: state.owner },
         );
         await this.env.DB.prepare("DELETE FROM trial_breakers WHERE owner=?")
           .bind(state.owner)
