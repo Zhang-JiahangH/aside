@@ -1479,11 +1479,11 @@ progress {
   position: relative;
   isolation: isolate;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 1.5fr) auto;
-  grid-template-areas: "title transport speed" "title transport volume";
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 1.5fr) auto auto;
+  grid-template-areas: "title transport speed volume";
   align-items: center;
   gap: 4px 24px;
-  min-height: 108px;
+  min-height: 96px;
   padding: 16px 60px;
 }
 .player-dock::before {
@@ -1612,7 +1612,7 @@ progress {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 /* Desktop: play sits beside the waveform on one line; narrow layouts regroup via grid areas. */
@@ -1631,11 +1631,11 @@ progress {
 }
 .dock-progress {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
   align-items: center;
   gap: 10px;
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .dock-progress span:last-child {
@@ -1803,8 +1803,8 @@ progress {
   cursor: pointer;
 }
 .volume-value {
-  min-width: 38px;
-  font-size: 10px;
+  min-width: 42px;
+  font-size: 12px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -1831,7 +1831,11 @@ progress {
   display: grid;
   place-items: center;
   color: var(--on-primary);
-  background: linear-gradient(180deg, var(--primary-top), var(--primary-bottom));
+  background: linear-gradient(
+    180deg,
+    var(--primary-top),
+    var(--primary-bottom)
+  );
   box-shadow:
     inset 0 1px 0 #ffffff38,
     0 0 0 1px var(--primary-ring),
@@ -1864,7 +1868,11 @@ progress {
   margin-left: 1px;
 }
 .transcript-jump:hover {
-  background: linear-gradient(180deg, var(--primary-top), var(--primary-bottom));
+  background: linear-gradient(
+    180deg,
+    var(--primary-top),
+    var(--primary-bottom)
+  );
   filter: brightness(1.08);
 }
 .transcript-jump:focus-visible {
@@ -1999,8 +2007,12 @@ progress {
   .player-dock > .speed-select {
     grid-area: speed;
   }
-  .dock-volume { justify-self: center; }
-  .volume-slider { width: 110px; }
+  .dock-volume {
+    justify-self: center;
+  }
+  .volume-slider {
+    width: 110px;
+  }
 }
 @media (max-width: 700px) {
   .space-page.shell .player-main .player-dock {
@@ -2031,7 +2043,7 @@ progress {
     height: 40px;
   }
   .dock-progress {
-    grid-template-columns: 36px minmax(0, 1fr) 36px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
   }
 }
 
@@ -2160,8 +2172,12 @@ progress {
   }
 }
 
-.mobile-panel-toggle { display: none; }
-.mobile-panel-body { display: contents; }
+.mobile-panel-toggle {
+  display: none;
+}
+.mobile-panel-body {
+  display: contents;
+}
 @media (max-width: 650px) {
   .shell .player-main .lower {
     display: flex;
@@ -2181,7 +2197,9 @@ progress {
     border: 0;
     border-bottom: 1px solid var(--line);
   }
-  .shell .player-main .lower > [data-active] { flex: 1; }
+  .shell .player-main .lower > [data-active] {
+    flex: 1;
+  }
   .shell .player-main .mobile-panel-toggle {
     display: flex;
     align-items: center;
@@ -2196,10 +2214,19 @@ progress {
     font-size: 14px;
     color: var(--ink-2);
   }
-  .mobile-panel-toggle > span:last-child { font-size: 20px; transition: transform 180ms ease; }
-  .mobile-panel-toggle[aria-expanded="true"] { color: var(--ink); }
-  .mobile-panel-toggle[aria-expanded="true"] > span:last-child { transform: rotate(180deg); }
-  .shell .player-main .mobile-panel-body { display: none; }
+  .mobile-panel-toggle > span:last-child {
+    font-size: 20px;
+    transition: transform 180ms ease;
+  }
+  .mobile-panel-toggle[aria-expanded="true"] {
+    color: var(--ink);
+  }
+  .mobile-panel-toggle[aria-expanded="true"] > span:last-child {
+    transform: rotate(180deg);
+  }
+  .shell .player-main .mobile-panel-body {
+    display: none;
+  }
   .shell .player-main [data-active] > .mobile-panel-body {
     display: flex;
     flex-direction: column;
@@ -2207,10 +2234,21 @@ progress {
     min-height: 0;
     padding-bottom: 12px;
   }
-  .shell .player-main .mobile-panel-body .panel-heading h2 { display: none; }
-  .shell .player-main .mobile-panel-body :is(.transcript-lyrics, .messages) { min-height: 100px; }
-  .shell .player-main.listening-layout .mobile-panel-body :is(.transcript-lyrics, .messages) { min-height: 0; }
+  .shell .player-main .mobile-panel-body .panel-heading h2 {
+    display: none;
+  }
+  .shell .player-main .mobile-panel-body :is(.transcript-lyrics, .messages) {
+    min-height: 100px;
+  }
+  .shell
+    .player-main.listening-layout
+    .mobile-panel-body
+    :is(.transcript-lyrics, .messages) {
+    min-height: 0;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .mobile-panel-toggle > span:last-child { transition: none; }
+  .mobile-panel-toggle > span:last-child {
+    transition: none;
+  }
 }

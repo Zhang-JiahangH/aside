@@ -1,0 +1,35 @@
+Running on emulator-5554
+ > Flow login-recovery
+Launch app "com.asidefm.app.dev"... COMPLETED
+Tap on id: tab-account... COMPLETED
+Tap on id: locale-en... COMPLETED
+Run flow when id: sign-out is visible...
+Run flow when id: sign-out is visible... SKIPPED
+Assert that id: email is visible... COMPLETED
+Assert that id: test-environment is visible... COMPLETED
+Tap on id: email... COMPLETED
+Input text invalid-email... COMPLETED
+Assert that id: send-code, disabled is visible... COMPLETED
+Erase text... COMPLETED
+Input text ${EMAIL}... COMPLETED
+Take screenshot login-email... COMPLETED
+Tap on id: send-code... COMPLETED
+Assert that id: code is visible... COMPLETED
+Assert that id: send-code, disabled is visible... COMPLETED
+Take screenshot login-code... COMPLETED
+Tap on id: code... COMPLETED
+Input text 00000000... COMPLETED
+Tap on id: sign-in... COMPLETED
+Assert that "The code is incorrect or expired.*" is visible... COMPLETED
+Tap on id: code... COMPLETED
+Erase text... COMPLETED
+Input text 12345678... COMPLETED
+Tap on id: sign-in... COMPLETED
+Assert that id: private-library is visible... COMPLETED
+Tap on id: tab-account... COMPLETED
+Assert that "${EMAIL}" is visible... COMPLETED
+Take screenshot login-account... COMPLETED
+Stop com.asidefm.app.dev... COMPLETED
+Launch app "com.asidefm.app.dev"... COMPLETED
+Tap on id: tab-account... COMPLETED
+Assert that "${EMAIL}" is visible... COMPLETED

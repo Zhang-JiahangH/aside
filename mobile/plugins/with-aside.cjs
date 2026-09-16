@@ -32,6 +32,21 @@ module.exports = function (config) {
         '$1signingConfig System.getenv("ASIDE_ANDROID_KEYSTORE") ? signingConfigs.asideInternal : signingConfigs.debug',
       );
     }
+    const sharedInputs = "// Aside shared workspace bundle inputs";
+    if (!source.includes(sharedInputs)) {
+      source += `
+${sharedInputs}
+tasks.withType(com.facebook.react.tasks.BundleHermesCTask).configureEach {
+    inputs.files(fileTree(dir: new File(projectRoot, '../engine/src'), includes: ['**/*.ts']))
+    inputs.files(fileTree(dir: new File(projectRoot, '../player-runtime/src'), includes: ['**/*.ts']))
+    inputs.file(new File(projectRoot, '../engine/package.json'))
+    inputs.file(new File(projectRoot, '../player-runtime/package.json'))
+    inputs.property('asideApiUrl', System.getenv('EXPO_PUBLIC_API_URL') ?: 'https://asidefm.com')
+    inputs.property('asideTestApi', System.getenv('ASIDE_TEST_API') ?: '0')
+    inputs.property('asideAppVariant', System.getenv('APP_VARIANT') ?: 'local')
+}
+`;
+    }
     config.modResults.contents = source;
     return config;
   });

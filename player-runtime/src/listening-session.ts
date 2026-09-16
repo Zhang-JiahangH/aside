@@ -8,7 +8,12 @@ import {
   type MicrophoneConfig,
   type VoiceLifecycleConfig,
 } from "@aside/engine/core";
-import type { Checkpoint } from "@aside/engine/contracts";
+import {
+  playerCommandsSchema,
+  type Checkpoint,
+  type PlayerInput,
+  type QuestionResult,
+} from "@aside/engine/contracts";
 import {
   createPlayerConfig,
   clampPlayerPosition,
@@ -38,6 +43,10 @@ export interface SessionOptions {
 /** Owns complete listening actions. React and DOM code never coordinate device order. */
 export class ListeningSession {
   private playerConfig: PlayerConfig;
+  private input?: PlayerInput;
+  private inputSpeaking = false;
+  private liveInputBeforeVad = false;
+  private appliedCommands = new Set<string>();
   private playback = initialPlayback();
   private episode?: Episode;
   private voice?: VoicePort;
@@ -80,6 +89,11 @@ export class ListeningSession {
         episode: () => this.episode,
         voice: () => this.voice,
         resume: (delay) => this.requestResume(delay),
+        playerInput: () =>
+          this.input ? { ...this.input, config: this.playerConfig } : undefined,
+        engage: () => this.engageInput(),
+        followup: (text, speak) => this.submitQuestion(text, speak),
+        control: (result, text) => this.applyRemoteControl(result, text),
         textAnswered: () => this.answerEnded(),
         error: (message) => this.setError(message),
         changed: () => this.publish(),
@@ -174,6 +188,8 @@ export class ListeningSession {
       );
       this.contextAt = -1;
       this.conversation.reset(checkpoint?.history);
+      this.appliedCommands.clear();
+      this.input = undefined;
       this.error = "";
     } finally {
       this.changingEpisode = false;
@@ -234,9 +250,22 @@ export class ListeningSession {
     this.publish();
   }
   executePlayerCommand(command: PlayerCommand) {
-    const effect = resolvePlayerCommand(command, {
+    // Validate before invalidating a pending input. Manual controls supersede
+    // remote operations even when they only change volume or rate.
+    resolvePlayerCommand(command, {
       config: this.playerConfig,
       positionMs: this.audio.positionMs,
+      durationMs: this.episode?.durationMs ?? 0,
+      anchors: this.episode?.analysis?.anchors ?? [],
+    });
+    this.cancelWork();
+    this.input = undefined;
+    this.applyPlayerCommand(command);
+  }
+  private applyPlayerCommand(command: PlayerCommand, referenceMs?: number) {
+    const effect = resolvePlayerCommand(command, {
+      config: this.playerConfig,
+      positionMs: referenceMs ?? this.audio.positionMs,
       durationMs: this.episode?.durationMs ?? 0,
       anchors: this.episode?.analysis?.anchors ?? [],
     });
@@ -271,6 +300,76 @@ export class ListeningSession {
         break;
     }
   }
+  private applyRemoteControl(
+    result: Extract<QuestionResult, { action: "player_control" }>,
+    handledText: string,
+  ) {
+    if (this.appliedCommands.has(result.commandId)) return;
+    const commands = playerCommandsSchema.parse(result.commands);
+    const input = this.input;
+    // Validate the complete batch before applying any operation.
+    for (const command of commands)
+      resolvePlayerCommand(command, {
+        config: this.playerConfig,
+        positionMs: input?.positionMs ?? this.audio.positionMs,
+        durationMs: this.episode?.durationMs ?? 0,
+        anchors: this.episode?.analysis?.anchors ?? [],
+      });
+    if (input) input.handledText = handledText;
+    this.appliedCommands.add(result.commandId);
+    if (this.appliedCommands.size > 100)
+      this.appliedCommands.delete(this.appliedCommands.values().next().value!);
+    const configurationOnly = commands.every((c) =>
+      ["set_rate", "adjust_rate", "set_volume", "set_muted"].includes(c.type),
+    );
+    for (const command of commands)
+      this.applyPlayerCommand(
+        command,
+        command.type === "repeat" ? input?.positionMs : undefined,
+      );
+    // A typed/manual input may already have paused playback. Restore its exact
+    // position after configuration, without rewinding to a conversation anchor.
+    if (configurationOnly && input?.wasPlaying && this.playback.interruption)
+      this.movePlayback(this.audio.positionMs, true);
+    else if (configurationOnly && this.playback.interruption)
+      this.conversation.hold();
+    this.sendContext(true);
+  }
+  private beginInput(source: "text" | "voice") {
+    this.liveInputBeforeVad = false;
+    this.input = {
+      turnId: crypto.randomUUID(),
+      source,
+      positionMs: this.audio.positionMs,
+      wasPlaying:
+        this.playback.mode === "playing" || this.playback.mode === "resuming",
+      audibleSource:
+        this.playback.mode === "playing"
+          ? "podcast"
+          : this.playback.assistantSpeaking
+            ? "assistant"
+            : "none",
+      config: this.playerConfig,
+    };
+  }
+  private engageInput() {
+    if (!this.episode?.analysis) return;
+    const atMs = this.input?.positionMs ?? this.audio.positionMs;
+    this.audio.pause();
+    // Do not begin a new Conversation turn: this is the accepted result of the
+    // input already in flight. Keep its delegation and cancellation identity.
+    if (!this.playback.interruption || this.playback.mode !== "listening") {
+      this.dispatch({
+        type: "interrupt",
+        atMs,
+        anchor: resumeAnchor(this.episode.analysis.anchors, atMs),
+      });
+    }
+    if (!this.inputSpeaking) this.dispatch({ type: "user_end" });
+    this.voice?.mute(false);
+    this.startHeartbeat();
+    this.sendContext(true);
+  }
   private movePlayback(atMs: number, play: boolean) {
     this.cancelWork();
     this.cancelManual();
@@ -286,12 +385,14 @@ export class ListeningSession {
     this.sendContext(true);
     if (play) this.start();
   }
-  submitQuestion(text: string) {
+  submitQuestion(text: string, speak = false) {
     if (!text.trim() || !this.episode?.analysis || !this.configured) return;
     this.cancelManual();
+    this.beginInput("text");
     this.interrupt();
     this.dispatch({ type: "user_end" });
-    this.conversation.submitText(text.trim());
+    if (speak) this.conversation.firstQuestion(text.trim());
+    else this.conversation.submitText(text.trim());
   }
   private cancelWork() {
     this.resumeTimer?.();
@@ -365,6 +466,7 @@ export class ListeningSession {
   stop() {
     this.active = false;
     this.cancelWork();
+    this.input = undefined;
     this.closeVoice();
     this.audio.pause();
     this.answerEnded();
@@ -469,6 +571,7 @@ export class ListeningSession {
       return;
     this.manualHeld = true;
     const version = ++this.manualVersion;
+    this.beginInput("voice");
     this.cancelWork();
     this.dispatch({ type: "pause" });
     this.voice?.mute(true);
@@ -534,7 +637,18 @@ export class ListeningSession {
       episodeId = this.episode.id;
     const valid = () => this.voiceGeneration === generation;
     const acceptsInput = () =>
-      valid() && !!this.playback.interruption && !this.playback.resumeRequested;
+      valid() && !!this.input && !this.playback.resumeRequested;
+    const acceptLiveInput = () => {
+      if (!valid() || this.playback.resumeRequested) return false;
+      // Native Live recognition is independent of the local speech detector.
+      // Short/quiet utterances and delegation may arrive before local onset.
+      if (!this.input && this.mode === "auto" && voice.isWarm) {
+        this.beginInput("voice");
+        this.conversation.beginTurn(!this.playback.interruption);
+        this.liveInputBeforeVad = true;
+      }
+      return !!this.input;
+    };
     const usage = (
       seconds: number,
       sessionId: string,
@@ -571,21 +685,43 @@ export class ListeningSession {
         },
         onSpeech: (active) => {
           if (!valid()) return;
+          this.inputSpeaking = active;
+          this.log(active ? "Local speech started" : "Local speech ended");
           if (active) {
             this.connectionKind = voice.isWarm ? "warm" : "cold";
-            this.interrupt();
+            if (
+              this.mode === "auto" &&
+              (this.liveInputBeforeVad || this.conversation.pendingPause)
+            ) {
+              this.liveInputBeforeVad = false;
+              return;
+            }
+            if (this.mode !== "manual" || !this.input) this.beginInput("voice");
+            if (this.mode === "manual") this.interrupt();
+            else {
+              this.resumeTimer?.();
+              this.resumeTimer = undefined;
+              if (this.playback.resumeRequested)
+                this.dispatch({ type: "pause" });
+              // Merely hearing speech does not grant permission to pause.
+              this.conversation.beginTurn(!this.playback.interruption);
+            }
           } else {
             if (this.mode === "manual") this.manualHeld = false;
             if (!acceptsInput()) return;
             this.dispatch({ type: "user_end" });
-            voice.mute(false);
-            if (this.playback.interruption && !this.playback.resumeRequested)
-              this.conversation.speechEnded(this.connectionKind, voice.isCold);
+            if (this.playback.interruption) voice.mute(false);
+            this.conversation.speechEnded(this.connectionKind, voice.isCold);
+            this.conversation.scheduleFollowup();
           }
         },
         onOutput: (active) => {
           if (!valid()) return;
-          if (!acceptsInput() || this.playback.mode === "playing") {
+          if (
+            !acceptsInput() ||
+            !this.playback.interruption ||
+            this.playback.mode === "playing"
+          ) {
             voice.mute(true);
             return;
           }
@@ -604,10 +740,20 @@ export class ListeningSession {
           }
         },
         onTranscript: (role, text) => {
-          if (acceptsInput()) this.conversation.transcript(role, text);
+          if (role === "user" && !text.trim()) return;
+          if (role === "user" && text.trim() && valid())
+            this.log(
+              `Live input transcript received (${text.length} characters)`,
+            );
+          if (
+            (role === "user" ? acceptLiveInput() : acceptsInput()) &&
+            (role === "user" || !!this.playback.interruption)
+          )
+            this.conversation.transcript(role, text);
         },
         onDelegation: (id) => {
-          if (acceptsInput()) this.conversation.delegate(id);
+          if (valid()) this.log("Live delegation received");
+          if (acceptLiveInput()) this.conversation.delegate(id);
         },
         onError: (message) => {
           if (!valid()) return;

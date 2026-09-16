@@ -84,3 +84,39 @@ test("a mismatched revision is rejected for progress and both result transports"
   );
   assert.equal(phases, 0);
 });
+
+test("NDJSON carries a complete validated player command across arbitrary network chunks", async () => {
+  const result = {
+    ...valid,
+    action: "player_control",
+    commandId: "turn:operation",
+    commands: [{ type: "adjust_rate", direction: "slower" }],
+  };
+  let sink!: ReadableStreamDefaultController<Uint8Array>;
+  let resolved = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      sink = controller;
+    },
+  });
+  const pending = readQuestion(
+    new Response(body, { headers: { "Content-Type": "application/x-ndjson" } }),
+    () => {},
+    2,
+  ).then((value) => {
+    resolved = true;
+    return value;
+  });
+  const line = JSON.stringify({ type: "result", result }) + "\n";
+  sink.enqueue(new TextEncoder().encode(line.slice(0, -3)));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(resolved, false);
+  sink.enqueue(new TextEncoder().encode(line.slice(-3)));
+  assert.deepEqual(await pending, result);
+  for (const malformed of [
+    { ...result, commandId: "" },
+    { ...result, commands: [{ type: "set_volume", volume: 1.1 }] },
+    { ...result, commands: [{ type: "set_rate", rate: 0 }] },
+  ])
+    assert.equal(questionResultSchema.safeParse(malformed).success, false);
+});

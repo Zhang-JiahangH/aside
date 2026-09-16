@@ -388,3 +388,32 @@ test("question endpoint streams progress and terminal success or error, preservi
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("the question endpoint carries validated controls and playback context through NDJSON", async () => {
+  const { QuestionService } = await import("../backend/src/question-service.js");
+  const { createPlayerConfig } = await import("@aside/engine/player");
+  const { readQuestion } = await import("../frontend/src/question-stream.js");
+  const root = await mkdtemp(join(tmpdir(), "aside-remote-"));
+  const store = new Store(root);
+  store.put({ id: "remote", title: "test", createdAt: "now", durationMs: 60000, status: "ready", stage: "ready", progress: 1,
+    analysis: { version: "1", source: "demo", summary: "", hostStyle: "", speakers: [], passages: [], anchors: [], voice: "feminine", voiceReason: "test" } });
+  const player = { turnId: "voice-turn", source: "voice" as const, positionMs: 15000, wasPlaying: true, audibleSource: "podcast" as const, config: createPlayerConfig() };
+  const questions = new QuestionService({ async reply(input) {
+    assert.deepEqual(input.context?.player, player);
+    return { id: "response", answer: "", sources: [], searchedWeb: false, calls: [{ id: "command", name: "control_podcast", arguments: '{"commands":[{"type":"set_volume","volume":0.4}]}' }] };
+  } });
+  const app = createApp(store, fakeServices({ questions }));
+  try {
+    const response = await app.inject({ method: "POST", url: "/api/episodes/remote/question", headers: { accept: "application/x-ndjson" }, payload: { atMs: 15000, revision: 3, player, history: [{ role: "user", text: "Turn the podcast down to forty percent" }] } });
+    assert.equal(response.statusCode, 200, response.body);
+    const result = await readQuestion(new Response(response.body, { headers: { "Content-Type": String(response.headers["content-type"]) } }), () => {}, 3);
+    assert.equal(result.action, "player_control");
+    if (result.action !== "player_control") assert.fail("expected remote command");
+    assert.deepEqual(result.commands, [{ type: "set_volume", volume: 0.4 }]);
+    assert.equal(result.commandId, "voice-turn:command");
+  } finally {
+    await app.close();
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

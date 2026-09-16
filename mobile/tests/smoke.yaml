@@ -1,7 +1,14 @@
 appId: com.asidefm.app.dev
 ---
+- stopApp
 - launchApp:
     clearState: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "tab-library"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "public-library"
 - extendedWaitUntil:
     visible:
       id: "episode-mobile-sample"
@@ -12,10 +19,23 @@ appId: com.asidefm.app.dev
 - tapOn:
     waitToSettleTimeoutMs: 1000
     id: "locale-en"
+- runFlow:
+    when:
+      visible:
+        id: sign-out
+    commands:
+      - tapOn:
+          waitToSettleTimeoutMs: 1000
+          id: sign-out
 - tapOn:
     waitToSettleTimeoutMs: 1000
     id: "email"
 - inputText: "${EMAIL}"
+- scrollUntilVisible:
+    element:
+      id: send-code
+    direction: DOWN
+    visibilityPercentage: 100
 - tapOn:
     waitToSettleTimeoutMs: 1000
     id: "send-code"

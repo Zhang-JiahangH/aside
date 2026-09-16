@@ -1,5 +1,5 @@
 import type { buildContext } from "@aside/engine/server";
-import type { Source } from "@aside/engine/contracts";
+import type { Source, PlayerInput } from "@aside/engine/contracts";
 export type QuestionTool =
   | { type: "web_search" }
   | {
@@ -23,7 +23,7 @@ export interface ModelReply {
 /** Only the data needed by this app's question loop, with no SDK types. */
 export interface QuestionModel {
   reply(request: {
-    context?: ReturnType<typeof buildContext>;
+    context?: ReturnType<typeof buildContext> & { player?: PlayerInput };
     previousId?: string;
     toolResults: ToolResult[];
     instructions: string;

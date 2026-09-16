@@ -1,6 +1,6 @@
 # Aside 架构说明
 
-本文描述当前实现。历史决策见 [ADR 0001](adr/0001-interactive-podcast-architecture.md) 和 [ADR 0002](adr/0002-on-demand-live-sessions.md)；与旧设计不一致时，以当前代码及本文为准。
+本文描述当前实现。播放器语音遥控、持续 Live 连接和 NDJSON 命令的最新行为见[播放器遥控](player-controls.md#live-遥控链路)，其生命周期说明取代下文和 ADR 0002 中自动模式的按需连接描述。历史决策见 [ADR 0001](adr/0001-interactive-podcast-architecture.md) 和 [ADR 0002](adr/0002-on-demand-live-sessions.md)；与旧设计不一致时，以当前代码及本文为准。
 
 ## 模块边界
 

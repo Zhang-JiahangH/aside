@@ -54,8 +54,9 @@ for (const quiet of [false, true])
         },
       });
     });
-    await page.goto("/");
+    await page.goto("/?debug");
     await page.getByRole("button", { name: /给思考留一点空间/ }).click();
+    await page.locator(".debug-toggle").click();
     await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
     await page.getByRole("button", { name: "播放", exact: true }).click();
     await expect(
@@ -68,7 +69,12 @@ for (const quiet of [false, true])
     await page.evaluate(() => {
       (window as any).vadFixture.gain.gain.value = 0;
     });
-    expect(creates).toBe(0);
+    // Auto mode now opens one continuous Live connection when enabled. VAD
+    // still rejects the tone, and unclassified input must not pause playback.
+    expect(creates).toBe(1);
+    await expect(page.locator(".debug")).not.toContainText(
+      "Local speech started",
+    );
     expect(
       await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
     ).toBe(false);
@@ -100,10 +106,12 @@ for (const quiet of [false, true])
       source.connect(dest);
       source.start(0, 0, 5);
     }, quiet);
-    await expect.poll(() => creates, { timeout: 10000 }).toBe(1);
+    await expect(page.locator(".debug")).toContainText("Local speech started", {
+      timeout: 10000,
+    });
     expect(
       await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
-    ).toBe(true);
+    ).toBe(false);
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await expect(
       page.getByRole("status").filter({ hasText: "麦克风未监听" }),

@@ -30,7 +30,8 @@
     "db:cloudflare:production": "wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc",
     "export:demo": "node --import tsx scripts/export-public-demo.ts",
     "check:mobile": "npm run check -w @aside/mobile",
-    "postinstall": "node mobile/scripts/patch-audio.mjs"
+    "postinstall": "node mobile/scripts/patch-audio.mjs",
+    "test:remote-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/question-service.ts' --test-coverage-include='backend/src/question-tools.ts' --test-coverage-include='backend/src/dialogue-policy.ts' --test-coverage-include='backend/src/interactive-provider.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/question-service.test.ts tests/provider.test.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260911.1",

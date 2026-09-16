@@ -1,13 +1,17 @@
 import { z } from "zod";
 import { buildContext, getPassage, searchPodcast } from "@aside/engine/server";
 import { explicitResume, type Analysis } from "@aside/engine/core";
-import type {
-  QuestionRequest,
-  QuestionResult,
-  QuestionPhase,
+import {
+  playerCommandsSchema,
+  type QuestionRequest,
+  type QuestionResult,
+  type QuestionPhase,
 } from "@aside/engine/contracts";
 import type { QuestionModel, ToolResult } from "./question-model.js";
-import { questionInstructions } from "./dialogue-policy.js";
+import {
+  questionInstructions,
+  playerToolInstructions,
+} from "./dialogue-policy.js";
 import { questionTools } from "./question-tools.js";
 export interface QuestionAnswerer {
   answer(
@@ -39,7 +43,8 @@ export class QuestionService implements QuestionAnswerer {
     });
     const latest =
       request.history.filter((turn) => turn.role === "user").at(-1)?.text ?? "";
-    if (explicitResume(latest)) return { ...resume(), tools: [] };
+    if (request.player?.source !== "voice" && explicitResume(latest))
+      return { ...resume(), tools: [] };
     const sources: QuestionResult["sources"] = [],
       used: string[] = [];
     let previousId: string | undefined;
@@ -50,11 +55,14 @@ export class QuestionService implements QuestionAnswerer {
       const response = await this.model.reply({
         context:
           round === 0
-            ? buildContext(analysis, request.atMs, request.history)
+            ? {
+                ...buildContext(analysis, request.atMs, request.history),
+                ...(request.player ? { player: request.player } : {}),
+              }
             : undefined,
         previousId,
         toolResults,
-        instructions: questionInstructions,
+        instructions: questionInstructions + playerToolInstructions,
         tools: questionTools,
         signal,
       });
@@ -64,16 +72,64 @@ export class QuestionService implements QuestionAnswerer {
       if (response.searchedWeb) used.push("search_web");
       sources.push(...response.sources);
       if (response.calls.length > 8) throw Error("Tool call limit reached");
+      const terminal = response.calls.some((call) =>
+        [
+          "control_podcast",
+          "resume_podcast",
+          "ignore_input",
+          "wait_for_input",
+        ].includes(call.name),
+      );
+      if (terminal && response.calls.length > 1) {
+        toolResults = response.calls.map((call) => ({
+          callId: call.id,
+          value: {
+            error:
+              "Return one decision only; combine playback operations in one control_podcast call",
+          },
+        }));
+        continue;
+      }
       for (const call of response.calls) {
         used.push(call.name);
-        progress?.("searching");
         let result: unknown;
         try {
           const args: unknown = JSON.parse(call.arguments);
+          if (call.name === "control_podcast") {
+            const { commands, followUpQuestion } = z
+              .object({
+                commands: playerCommandsSchema,
+                followUpQuestion: z.string().trim().min(1).max(2000).optional(),
+              })
+              .strict()
+              .parse(args);
+            // Terminal result: never spend a second model round narrating a control.
+            return {
+              revision: request.revision,
+              action: "player_control",
+              commandId: `${request.player?.turnId ?? request.revision}:${call.id}`,
+              commands,
+              ...(followUpQuestion ? { followUpQuestion } : {}),
+              answer: "",
+              sources: [],
+              tools: [call.name],
+            };
+          }
+          if (call.name === "ignore_input" || call.name === "wait_for_input") {
+            z.object({}).strict().parse(args);
+            return {
+              revision: request.revision,
+              action: call.name === "ignore_input" ? "ignore" : "wait",
+              answer: "",
+              sources: [],
+              tools: [call.name],
+            };
+          }
           if (call.name === "resume_podcast") {
             z.object({}).strict().parse(args);
             return resume();
           }
+          progress?.("searching");
           if (call.name === "get_passage") {
             const { atMs } = z
               .object({ atMs: z.number().finite().nonnegative() })

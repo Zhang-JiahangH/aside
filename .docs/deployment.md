@@ -263,3 +263,15 @@ npm run db:cloudflare:production
 费用提示：按每小时音频约 $2.2 的分析成本估算，全站每日上限现在允许每天约 $4,400（1 小时节目）到 $22,000（5 小时文件）的分析费用。实际的剩余约束是全站 100 GiB 保留存储（删除会释放）与每账号每月 100 篇（新账号只需邮箱）。建议在 OpenAI 后台设置月度花费上限作为兜底。
 
 未验证：线上没有做登录上传或全站额度耗尽测试。
+
+## 播放器时间轴刻度与 dock 排版
+
+2026-09-15：修复播放器时间轴上方那条看似进度条的实线。`makeAnalysis` 会给每个没有被语义 group 覆盖的 passage 补一个 anchor，247:55 的节目能产生上千个；每个 anchor 渲染成 2px 的 `.timeline-anchor`（`top:-4px`、`--ring-grad`），密度饱和后在波形上方连成一条线，读起来像第二根进度条。改为只画 `confidence >= 0.75` 的语义 group anchor，并按时间轴 1.2%（`MIN_ANCHOR_GAP`）的最小间距抽稀；本地以 1200 个 anchor 的替身节目实测渲染 30 个。anchor 数据本身没动，`findAnchor` 的重播与续播定位仍看完整列表。
+
+同时把 dock 的 grid 从 `"title transport speed" "title transport volume"` 两行改为单行 `"title transport speed volume"`，倍速与音量此前各自落在 transport 中线的上下方，和 dock 里其它元素都不共线；`min-height` 108px → 96px。字号随单行放大：时间码与音量读数 10px → 12px（时间码列宽 40px → 48px、窄屏 36px → 44px 容下 `247:55`），节目标题 12px → 13px。窄屏（≤1000px）另有一套 grid-areas，未受影响。
+
+`npm run check`、143 项项目测试与 8 项 `player-config.spec.ts` 浏览器用例通过。`player.spec.ts` 有 4 项失败，但在改动前的 commit 上 stash 复跑同样失败——这几项需要真实后端与 demo 数据，与本次无关。改动为纯前端，未新增数据库迁移，未执行 `db:cloudflare:production`。
+
+生产 Worker `87fd74a6-d52c-42c5-a4fb-3c3300ce6707`（`--containers-rollout=none`，保留现有 Container）。正式域名 `/` 引用本次构建的 `index-BXzSmehr.css`，线上 CSS 含 `grid-template-areas:"title transport speed volume"` 与 `.dock-progress` 的 `48px minmax(0,1fr) 48px` / `font-size:12px`，JS bundle 含抽稀阈值；`/` 200、`/api/health` 200、`liveConfigured=true`、`uploadsEnabled=true`。
+
+未验证：线上没有打开真实的 247 分钟节目人工查看刻度密度，抽稀效果由本地 1200 anchor 的替身节目和截图覆盖；真实节目的 group 分布不均匀，实际观感可能与替身不同。波形形状仍是 `waveShape()` 用 episode id 哈希生成的装饰图形，与音频内容无关，本次未改。
