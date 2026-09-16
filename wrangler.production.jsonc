@@ -15,6 +15,7 @@
     "APP_ORIGIN": "https://asidefm.com",
     "ALLOW_UPLOADS": "true",
     "AI_ENABLED": "true",
+    "MOBILE_AUDIO_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEyIQuX7vD966Cp_",
     "AUTH_EMAIL_FROM": "login@auth.asidefm.com",
     "MONTHLY_UPLOAD_LIMIT": "100",
