@@ -17,13 +17,17 @@ The root postinstall applies the one-line upstream [expo-audio paused Now Playin
 
 Local **signing** still defaults to the real online service and shares website accounts. Local **acceptance** is a separate, explicit `ASIDE_TEST_API=1` configuration with temporary fixture accounts and codes. Test builds identify that environment on the Account screen. Production distribution rejects the test flag, and ordinary builds reject localhost or non-HTTPS API URLs. See the current [release readiness correction](mobile-acceptance.md#release-readiness-correction) before installing a build for daily use.
 
+## Android distribution
+
+Android internal releases use the [Aside EAS project](https://expo.dev/accounts/jiahangzhang/projects/aside) under `jiahangzhang`. Run `npm run build:apk -w @aside/mobile` to build a standalone ARM64 APK with the existing release signing key and production API. Share the successful build's installation page with testers. See [Android distribution](android-distribution.md) for prerequisites, update compatibility and release checks.
+
 ## iOS distribution
 
 Local signing, Ad Hoc (`internal`) and TestFlight (`testflight`) are maintained together. All build Release binaries with embedded JS. Local uses a separate bundle identifier so it can coexist with a production-channel install. Ad Hoc and TestFlight share the production bundle identifier and replace each other on a device.
 
 After Apple Developer membership is approved:
 
-1. Configure the Expo/EAS project (`EAS_PROJECT_ID`) and register the production bundle identifier in the approved Apple team.
+1. Use the configured Aside Expo/EAS project and register the production bundle identifier in the approved Apple team.
 2. `npm run build:internal -w @aside/mobile` registers selected device UDIDs and builds an Ad Hoc IPA. Share its EAS installation link. Adding a device requires re-signing or a new build.
 3. `npm run build:testflight -w @aside/mobile` builds for App Store distribution. It does not submit automatically.
 4. `npm run submit:testflight -w @aside/mobile` selects and uploads a build to the App Store Connect app. Configure the Apple team, ASC app ID and upload credentials through EAS; do not commit them.
