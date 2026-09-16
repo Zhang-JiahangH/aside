@@ -34,6 +34,9 @@ function waveShape(seed: string) {
     return 0.22 + 0.78 * Math.abs(shape);
   });
 }
+// A long episode yields one anchor per unmatched passage; drawn raw they merge into a
+// solid bar that reads like a second progress track. Keep them at least this far apart.
+const MIN_ANCHOR_GAP = 0.012;
 const LIVE_STATUSES = ["connecting", "transcribing", "on"];
 
 export function PlayerView({
@@ -98,6 +101,23 @@ export function PlayerView({
     [episode?.id],
   );
   const waveBars = useRef<HTMLSpanElement>(null);
+  // Prefer the semantic groups over the single-passage fallbacks, then thin by distance so
+  // the ticks stay readable as chapter marks instead of saturating the timeline.
+  const timelineAnchors = useMemo(() => {
+    const durationMs = episode?.durationMs ?? 0;
+    const all = episode?.analysis?.anchors ?? [];
+    if (durationMs <= 0 || !all.length) return [];
+    const grouped = all.filter((a) => a.confidence >= 0.75);
+    const kept: typeof all = [];
+    let last = -Infinity;
+    for (const a of grouped.length ? grouped : all) {
+      const at = a.startMs / durationMs;
+      if (at - last < MIN_ANCHOR_GAP) continue;
+      kept.push(a);
+      last = at;
+    }
+    return kept;
+  }, [episode?.analysis?.anchors, episode?.durationMs]);
   const audioPlaying = state.mode === "playing";
   // Aside is in the conversation from the interruption until playback is asked to resume.
   const agentPresent = !!state.interruption && !state.resumeRequested;
@@ -756,17 +776,16 @@ export function PlayerView({
                 value={state.positionMs}
                 onChange={(e) => seek(Number(e.target.value))}
               />
-              {episode.durationMs > 0 &&
-                (episode.analysis?.anchors ?? []).map((a) => (
-                  <i
-                    key={a.id}
-                    className="timeline-anchor"
-                    style={{
-                      left: `${(a.startMs / episode.durationMs) * 100}%`,
-                    }}
-                    title={a.text}
-                  />
-                ))}
+              {timelineAnchors.map((a) => (
+                <i
+                  key={a.id}
+                  className="timeline-anchor"
+                  style={{
+                    left: `${(a.startMs / episode.durationMs) * 100}%`,
+                  }}
+                  title={a.text}
+                />
+              ))}
               {state.interruption && episode.durationMs > 0 && (
                 <i
                   className="timeline-resume"
