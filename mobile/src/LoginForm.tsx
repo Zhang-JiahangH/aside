@@ -182,11 +182,11 @@ export function LoginForm({
   return (
     <View style={{ gap: 20, paddingTop: 8 }}>
       <View style={{ gap: 10 }}>
-        <Text style={{ color: colors.text, fontSize: 23, fontWeight: "600" }}>
-          {sentEmail
-            ? tr("查看你的邮箱", "Check your inbox")
-            : tr("接着上次，继续听", "Pick up where you left off")}
-        </Text>
+        {sentEmail ? (
+          <Text style={{ color: colors.text, fontSize: 23, fontWeight: "600" }}>
+            {tr("查看你的邮箱", "Check your inbox")}
+          </Text>
+        ) : null}
         <Text style={{ color: colors.muted, fontSize: 15, lineHeight: 23 }}>
           {sentEmail
             ? tr(
@@ -194,8 +194,8 @@ export function LoginForm({
                 `We sent a code to ${sentEmail}. It’s valid for 10 minutes.`,
               )
             : tr(
-                "使用与网站相同的邮箱，找回你的音频、进度和对话。首次登录会自动创建账号。",
-                "Use the same email as the website to access your audio, progress and conversations. Your first sign-in creates an account.",
+                "使用与网站相同的邮箱，继续收听、上传和提问。",
+                "Use your website email to access your audio, progress and conversations.",
               )}
         </Text>
       </View>
@@ -311,8 +311,8 @@ export function LoginForm({
               "No email? Check your spam folder, or resend the code shortly.",
             )
           : tr(
-              "无需设置密码。登录后即可上传音频、提问和同步收听。",
-              "No password needed. Sign in to upload, ask questions and sync your listening.",
+              "无需设置密码。首次登录会自动创建账号。",
+              "No password needed. Your first sign-in creates an account.",
             )}
       </Text>
     </View>

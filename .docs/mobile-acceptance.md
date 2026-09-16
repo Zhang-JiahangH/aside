@@ -6,6 +6,8 @@ Branch: `codex/mobile-cross-platform`. [Pull request #2](https://github.com/qiz0
 
 **This is local integration evidence. The mobile app is not ready for production use.** On September 15 at 20:22 PDT, the production mobile email-start route returned `403 Origin required` without an Origin and `404` with the website Origin. Production D1 still listed `0006_mobile.sql` as unapplied. The installed simulator binaries connect to temporary local data and fixed test codes; they cannot demonstrate real email delivery or synchronization with website accounts. Restoring the fixture service does not close these gaps.
 
+Subsequent rollout preparation exported an owner-only, ignored production D1 backup and successfully applied `0006_mobile.sql`. Production health and website session endpoints still returned 200 afterward. The production Worker, website and media container have **not** been published: automatic approval review rejected that deployment, requiring explicit user authorization after the remaining native checks and fixes are reviewable. The added database columns remain in place. Real email delivery, production sign-in and website-account restoration are still pending; a fixture code must not be counted as that acceptance.
+
 The branch now also integrates upstream `5b59981`, including asynchronous voice controls, early Live input and the player dock layout. Those changes live in the shared runtime while retaining async native seeking, complete-history persistence and cancellation. A second breath preserves unclassified context in memory, and cancelled/unclassified fragments stay out of synchronized history.
 
 Login follow-up fixes preserve stored credentials across failed session lookups, distinguish an expired session from a connection outage, offer explicit reconnection, and add a two-step email/code form with resend cooldown and error recovery. Keyboard entry hides surrounding navigation so the send action stays reachable. Distribution configurations reject test flags and localhost/non-HTTPS API URLs; explicit local test builds identify their separate data on the Account screen. Real email delivery and production account restoration remain outstanding.
@@ -14,13 +16,21 @@ The follow-up passed **164 unit tests**, **32 Worker integration tests**, and **
 
 Native packaging now resolves the shared workspace's `.js` TypeScript specifiers. Android bundle inputs explicitly track `engine`, `player-runtime` and build API/environment variables, so incremental builds cannot silently reuse old shared code or the wrong endpoint.
 
+Final login layout verification passed the full native smoke flow on the iPhone SE 3 and Android emulator. Language selection stays reachable above the form; the keyboard cannot redirect the send action into another tab. [iPhone SE smoke](mobile-evidence/login-final-ios-smoke.txt), [Android smoke](mobile-evidence/login-final-android-smoke.txt), [iPhone SE voice](mobile-evidence/login-final-ios-voice.txt). These remain mock-service checks.
+
+### Minimal real-service acceptance before distribution
+
+The user authorized detailed mock regression and requested one real end-to-end smoke to control model costs. After production approval, use a designated real mailbox, play an existing analyzed episode, ask one short voice question, and restore that account's progress and completed conversation on the website. Do not repeat paid questions automatically or analyze a long new upload for this check. Record actual delivery, answer playback and synchronized state; do not substitute a fixed code or canned model response. Real-service success is still pending.
+
+Online API candidate builds have been prepared separately from fixtures. Their embedded configuration was inspected: `apiUrl=https://asidefm.com`, `testApi=false`. They have not been substituted for the running local acceptance builds, and compilation alone does not establish online readiness.
+
 Installed **Release** builds were tested on iPhone 16 Pro and iPhone SE 3 simulators (iOS 18.3), and Pixel 6 / API 33 ARM64 Android emulator. JavaScript is embedded; Metro was not used. Tests exercised the real local Worker, D1, R2, FFmpeg media decoder and analysis workflow. External transcription/model results were deterministic fixtures; voice answers used a real receive-only WebRTC peer and audio/data transport.
 
-## Integration with current main
+## Earlier integration with PR #1
 
 The branch includes upstream `527bc64` (PR #1 player controls, live waveform, monthly upload quota and one-step media segmentation). Its command/configuration policy now lives in the shared listening runtime, retaining native asynchronous seeking, completed-history persistence and conflict protection. The native adapter applies rate, volume, mute and pitch configuration. After merging, both native Release packages were rebuilt and the expanded regression suites rerun. Expanded verification: [132 unit tests](mobile-evidence/merged-unit-tests.txt), [32 Worker tests](mobile-evidence/merged-cloudflare-tests.txt), [44 browser tests](mobile-evidence/merged-browser-tests.txt), [iOS smoke](mobile-evidence/merged-ios-smoke.txt), [Android smoke](mobile-evidence/merged-android-smoke.txt), [iOS voice](mobile-evidence/merged-ios-voice.txt), [Android voice](mobile-evidence/merged-android-voice.txt), [iOS upload](mobile-evidence/merged-ios-upload.txt), [Android upload](mobile-evidence/merged-android-upload.txt). The incoming browser fixture was updated to return versioned checkpoint writes instead of `null`, matching the new production contract.
 
-## Results
+## Earlier feature and endurance results
 
 | Check | Result / evidence |
 | --- | --- |
@@ -90,6 +100,6 @@ Local `mobile/artifacts/AsideDev-simulator-validation.zip` and `aside-validation
 
 ## Separate device / distribution acceptance
 
-No production deployment or Apple distribution is claimed. Apply migration `0006_mobile.sql`, deploy the media container, then enable `MOBILE_AUDIO_ENABLED` on the Worker before production native voice use.
+No production Worker/container publication or Apple distribution is claimed. Migration `0006_mobile.sql` is now applied. After explicit production approval, deploy the media container and Worker with native recording disabled, verify readiness, then enable `MOBILE_AUDIO_ENABLED` before production native voice use.
 
 Personal Team installation/trust, physical calls/headphone and Bluetooth interruptions, visible iOS lock-screen controls, battery behavior, Ad Hoc registered-device installation and TestFlight need their actual device/signing environments. Apple paid membership is pending. The local/internal/testflight configurations and separate build/submit commands are present; Ad Hoc and TestFlight are **pending signing acceptance**. Synthetic model fixtures do not establish real-model response quality or end-to-end production latency.

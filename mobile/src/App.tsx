@@ -718,6 +718,28 @@ function Main() {
             >
               {tr("我的", "Account")}
             </Text>
+            {!keyboardVisible ? (
+              <View style={styles.row}>
+                {button(
+                  "中文",
+                  () => {
+                    setLocale("zh");
+                    void AsyncStorage.setItem("aside.locale", "zh");
+                  },
+                  "locale-zh",
+                  locale !== "zh",
+                )}
+                {button(
+                  "English",
+                  () => {
+                    setLocale("en");
+                    void AsyncStorage.setItem("aside.locale", "en");
+                  },
+                  "locale-en",
+                  locale !== "en",
+                )}
+              </View>
+            ) : null}
             {Constants.expoConfig?.extra?.testApi ? (
               <Text
                 testID="test-environment"
@@ -825,26 +847,6 @@ function Main() {
                 signIn={login}
               />
             )}
-            <View style={styles.row}>
-              {button(
-                "中文",
-                () => {
-                  setLocale("zh");
-                  void AsyncStorage.setItem("aside.locale", "zh");
-                },
-                "locale-zh",
-                locale !== "zh",
-              )}
-              {button(
-                "English",
-                () => {
-                  setLocale("en");
-                  void AsyncStorage.setItem("aside.locale", "en");
-                },
-                "locale-en",
-                locale !== "en",
-              )}
-            </View>
           </ScrollView>
         ) : tab === "upload" ? (
           <ScrollView

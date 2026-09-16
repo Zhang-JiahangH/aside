@@ -4,9 +4,21 @@ appId: com.asidefm.app.dev
 - tapOn:
     id: tab-account
     waitToSettleTimeoutMs: 1000
+- scrollUntilVisible:
+    element:
+      id: locale-en
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
 - tapOn:
     id: locale-en
     waitToSettleTimeoutMs: 1000
+- scrollUntilVisible:
+    element:
+      id: email
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
 - tapOn:
     id: email
     waitToSettleTimeoutMs: 1000
@@ -14,11 +26,23 @@ appId: com.asidefm.app.dev
 - tapOn:
     id: send-code
     waitToSettleTimeoutMs: 1000
+- scrollUntilVisible:
+    element:
+      id: code
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
 - tapOn:
     id: code
     waitToSettleTimeoutMs: 1000
 - inputText: "12345678"
 - waitForAnimationToEnd
+- scrollUntilVisible:
+    element:
+      id: sign-in
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
 - tapOn:
     id: sign-in
     waitToSettleTimeoutMs: 1000
