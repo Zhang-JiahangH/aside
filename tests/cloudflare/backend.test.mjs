@@ -15,6 +15,7 @@ import {
 import { CloudStore } from "../../cloudflare/src/store.ts";
 import { analyzeEpisode } from "../../cloudflare/src/pipeline.ts";
 import { admitAudio, mediaApp } from "../../backend/src/container/app.ts";
+import { rollupDailyStats } from "../../cloudflare/src/stats.ts";
 let mf, db, bucket;
 let networkCalls = [];
 let acknowledgeClose = true;
@@ -1977,4 +1978,76 @@ test("question cost is ledgered and only the admin key can read it", async () =>
   );
   assert.ok(data.topOwners.some((r) => r.owner === a.id));
   assert.equal(data.byDay[0].day, new Date().toISOString().slice(0, 10));
+});
+
+test("the daily rollup captures trial counters before cleanup can drop them", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  // Three days back: already past the cleanup's two-day horizon, so only the
+  // snapshot can still answer for it, yet inside the report window.
+  const stale = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  await db.batch([
+    db.prepare("DELETE FROM daily_stats"),
+    db.prepare("DELETE FROM budgets WHERE bucket LIKE 'trial:%'"),
+    // Two visitors asked questions, one of them also used live; plus the
+    // per-ip and global variants that must not be counted as visitors.
+    db.prepare(
+      `INSERT INTO budgets(bucket,used) VALUES
+        ('trial:${stale}:question:visitor-a', 3),
+        ('trial:${stale}:question:visitor-b', 1),
+        ('trial:${stale}:live:visitor-a', 2),
+        ('trial:${stale}:question:ip:1.2.3.4', 4),
+        ('trial:${stale}:question:global', 4),
+        ('trial:${stale}:live:global', 2)`,
+    ),
+  ]);
+  await rollupDailyStats({ DB: db });
+
+  const read = async (day) =>
+    Object.fromEntries(
+      (
+        await db
+          .prepare("SELECT metric, value FROM daily_stats WHERE day=?")
+          .bind(day)
+          .all()
+      ).results.map((r) => [r.metric, r.value]),
+    );
+  const captured = await read(stale);
+  assert.equal(captured.trial_visitors_question, 2, "per-ip and global are not visitors");
+  assert.equal(captured.trial_visitors_live, 1);
+  assert.equal(captured.trial_actions_question, 4, "the global bucket holds the day total");
+  assert.equal(captured.trial_actions_live, 2);
+
+  // Gauges land on today, not on the day the counters belong to.
+  const gauges = await read(today);
+  assert.equal(typeof gauges.users_total, "number");
+  assert.equal(typeof gauges.voice_sessions_total, "number");
+  assert.equal(gauges.trial_visitors_question, undefined);
+
+  // Running again on the same tick must not double anything.
+  await rollupDailyStats({ DB: db });
+  assert.deepEqual(await read(stale), captured);
+
+  // A changed counter is corrected in place rather than appended.
+  await db
+    .prepare("UPDATE budgets SET used=9 WHERE bucket=?")
+    .bind(`trial:${stale}:question:global`)
+    .run();
+  await rollupDailyStats({ DB: db });
+  assert.equal((await read(stale)).trial_actions_question, 9);
+
+  // Once cleanup drops the counters, the snapshot is what remains.
+  await db.prepare("DELETE FROM budgets WHERE bucket LIKE 'trial:%'").run();
+  await rollupDailyStats({ DB: db });
+  assert.equal((await read(stale)).trial_visitors_question, 2);
+
+  const report = await mf.dispatchFetch(origin + "/api/admin/usage?days=90", {
+    headers: { "x-admin-key": "admin-test-key-at-least-32-characters" },
+  });
+  const data = await report.json();
+  assert.ok(
+    data.daily.some(
+      (r) => r.day === stale && r.metric === "trial_visitors_question",
+    ),
+    "the admin report exposes the snapshots",
+  );
 });

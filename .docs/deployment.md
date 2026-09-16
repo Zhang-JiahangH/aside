@@ -307,3 +307,13 @@ node scripts/admin-usage.mjs --days 30 --json
 - **reasoning** 是输出 token 里用于思考的部分，也是 10000 输出预算的实际消耗者。若问答开始报 `Model reply incomplete (max_output_tokens)`，说明预算不够。
 
 `/api/admin/usage` 在 session 与账号解析之前处理，运维调用不会领到试听身份或 Cookie；未配置 `ADMIN_KEY` 时路由返回 404，表现为未挂载。密钥只走 `x-admin-key` 请求头，不进 URL。
+
+## 每日快照
+
+`budgets` 里的试听计数只保留 2 天，`voice_usage` 根本没有时间戳——所以"某天有多少人试过"这个问题，事后无法从持久表重建。`*/5 * * * *` 的 cron 现在会先把这些数字汇总进 `daily_stats`（migration `0007`，long 格式 `(day, metric, value)`），**再**执行原有的清理；顺序不能反。
+
+汇总是按 `(day, metric)` upsert 的，所以每 5 分钟重跑一次只会改写同一行，不会累加。`daily_stats` 很小，不做清理。
+
+指标含义见 `aside-usage` skill。要注意 `trial_visitors_*` 统计的是**真正走到付费路径**的访客（提问或开语音），不是页面访问量——匿名访客在消耗配额之前不落库。页面浏览量需要另外开 Cloudflare Web Analytics，目前没开。
+
+一个 SQLite 细节：`INSERT … SELECT` 后面跟 `ON CONFLICT` 时，如果 SELECT 是 `UNION ALL` 复合查询且末支没有 `WHERE`，解析器无法区分 `ON CONFLICT` 和 join 的 `ON`，会报 `near "DO": syntax error`。`stats.ts` 里那句 `WHERE true` 是必需的，不是冗余。

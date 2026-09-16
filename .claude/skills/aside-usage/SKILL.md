@@ -39,6 +39,27 @@ never in the URL.
 - Spoken answers are capped by the dialogue policy at ~350 Chinese characters,
   so a large `out` with a small `reasoning` is unusual and worth investigating.
 
+## Daily snapshots
+
+The report's last table comes from `daily_stats`, written by the `*/5 * * * *`
+cron before it prunes the counters it reads. Without it those numbers are gone:
+`budgets` keeps trial counters for two days and `voice_usage` has no timestamp
+at all, so visitor history cannot be reconstructed after the fact.
+
+- `trial_visitors_<kind>` — distinct visitors who reached that paid path that
+  day (one `budgets` bucket exists per visitor per kind per day). This is the
+  closest thing to "how many people tried it", and it counts only visitors who
+  actually asked or spoke, not everyone who loaded the page.
+- `trial_actions_<kind>` — that day's total for the kind, from the global bucket.
+- `users_new` — accounts created that day; `users_total`, `episodes_total`,
+  `voice_sessions_total`, `voice_seconds_total` are gauges sampled on the tick.
+- `questions`, `question_trial_questions`, `question_output_tokens`,
+  `question_reasoning_tokens` — daily cost, kept past `question_usage`'s 90 days.
+
+There is still no page-view or unique-visitor count: anonymous visitors are not
+logged until they consume a quota. Cloudflare Web Analytics would cover that,
+and is not enabled.
+
 ## Troubleshooting
 
 | Result | Meaning |

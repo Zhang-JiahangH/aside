@@ -33,16 +33,9 @@ import { CloudStore } from "./store.js";
 import { HttpError, json, readBody, readJson } from "./http.js";
 import { startAnalysis, uploadRoute } from "./uploads.js";
 import { accountFromRequest, authRoute } from "./auth.js";
-import {
-  cleanupDeletedEpisode,
-  cleanupStaleUploads,
-  spaceRoute,
-} from "./space.js";
-import {
-  RETENTION_DAYS,
-  adminUsageRoute,
-  recordQuestionUsage,
-} from "./usage.js";
+import { cleanupDeletedEpisode, cleanupStaleUploads, spaceRoute } from "./space.js";
+import { RETENTION_DAYS, adminUsageRoute, recordQuestionUsage } from "./usage.js";
+import { rollupDailyStats } from "./stats.js";
 
 async function audio(request: Request, env: Env, id: string, mime: string) {
   const key = `episodes/${id}/original`;
@@ -515,6 +508,8 @@ export default {
     const cutoff = new Date(Date.now() - 2 * 86400000)
       .toISOString()
       .slice(0, 10);
+    // Before the cleanup below: it deletes the trial counters this reads.
+    await rollupDailyStats(env);
     await env.DB.batch([
       env.DB.prepare("DELETE FROM trial_proofs WHERE expires<?").bind(
         Date.now(),
