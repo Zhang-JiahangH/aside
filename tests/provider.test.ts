@@ -126,6 +126,8 @@ test("Live session setup keeps native audio and client delegation, with silent p
   assert.deepEqual(body.session.delegation, { type: "client" });
   assert.deepEqual(body.transport, { type: "webrtc", sdp: "offer" });
   assert.equal(body.session.audio.output.voice, "gleam");
+  assert.match(body.session.instructions, /"wait wait"/);
+  assert.match(body.session.instructions, /complete pause requests/);
   assert.match(
     body.session.instructions,
     /Ignore speech addressed to other people/,

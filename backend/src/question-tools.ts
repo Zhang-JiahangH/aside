@@ -34,7 +34,7 @@ export const questionTools: QuestionTool[] = [
     type: "function",
     name: "wait_for_input",
     description:
-      "Wait silently when the incremental utterance does not yet establish whether the app is addressed or what action is wanted. Later transcript updates can clarify the request.",
+      'Wait silently when the incremental utterance does not yet establish whether the app is addressed or what action is wanted. A listener saying "wait", "wait wait" or "hold on" to interrupt podcast playback is a complete pause request: use control_podcast with pause instead. Later transcript updates can clarify genuinely incomplete requests.',
     parameters: {
       type: "object",
       properties: {},
