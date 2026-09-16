@@ -14,7 +14,7 @@
     "build:testflight": "npx --yes eas-cli@16.32.0 build --platform ios --profile testflight",
     "build:ipa:testflight": "npx --yes eas-cli@16.32.0 build --platform ios --profile testflight --local --output ./Aside-testflight.ipa",
     "submit:testflight": "npx --yes eas-cli@16.32.0 submit --platform ios --profile testflight",
-    "build:apk": "npx --yes eas-cli@16.32.0 build --platform android --profile internal",
+    "build:apk": "node scripts/eas-android.mjs",
     "build:apk:local": "node scripts/android-release.mjs",
     "test:server": "cd .. && node --import tsx mobile/tests/server.mjs"
   },

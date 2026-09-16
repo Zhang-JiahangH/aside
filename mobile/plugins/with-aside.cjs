@@ -13,7 +13,8 @@ module.exports = function (config) {
   return withAppBuildGradle(config, (config) => {
     let source = config.modResults.contents;
     const marker = "// Aside local release signing";
-    if (!source.includes(marker)) {
+    // EAS injects its own release signing using credentials.json.
+    if (process.env.EAS_BUILD !== "true" && !source.includes(marker)) {
       source = source.replace(
         "    signingConfigs {",
         `    ${marker}

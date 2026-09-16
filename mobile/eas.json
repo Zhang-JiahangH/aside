@@ -13,7 +13,16 @@
       "autoIncrement": true,
       "env": { "APP_VARIANT": "production" },
       "ios": { "buildConfiguration": "Release" },
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease -PreactNativeArchitectures=arm64-v8a",
+        "credentialsSource": "local",
+        "node": "24.14.1",
+        "env": {
+          "ASIDE_TEST_API": "0",
+          "EXPO_PUBLIC_API_URL": "https://asidefm.com"
+        }
+      }
     },
     "testflight": {
       "distribution": "store",

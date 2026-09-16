@@ -32,6 +32,7 @@ const { local, testApi, apiUrl } = resolveBuildEnvironment(process.env);
 const config: ExpoConfig = {
   name: local ? "Aside Dev" : "Aside",
   slug: "aside",
+  owner: "jiahangzhang",
   icon: "./assets/icon.png",
   version: "0.1.0",
   scheme: local ? "aside-dev" : "aside",
@@ -73,9 +74,10 @@ const config: ExpoConfig = {
   extra: {
     apiUrl,
     testApi,
-    ...(process.env.EAS_PROJECT_ID
-      ? { eas: { projectId: process.env.EAS_PROJECT_ID } }
-      : {}),
+    eas: {
+      projectId:
+        process.env.EAS_PROJECT_ID ?? "91adc426-36cf-4264-a618-63e33b112cda",
+    },
   },
   updates: { enabled: false },
 };

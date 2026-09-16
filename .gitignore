@@ -28,6 +28,7 @@ mobile/.expo/
 mobile/dist/
 mobile/artifacts/
 mobile/.credentials/
+mobile/credentials.json
 .tools/
 *.ipa
 *.apk
