@@ -18,6 +18,13 @@ import {
 } from "./response-latency";
 import type { RuntimeClock } from "./runtime-clock";
 
+// This only selects a backend classification candidate; it never executes a
+// command. Reject longer sentences, quotations and negations at this fast path.
+const shortPauseRequest = (text: string) =>
+  /^(?:please[\s,]+)?(?:(?:wait|pause|stop|hold on|hang on)[\s,.!?…]*)+(?:please[.!?]*)?$/i.test(
+    text.trim(),
+  );
+
 export type ConversationVoice = Pick<
   OnDemandVoice,
   "append" | "activity" | "setWorking"
@@ -94,6 +101,13 @@ export class Conversation {
   }
   get startedAt() {
     return this.beganAt;
+  }
+  get pendingPause() {
+    return (
+      !!this.pending &&
+      !this.pending.signal.aborted &&
+      shortPauseRequest(this.submittedText)
+    );
   }
   reset(history: Turn[] = []) {
     this.cancel();
@@ -204,7 +218,10 @@ export class Conversation {
     if (role === "assistant")
       this.noteAnswer(turns.find((turn) => turn.id === id)!.text);
     else {
-      if (this.delegation) this.pending?.abort();
+      const latest = turns.find((turn) => turn.id === id)!.text;
+      const repeatedPause =
+        shortPauseRequest(this.submittedText) && shortPauseRequest(latest);
+      if (this.pending && !repeatedPause) this.pending.abort();
       this.scheduleQuestion(120);
     }
   }
@@ -233,11 +250,25 @@ export class Conversation {
       const latest = this.turns
         .filter((turn) => turn.role === "user")
         .at(-1)?.text;
+      if (
+        this.pending &&
+        !this.pending.signal.aborted &&
+        shortPauseRequest(this.submittedText) &&
+        shortPauseRequest(latest ?? "")
+      )
+        return;
       // Live delegates as soon as it has an actionable clause. Do not wait for
       // local VAD speech-end; later transcript deltas cancel stale work.
-      if (latest?.trim() && latest !== this.submittedText && this.delegation) {
+      const pauseCandidate =
+        this.host.playerInput()?.source === "voice" &&
+        shortPauseRequest(latest ?? "");
+      if (
+        latest?.trim() &&
+        latest !== this.submittedText &&
+        (this.delegation || pauseCandidate)
+      ) {
         this.submittedText = latest;
-        void this.answer(this.delegation);
+        void this.answer(this.delegation, true);
       }
     });
   }
@@ -336,6 +367,7 @@ export class Conversation {
       once: true,
     });
     this.host.voice()?.setWorking(true);
+    this.host.log("Backend intent request started");
     this.host.changed();
     try {
       const state = this.host.playback();
@@ -356,6 +388,7 @@ export class Conversation {
       progress.close();
       if (!valid()) return;
       if (result.revision !== revision) throw Error("回答轮次不匹配，请重试");
+      this.host.log(`Backend intent: ${result.action}`);
       if (result.action === "wait") {
         this.host
           .voice()

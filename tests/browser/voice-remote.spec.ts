@@ -1,11 +1,9 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { mockPlayer } from "./remote-fixture";
 
 test.use({ locale: "en-US" });
 
-test("Live delegation streams NDJSON controls without pausing for incidental speech or rate changes", async ({
-  page,
-}) => {
+async function setupRemote(page: Page) {
   await mockPlayer(page);
   let transcriptions = 0;
   const inputs: any[] = [];
@@ -47,7 +45,7 @@ test("Live delegation streams NDJSON controls without pausing for incidental spe
     const text = q.history.at(-1).text as string;
     const commands = text.includes("slower")
       ? [{ type: "adjust_rate", direction: "slower" }]
-      : text.includes("pause")
+      : text.includes("pause") || /wait/i.test(text)
         ? [{ type: "pause" }]
         : text.includes("resume")
           ? [{ type: "play" }]
@@ -130,6 +128,34 @@ test("Live delegation streams NDJSON controls without pausing for incidental spe
   await expect
     .poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused))
     .toBe(false);
+  return { audio, inputs, errors, transcriptions: () => transcriptions };
+}
+
+test("short Live input pauses through NDJSON without local onset or delegation", async ({
+  page,
+}) => {
+  const { audio, inputs, transcriptions } = await setupRemote(page);
+  // Leave the synthetic microphone silent: local onset must not gate Live input.
+  await page.evaluate(() =>
+    (window as any).remoteChannel.send(
+      JSON.stringify({
+        type: "session.input_transcript.delta",
+        delta: "Wait, wait!",
+      }),
+    ),
+  );
+  await expect
+    .poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(true);
+  expect(inputs).toHaveLength(1);
+  expect(inputs[0].history.at(-1).text).toBe("Wait, wait!");
+  expect(transcriptions()).toBe(0);
+});
+
+test("Live delegation streams NDJSON controls without pausing for incidental speech or rate changes", async ({
+  page,
+}) => {
+  const { audio, inputs, errors, transcriptions } = await setupRemote(page);
   const speak = async (text: string, id: string) => {
     await page.evaluate(() => {
       const { gain, ctx } = (window as any).remoteMic;
@@ -191,7 +217,7 @@ test("Live delegation streams NDJSON controls without pausing for incidental spe
   await expect
     .poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused))
     .toBe(false);
-  expect(transcriptions).toBe(0);
+  expect(transcriptions()).toBe(0);
   expect(errors).toEqual([]);
   await page.getByRole("button", { name: "Pause", exact: true }).click();
 });

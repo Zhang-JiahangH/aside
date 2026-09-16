@@ -625,6 +625,97 @@ async function liveInput(
   s.clock.advance(0);
 }
 
+test("Live speech is retained when the local detector misses a short utterance", async () => {
+  const s = setup("auto");
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onTranscript("user", "Wait, wait!");
+  s.callbacks.onDelegation("before-local-vad");
+  s.clock.advance(0);
+  assert.equal(s.requests.length, 1);
+  assert.equal(s.requests[0].data.history.at(-1)?.text, "Wait, wait!");
+  assert.equal(s.requests[0].data.player?.source, "voice");
+  assert.equal(s.audio.playing, true);
+  // A late local onset must not erase the transcript or cancel its request.
+  s.callbacks.onSpeech(true);
+  assert.equal(s.requests[0].signal.aborted, false);
+  remoteResult(s, 0, [{ type: "pause" }]);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
+test("a delegation preceding both transcript and local speech is retained", async () => {
+  const s = setup("auto");
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onDelegation("first");
+  s.callbacks.onTranscript("user", "Please pause the podcast");
+  s.clock.advance(120);
+  assert.equal(s.requests.length, 1);
+  remoteResult(s, 0, [{ type: "pause" }]);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
+test("repeated wait reaches the backend without delegation and does not starve its pending decision", async () => {
+  const s = setup("auto");
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onSpeech(true);
+  s.callbacks.onTranscript("user", "Wait, wait");
+  s.clock.advance(120);
+  assert.equal(s.requests.length, 1);
+  s.callbacks.onSpeech(false);
+  s.callbacks.onSpeech(true);
+  s.callbacks.onTranscript("user", ", wait!");
+  s.callbacks.onDelegation("late-delegation");
+  s.clock.advance(500);
+  assert.equal(s.requests.length, 1);
+  assert.equal(s.requests[0].signal.aborted, false);
+  remoteResult(s, 0, [{ type: "pause" }]);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
+test("short-command fallback still lets the backend ignore speech to somebody else", async () => {
+  const s = setup("auto");
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onSpeech(true);
+  s.callbacks.onTranscript("user", "Hold on");
+  s.clock.advance(120);
+  assert.equal(s.requests.length, 1);
+  s.requests[0].resolve({
+    revision: s.requests[0].data.revision,
+    action: "ignore",
+    answer: "",
+    tools: [],
+    sources: [],
+  });
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.session.getSnapshot().history.length, 0);
+  s.session.dispose();
+});
+
+test("a correction to a short pause request cancels the old interpretation", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Wait", "pause-candidate");
+  s.callbacks.onTranscript("user", " for me outside, honey");
+  assert.equal(s.requests[0].signal.aborted, true);
+  remoteResult(s, 0, [{ type: "pause" }]);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
 test("given ongoing speech, a Live delegation adjusts speed without pausing or waiting for speech end", async () => {
   const s = setup("auto");
   await liveInput(s, "Could you slow the podcast down");

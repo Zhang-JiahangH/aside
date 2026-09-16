@@ -70,6 +70,7 @@ export class ListeningSession {
   private playerConfig: PlayerConfig;
   private input?: PlayerInput;
   private inputSpeaking = false;
+  private liveInputBeforeVad = false;
   private appliedCommands = new Set<string>();
   private playback = initialPlayback();
   private episode?: Episode;
@@ -350,6 +351,7 @@ export class ListeningSession {
     this.sendContext(true);
   }
   private beginInput(source: "text" | "voice") {
+    this.liveInputBeforeVad = false;
     this.input = {
       turnId: crypto.randomUUID(),
       source,
@@ -620,6 +622,17 @@ export class ListeningSession {
     const valid = () => this.voiceGeneration === generation;
     const acceptsInput = () =>
       valid() && !!this.input && !this.playback.resumeRequested;
+    const acceptLiveInput = () => {
+      if (!valid() || this.playback.resumeRequested) return false;
+      // Native Live recognition is independent of the local speech detector.
+      // Short/quiet utterances and delegation may arrive before local onset.
+      if (!this.input && this.mode === "auto" && voice.isWarm) {
+        this.beginInput("voice");
+        this.conversation.beginTurn(!this.playback.interruption);
+        this.liveInputBeforeVad = true;
+      }
+      return !!this.input;
+    };
     const usage = (seconds: number, sessionId: string, finalized: boolean) => {
       if (sessionId)
         void this.backend
@@ -652,8 +665,16 @@ export class ListeningSession {
         onSpeech: (active) => {
           if (!valid()) return;
           this.inputSpeaking = active;
+          this.log(active ? "Local speech started" : "Local speech ended");
           if (active) {
             this.connectionKind = voice.isWarm ? "warm" : "cold";
+            if (
+              this.mode === "auto" &&
+              (this.liveInputBeforeVad || this.conversation.pendingPause)
+            ) {
+              this.liveInputBeforeVad = false;
+              return;
+            }
             if (this.mode !== "manual" || !this.input) this.beginInput("voice");
             if (this.mode === "manual") this.interrupt();
             else {
@@ -697,14 +718,20 @@ export class ListeningSession {
           }
         },
         onTranscript: (role, text) => {
+          if (role === "user" && !text.trim()) return;
+          if (role === "user" && text.trim() && valid())
+            this.log(
+              `Live input transcript received (${text.length} characters)`,
+            );
           if (
-            acceptsInput() &&
+            (role === "user" ? acceptLiveInput() : acceptsInput()) &&
             (role === "user" || !!this.playback.interruption)
           )
             this.conversation.transcript(role, text);
         },
         onDelegation: (id) => {
-          if (acceptsInput()) this.conversation.delegate(id);
+          if (valid()) this.log("Live delegation received");
+          if (acceptLiveInput()) this.conversation.delegate(id);
         },
         onError: (message) => {
           if (!valid()) return;
