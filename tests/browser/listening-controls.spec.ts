@@ -44,7 +44,7 @@ async function openDemo(page: Page) {
     }),
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /给思考留一点空间/ }).click();
+  await page.getByRole("link", { name: /给思考留一点空间/ }).click();
 }
 
 async function ask(page: Page, text = "为什么？") {

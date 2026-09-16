@@ -1,3 +1,4 @@
+import { withKeepListeningHint } from "./recovery-message";
 import {
   type Episode,
   type PlaybackState,
@@ -480,7 +481,9 @@ export class Conversation {
         this.delegation = undefined;
         this.host.textAnswered();
         this.host.error(
-          `${error instanceof Error ? error.message : String(error)}。可以继续听节目，或重新尝试提问。`,
+          withKeepListeningHint(
+            error instanceof Error ? error.message : String(error),
+          ),
         );
         if ((delegationId || speak) && this.host.playback().interruption)
           this.host

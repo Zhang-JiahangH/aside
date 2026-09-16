@@ -33,9 +33,18 @@ import { CloudStore } from "./store.js";
 import { HttpError, json, readBody, readJson } from "./http.js";
 import { startAnalysis, uploadRoute } from "./uploads.js";
 import { accountFromRequest, authRoute } from "./auth.js";
-import { cleanupDeletedEpisode, cleanupStaleUploads, spaceRoute } from "./space.js";
-import { RETENTION_DAYS, adminUsageRoute, recordQuestionUsage } from "./usage.js";
+import {
+  cleanupDeletedEpisode,
+  cleanupStaleUploads,
+  spaceRoute,
+} from "./space.js";
+import {
+  RETENTION_DAYS,
+  adminUsageRoute,
+  recordQuestionUsage,
+} from "./usage.js";
 import { rollupDailyStats } from "./stats.js";
+import { isShellRoute, seoRoute } from "./seo.js";
 
 async function audio(request: Request, env: Env, id: string, mime: string) {
   const key = `episodes/${id}/original`;
@@ -442,7 +451,20 @@ export default {
     ctx: ExecutionContext,
   ): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (!path.startsWith("/api/")) return env.ASSETS.fetch(request);
+    if (!path.startsWith("/api/")) {
+      try {
+        const seo = await seoRoute(request, env);
+        if (seo) return seo;
+      } catch {
+        // The search-engine surface must never take the app down. Shell routes
+        // have no static file of their own, so hand back the root document;
+        // anything else keeps its honest answer from the asset binding.
+        return isShellRoute(path)
+          ? env.ASSETS.fetch(new URL("/", request.url).toString())
+          : env.ASSETS.fetch(request);
+      }
+      return env.ASSETS.fetch(request);
+    }
     try {
       // Before session/account work: an operator CLI is not a listener and must
       // not be issued a trial identity or a cookie.

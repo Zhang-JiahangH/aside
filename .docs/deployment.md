@@ -139,6 +139,18 @@ npm run db:cloudflare:production
 
 `npm run check`、69 项项目测试和 2 项语言浏览器用例通过，生产构建产物包含四个静态文件。生产 Worker `89f194eb-bed9-46c3-bb39-3bfbe60f8b46` 已接收 100% 流量（`--containers-rollout=none`，保留现有 Container）。正式域名 `/`、`/robots.txt`、`/sitemap.xml`、`/llms.txt`、`/og-image.png` 均 HTTP 200，MIME 依次为 `text/html`、`text/plain`、`application/xml`、`text/plain`、`image/png`；`/api/health` 200 且 `uploadsEnabled=true`。浏览器实测中英文 title/robots/canonical 以及 `/space` 的 noindex 均生效。`/space` 的 noindex 仍由客户端注入，不执行 JS 的爬虫看不到，后续可改由 Worker 返回 `X-Robots-Tag`。
 
+2026-09-15（第二轮，实现与本地验证；2026-09-16 随 `0a32719` 发布）：上一轮的客户端注入对不执行 JS 的爬虫无效，且整站正文、公共音频都只存在于 JS 里，六条样例没有可索引的独立 URL。本轮把 SEO 表层移到 Worker：
+
+- `cloudflare/src/seo.ts` 接管 HTML 路由：`/`（英文）、`/zh`（中文）、`/episodes/<id>`、`/space`、`/sitemap.xml`，`/en` 301 到 `/`。`http://asidefm.com/...` 301 到 https（只对正式域名生效，本地 http 开发不受影响）。
+- `cloudflare/src/seo-html.ts` 是纯字符串构建层（head 片段、JSON-LD、sitemap、爬虫可见正文），不含 D1 依赖，便于在根 TypeScript 程序里类型检查。
+- `frontend/index.html` 用 `<!--aside:seo:head:start/end-->` 与 `<!--aside:seo:body:start/end-->` 标出按路由替换的区域；Vite 构建保留这两组注释。Worker 用真实公共音频替换正文：首页是 hero 文案加每条录音的 `<a href="/episodes/<id>">`，节目页是标题、作者/出版方/许可/来源、摘要与前 6 段逐字稿。
+- 结构化数据：首页 `WebSite` + `WebApplication` + `ItemList`；节目页 `PodcastEpisode`（`AudioObject` 含 `contentUrl` 与 ISO 8601 时长、`author`、`publisher`、`license`、`isBasedOn`）。节目页的语言取自录音本身（`attribution.language` 为 zh 时 `<html lang="zh-CN">`、`og:locale=zh_CN`、逐字稿小标题为「逐字稿」），与其 JSON-LD 的 `inLanguage` 一致。`hreflang` 为 en `/`、zh `/zh`、x-default `/`。未加 `FAQPage`：站上没有真实问答内容，凭空造会违反结构化数据政策。
+- `sitemap.xml` 改为 Worker 动态生成（首页、`/zh`、每条公共音频带 `lastmod`），删除静态文件；`robots.txt` 注释改为说明 `/space` 由 `X-Robots-Tag` 保护。
+- `wrangler.jsonc` 与 `wrangler.production.jsonc`：`not_found_handling` 从 `single-page-application` 改为 `none`，`run_worker_first` 改为 `true`。前者修掉任意路径返回 200 的软 404，后者保证每条 HTML 路由都经过 Worker——用 glob 数组时实测 `/zh`、`/space`、`/sitemap.xml` 不会进入 Worker，会被静态资源当作 404。
+- 前端：`i18n.ts` 从路径前缀取界面语言（`/zh` 优先于浏览器与本地偏好），canonical 按当前路径生成；`/episodes/<id>` 成为真实地址，旧的 `/?episode=<id>` 仍可打开并被改写为新地址；样例卡从 `<button>` 改为 `<a href>`，中键/新标签可打开。
+
+本地验证：`npm run check`、`npm test`（160 项）、`npm run build`、`npm run test:cloudflare`（34 项，含新增 `tests/cloudflare/assets.test.mjs`——它按 `wrangler.jsonc` 的真实 `assets` 配置跑一遍，确认 `/`、`/zh`、`/sitemap.xml`、`/space`、`/episodes/<id>` 都由 Worker 处理，未知路径返回 404，静态资源仍 200）。Chrome 回归：i18n、player-config、landing、library-drawer、player、trial、listening-controls 通过。`public-samples.spec.ts`（期望 6 条样例，本地库有 12 条）与 `vad.spec.ts` 两项在改动前用 `git stash` 对照后同样失败，属本地数据/环境问题，与本轮无关。**尚未部署到生产**，未在生产域名验证。
+
 ## 公开音频库换成两段历史录音
 
 2026-09-14：公开音频库原有 9 条英文播客节选（VOA 三条、EFF 两条、NASA 两条、FOSS and Crafts、Hacker Public Radio）全部下架，改为两段美国政府录音：JFK 1962-09-12 莱斯大学登月演说节选 3:48（`jfk-rice-moon`，源 archive.org `jfks19620912`）与里根 1987-06-12 勃兰登堡门演说节选 2:13（`reagan-brandenburg-gate`，源 NARA catalog 7087579，WHCA 带号 PP7163C）。两者都是联邦机构录音，按 17 U.S.C. §105 属公有领域；来源、区间、源与节选 SHA-256 见 [public-samples.md](public-samples.md)。
@@ -317,3 +329,42 @@ node scripts/admin-usage.mjs --days 30 --json
 指标含义见 `aside-usage` skill。要注意 `trial_visitors_*` 统计的是**真正走到付费路径**的访客（提问或开语音），不是页面访问量——匿名访客在消耗配额之前不落库。页面浏览量需要另外开 Cloudflare Web Analytics，目前没开。
 
 一个 SQLite 细节：`INSERT … SELECT` 后面跟 `ON CONFLICT` 时，如果 SELECT 是 `UNION ALL` 复合查询且末支没有 `WHERE`，解析器无法区分 `ON CONFLICT` 和 join 的 `ON`，会报 `near "DO": syntax error`。`stats.ts` 里那句 `WHERE true` 是必需的，不是冗余。
+
+
+## 全站 AI 停摆：语音熔断不会过期（2026-09-16）
+
+2026-09-16 约 01:27Z 起，正式域名所有访客都无法提问或开语音，页面提示「AI trials are temporarily paused. You can keep listening.」，播放不受影响。持续时间约 5.5 小时，直到下面两个修复发布。
+
+诊断（都是只读查询）：`GET /api/trial` 返回 `enabled:false`；`GET /api/health` 返回 `liveConfigured:true`，而该字段包含 `AI_ENABLED !== "false"`，所以代码级开关是开的。`trial_control.enabled` = 1，不是人工紧急开关。`trial_breakers` 有 1 行，owner `8db79077-1027-4c09-a036-4eb6b38fe686`（匿名访客），其 live 租约创建于 `2026-09-16T01:28:46Z` 且从未释放，`voice_usage` 对应会话 `finalized=0`。
+
+根因：`enabled()` 用 `SELECT owner FROM trial_breakers LIMIT 1` 判断，**任意一行就让全站暂停**；而 `LiveSupervisor` 只有在拿到供应商 `session.closed` 时才清除该行。会话被供应商丢弃后 `attach()` 永远失败，alarm 每 5 秒重试一次并重新写入熔断行，形成不会自愈的全局停摆。五分钟 Cron 不清理 `trial_breakers`，人工删行会在 5 秒内被写回。
+
+修复（两次发布）：
+
+- `74e9045`：`attach()` 把供应商 404 视为终态（`SessionGone`），走 `retire()` 释放熔断、租约与 DO 状态。发布后仍未恢复 → 说明该会话的失败**不是** 404（是超时或其他状态），这条只覆盖了「供应商明确说会话不存在」的情况。Worker `7bbe7dcf-4fb3-43d2-acb8-933839533a7e`。
+- `dd2ce2c`：把「无法确认关闭」从永久改成有界——deadline 后 15 分钟仍无法确认即释放，并 `console.error` 记录原因；释放时**不**把 usage 标为 finalized，供运维继续核对。Worker `a2c82296-c942-4f87-9329-d1c7c18a9797`。
+
+发布后验证：`/api/trial` 返回 `enabled:true`；`trial_breakers` 0 行、live 租约 0 行、`voice_usage` 未确认会话仍为 1 行（保留证据）。清理动作最后一次 `DELETE FROM trial_breakers` 影响 0 行，说明是 DO 的新代码自己清的，不是人工删除。
+
+测试：`npm run check`、161 项单测、37 项 Worker 集成通过。新增 3 条用例覆盖「供应商丢弃会话」「宽限窗口内保留熔断」「超过宽限窗口释放」。第一条做了对照验证：把 `live-supervisor.ts` 还原后该用例失败，加上才通过。
+
+仍然没有边界的一处（未改动，符合现有文档）：`startSession()` 创建结果不明、`state` 里没有 session id 时，`tick()` 会写熔断并 `deleteAlarm()`，之后没有任何代码会清除它，只能人工核对。本次事故的 DO 也呈现「alarm 已停」的特征（`wrangler tail` 30 秒内没有 alarm 事件）。若要彻底消除全站停摆，需要让这条路径同样具备人工可见的告警或超时释放。
+
+未验证：没有用真实麦克风走完一次语音会话（需要 Turnstile 与真机），因此「修复后访客能正常开语音」只由 `enabled:true` 与租约/熔断清零推断。
+
+
+## SEO 第二轮与语音熔断的第三次修复：发布与线上验收（2026-09-16）
+
+发布内容：`0a32719`（SEO 第二轮 + 文案重复修复）与 `488b6c8`（「创建结果不明」的全局熔断同样有界）。Worker `9d32021f-ef3a-4034-9bc5-008a83ff9a8d`，`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container），上传 6 个新文件（含新的前端 bundle 与四个静态 SEO 文件）。`main` 已同步 origin。
+
+线上验收 14 项全部通过（curl，正式域名）：
+
+- `/` 返回注入后的 HTML：`<link rel="canonical" href="https://asidefm.com/" />`，并含 6 条英文录音的 `<a href="/episodes/...">`。
+- `/zh` 返回 `<html lang="zh-CN">` 与 `hreflang="zh"`，列出 8 条录音；`阿Q正传` 只出现在中文页，英文页为 0——与 `languageVisibility` 的过滤一致。
+- `/sitemap.xml` 含 `https://asidefm.com/episodes/<id>`；节目页返回 `"@type":"PodcastEpisode"` 且 canonical 自指。
+- `/episodes/does-not-exist` 与 `/no-such-page` 均 404（软 404 已消除）；`/space` 带 `X-Robots-Tag: noindex, nofollow`。
+- `/robots.txt`、静态资源 200；`http://asidefm.com/` 301 到 https；`/api/trial` 返回 `enabled:true`。
+
+未验证：仍未用真实麦克风走完一次语音会话（需要 Turnstile 与真机），因此「访客能正常开语音」只由 `enabled:true`、熔断与租约清零推断。
+
+至此 `trial_breakers` 的三条写入路径都有界：供应商 404（`74e9045`）、attach 无法确认（`dd2ce2c`，deadline 后 15 分钟）、创建结果不明（`488b6c8`，同样 15 分钟且保留租约作为痕迹）。三条都会 `console.error` 记录原因。

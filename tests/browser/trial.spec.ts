@@ -118,7 +118,7 @@ for (const locale of ["zh-CN", "en-US"]) {
       await page.goto("/");
       // Health config is installed before the library loads; do not race app bootstrap.
       await expect(
-        page.getByRole("button", { name: /给思考留一点空间/ }),
+        page.getByRole("link", { name: /给思考留一点空间/ }),
       ).toBeVisible();
       await page.evaluate(async () => {
         // @ts-expect-error Browser Vite module URL

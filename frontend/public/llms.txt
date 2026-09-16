@@ -15,6 +15,8 @@ transcripts and per-audio conversation history.
 ## Main
 
 - [Aside web app](https://asidefm.com/): public sample library, voice interruption, transcript and conversation, personal space after sign-in.
+- [Aside 中文界面](https://asidefm.com/zh): the same app with a Chinese interface; the English page is the site root.
+- Each public recording has its own page, e.g. [阿Q正传](https://asidefm.com/episodes/luxun-ah-q) and [We Choose to Go to the Moon](https://asidefm.com/episodes/jfk-rice-moon): title, author, publisher, licence, source and the opening of the transcript. The list is in [sitemap.xml](https://asidefm.com/sitemap.xml).
 - [Source repository](https://github.com/qiz029/aside): TypeScript monorepo (engine, backend, frontend, Cloudflare worker), Apache-2.0.
 
 ## Optional

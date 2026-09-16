@@ -69,6 +69,11 @@ export function libraryFor(episodes: Episode[], locale: Locale): Episode[] {
   );
 }
 
+/** Public, indexable URL of one recording; the Worker serves a page there. */
+export function episodeHref(id: string) {
+  return `/episodes/${encodeURIComponent(id)}`;
+}
+
 export function audioCard(episode: Episode): AudioLibraryItem {
   const seconds = Math.floor(episode.durationMs / 1000);
   return {

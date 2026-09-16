@@ -1,3 +1,4 @@
+import { withKeepListeningHint } from "./recovery-message";
 import {
   initialPlayback,
   transition,
@@ -71,6 +72,10 @@ export class ListeningSession {
   private conversation: Conversation;
   private listeners = new Set<() => void>();
   private changingEpisode = false;
+  private restoringMedia = false;
+  private mediaRevision = 0;
+  private playAfterRestore?: () => void;
+  private loadingTimeout?: () => void;
   private view: ReturnType<ListeningSession["snapshot"]>;
   constructor(
     private audio: PodcastAudio,
@@ -179,6 +184,9 @@ export class ListeningSession {
     this.changingEpisode = true;
     try {
       this.stop();
+      this.mediaRevision++;
+      this.restoringMedia = true;
+      this.positioning = undefined;
       this.episode = episode;
       this.playback = initialPlayback(
         clampPlayerPosition(
@@ -228,11 +236,31 @@ export class ListeningSession {
   }
   metadataLoaded() {
     this.audio.configure(this.playerConfig);
-    void this.positionAudio(this.playback.positionMs)?.catch((error) =>
-      this.setError(String(error)),
-    );
+    const revision = ++this.mediaRevision;
+    const ready = () => {
+      if (revision !== this.mediaRevision) return;
+      this.restoringMedia = false;
+      this.loadingTimeout?.();
+      this.loadingTimeout = undefined;
+      const play = this.playAfterRestore;
+      this.playAfterRestore = undefined;
+      play?.();
+    };
+    try {
+      this.positioning = this.positionAudio(this.playback.positionMs);
+      if (this.positioning)
+        void this.positioning.then(ready).catch((error) => {
+          if (revision === this.mediaRevision) this.setError(String(error));
+        });
+      else ready();
+    } catch (error) {
+      this.setError(String(error));
+    }
   }
   audioTick() {
+    // Native status can arrive before loaded-metadata and while seek is pending.
+    // Keep the restored checkpoint authoritative until media reaches it.
+    if (this.restoringMedia) return;
     this.dispatch({ type: "tick", atMs: this.audio.positionMs });
     this.sendContext();
   }
@@ -452,18 +480,40 @@ export class ListeningSession {
       this.dispatch({ type: "play" });
       this.voice?.mute(true);
       const revision = this.playback.revision;
-      void (
-        this.positioning
-          ? this.positioning.then(() => this.audio.play())
-          : this.audio.play()
-      ).catch((error) => {
+      const play = () => {
+        if (
+          this.playback.revision === revision &&
+          this.playback.mode === "playing"
+        )
+          return this.audio.play();
+      };
+      const failed = (error: unknown) => {
         if (this.playback.revision !== revision) return;
         this.stop();
         this.setError(String(error));
-      });
+      };
+      if (this.restoringMedia) {
+        this.playAfterRestore = () => {
+          void play()?.catch(failed);
+        };
+        this.loadingTimeout?.();
+        this.loadingTimeout = this.clock.after(30000, () =>
+          failed(
+            Error(
+              "Audio loading timed out. Check your connection and try again.",
+            ),
+          ),
+        );
+      } else
+        void (this.positioning ? this.positioning.then(play) : play())?.catch(
+          failed,
+        );
     }
   }
   stop() {
+    this.playAfterRestore = undefined;
+    this.loadingTimeout?.();
+    this.loadingTimeout = undefined;
     this.active = false;
     this.cancelWork();
     this.input = undefined;
@@ -776,7 +826,7 @@ export class ListeningSession {
             this.answerEnded();
             this.conversation.hold();
           }
-          this.setError(`${message}。可以继续听节目，或重新尝试提问。`);
+          this.setError(withKeepListeningHint(message));
           this.log(message);
         },
         onUsage: (seconds, sessionId) => usage(seconds, sessionId, false),

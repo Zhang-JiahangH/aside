@@ -1,10 +1,10 @@
 import { LibraryDrawer } from "./LibraryDrawer";
-import { audioCard, libraryFor } from "./library-item";
+import { audioCard, episodeHref, libraryFor } from "./library-item";
 import { Landing } from "./Landing";
 import { AccountControl } from "./AccountControl";
 import { Space } from "./Space";
 import { PlayerView } from "./PlayerView";
-import { t, useLocale, message } from "./i18n";
+import { homeHref, t, useLocale, message } from "./i18n";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { usePlayerController } from "./usePlayerController";
@@ -36,10 +36,18 @@ function App() {
         setAccountUser(data.user),
       )
       .catch(() => {});
-    const selected = new URLSearchParams(location.search).get("episode");
-    if (selected && /^[a-zA-Z0-9-]+$/.test(selected)) {
+    // /episodes/<id> is the indexable address; ?episode=<id> is the older
+    // share link and still resolves to it.
+    const fromPath = /^\/episodes\/([a-zA-Z0-9-]+)\/?$/.exec(
+      location.pathname,
+    )?.[1];
+    const fromQuery = new URLSearchParams(location.search).get("episode");
+    const selected =
+      fromPath ??
+      (fromQuery && /^[a-zA-Z0-9-]+$/.test(fromQuery) ? fromQuery : undefined);
+    if (selected) {
       if (location.pathname !== "/space")
-        window.history.replaceState(null, "", "/");
+        window.history.replaceState(null, "", episodeHref(selected));
       void load(selected).catch((cause) => setError(cause.message));
     }
   }, []);
@@ -53,9 +61,7 @@ function App() {
   if (location.pathname === "/space")
     return (
       <Space
-        publicHref={
-          episodes[0] ? `/?episode=${encodeURIComponent(episodes[0].id)}` : "/"
-        }
+        publicHref={episodes[0] ? episodeHref(episodes[0].id) : homeHref()}
         accountControl={<AccountControl onAuthChanged={accountUpdated} />}
         accountVersion={accountVersion}
         activeEpisodeId={episode?.id}
@@ -93,7 +99,10 @@ function App() {
         accountControl={
           <AccountControl onAuthChanged={accountUpdated} enterSpace />
         }
-        open={(id) => void enter(id).catch((error) => setError(error.message))}
+        open={(id) => {
+          window.history.replaceState(null, "", episodeHref(id));
+          void enter(id).catch((error) => setError(error.message));
+        }}
       />
     );
 
@@ -104,7 +113,7 @@ function App() {
         onAuthChanged={accountUpdated}
         navigation={
           <>
-            <a className="brand" href="/" aria-label="Aside">
+            <a className="brand" href={homeHref()} aria-label="Aside">
               <span className="brand-word">Aside</span>
               <img
                 className="brand-mark"
@@ -117,9 +126,10 @@ function App() {
               collection="public"
               items={libraryFor(episodes, locale).map(audioCard)}
               label={t("公共音频库")}
-              onOpen={(id) =>
-                void playEpisode(id).catch((error) => setError(error.message))
-              }
+              onOpen={(id) => {
+                window.history.replaceState(null, "", episodeHref(id));
+                void playEpisode(id).catch((error) => setError(error.message));
+              }}
             />
           </>
         }

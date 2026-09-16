@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Episode } from "@aside/engine/core";
 import { t, useLocale } from "./i18n";
-import { languageBadge } from "./library-item";
+import { episodeHref, languageBadge } from "./library-item";
 import "./sample-rail.css";
 
 export function SampleRail({
@@ -50,10 +50,24 @@ export function SampleRail({
           const duration = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
           return (
             <li key={episode.id}>
-              <button
+              <a
                 className="sample-panel"
+                href={episodeHref(episode.id)}
                 aria-label={`${t("选择音频")} ${episode.title}`}
-                onClick={() => onOpen(episode.id)}
+                onClick={(event) => {
+                  // Modified clicks keep the real URL so it can be opened in a
+                  // new tab; a plain click stays inside the player.
+                  if (
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey ||
+                    event.button !== 0
+                  )
+                    return;
+                  event.preventDefault();
+                  onOpen(episode.id);
+                }}
               >
                 <span className="sample-panel-meta">
                   <span>{episode.attribution?.publisher || "Aside"}</span>
@@ -83,7 +97,7 @@ export function SampleRail({
                     </svg>
                   </span>
                 </span>
-              </button>
+              </a>
             </li>
           );
         })}

@@ -428,6 +428,21 @@
     background-position: -200% 0;
   }
 }
+/* The Worker serves the same list as links before React takes over. */
+.sample-list a {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  text-align: left;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  text-decoration: none;
+}
+.sample-list a > span:last-child {
+  margin-left: auto;
+}
 .sample-list button {
   display: flex;
   align-items: center;

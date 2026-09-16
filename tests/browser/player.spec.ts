@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
 
 test("transcript sentence cue seeks and starts playback in the bottom player", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /给思考留一点空间/ }).click();
+  await page.getByRole("link", { name: /给思考留一点空间/ }).click();
   const transcript = page.getByRole("region", { name: "文字稿" });
   const passages = (await (await page.request.get("/api/episodes/demo-natural-resume")).json()).analysis.passages as { startMs: number }[];
   const line = transcript.locator(".transcript-line").nth(4);
@@ -82,7 +82,7 @@ test("real demo playback, interruption, sentence rewind and responsive layout", 
   await expect(
     page.getByRole("heading", { name: /对话发生过，.*你依然可以加入。/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /给思考留一点空间/ }).click();
+  await page.getByRole("link", { name: /给思考留一点空间/ }).click();
   await expect(
     page.getByRole("heading", { name: "给思考留一点空间" }),
   ).toBeVisible();
@@ -285,7 +285,7 @@ test("automatic listening preconnects; speech during startup uses WAV fallback w
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: /给思考留一点空间/ }).click();
+  await page.getByRole("link", { name: /给思考留一点空间/ }).click();
   await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
   await page.getByRole("button", { name: "播放", exact: true }).click();
   await expect.poll(() => creates).toBe(1);
@@ -458,7 +458,7 @@ for (const manual of [false]) {
       });
     });
     await page.goto("/");
-    await page.getByRole("button", { name: /给思考留一点空间/ }).click();
+    await page.getByRole("link", { name: /给思考留一点空间/ }).click();
     await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
     await page.getByRole("button", { name: "播放", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "● 语音交流中" })).toBeVisible();

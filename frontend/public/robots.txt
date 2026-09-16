@@ -1,7 +1,8 @@
 User-agent: *
 Allow: /
 
-# API responses are JSON; /space is a signed-in page that carries a noindex meta tag.
+# API responses are JSON; /space is a signed-in page. The Worker answers it
+# with an X-Robots-Tag: noindex header.
 Disallow: /api/
 
 Sitemap: https://asidefm.com/sitemap.xml

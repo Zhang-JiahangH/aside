@@ -5,15 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" sizes="any" href="/aside-mark.svg" />
 
-    <title>Aside · Interrupt a podcast, ask out loud, keep listening</title>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Aside" />
+    <meta property="og:image" content="https://asidefm.com/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta
-      name="description"
-      content="Aside is a podcast player you can talk back to: interrupt an episode to ask by voice, keep the conversation going, and resume from a complete sentence."
+      property="og:image:alt"
+      content="Aside — a podcast player you can talk back to"
     />
-    <link rel="canonical" href="https://asidefm.com/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://asidefm.com/og-image.png" />
     <meta
-      name="robots"
-      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+      name="twitter:image:alt"
+      content="Aside — a podcast player you can talk back to"
     />
     <meta
       name="theme-color"
@@ -26,9 +32,26 @@
       media="(prefers-color-scheme: dark)"
     />
 
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Aside" />
-    <meta property="og:url" content="https://asidefm.com/" />
+    <!--
+      Everything between the two seo:head markers describes one route: title,
+      description, canonical, robots, hreflang, social titles and JSON-LD. The
+      Worker replaces the whole block per request; the values below are the
+      defaults a static host would serve.
+    -->
+    <!--aside:seo:head:start-->
+    <title>Aside · Interrupt a podcast, ask out loud, keep listening</title>
+    <meta
+      name="description"
+      content="Aside is a podcast player you can talk back to: interrupt an episode to ask by voice, keep the conversation going, and resume from a complete sentence."
+    />
+    <link rel="canonical" href="https://asidefm.com/" />
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+    <link rel="alternate" hreflang="en" href="https://asidefm.com/" />
+    <link rel="alternate" hreflang="zh" href="https://asidefm.com/zh" />
+    <link rel="alternate" hreflang="x-default" href="https://asidefm.com/" />
     <meta
       property="og:title"
       content="Aside · Interrupt a podcast, ask out loud, keep listening"
@@ -37,18 +60,9 @@
       property="og:description"
       content="Aside is a podcast player you can talk back to: interrupt an episode to ask by voice, keep the conversation going, and resume from a complete sentence."
     />
-    <meta property="og:image" content="https://asidefm.com/og-image.png" />
-    <meta property="og:image:type" content="image/png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta
-      property="og:image:alt"
-      content="Aside — a podcast player you can talk back to"
-    />
+    <meta property="og:url" content="https://asidefm.com/" />
     <meta property="og:locale" content="en_US" />
     <meta property="og:locale:alternate" content="zh_CN" />
-
-    <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
       content="Aside · Interrupt a podcast, ask out loud, keep listening"
@@ -57,12 +71,6 @@
       name="twitter:description"
       content="Aside is a podcast player you can talk back to: interrupt an episode to ask by voice, keep the conversation going, and resume from a complete sentence."
     />
-    <meta name="twitter:image" content="https://asidefm.com/og-image.png" />
-    <meta
-      name="twitter:image:alt"
-      content="Aside — a podcast player you can talk back to"
-    />
-
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -89,20 +97,29 @@
         ]
       }
     </script>
+    <!--aside:seo:head:end-->
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!--
+        Crawler-visible first paint. The Worker replaces this block with the
+        route's own text and links; the values below are the static defaults.
+      -->
+      <!--aside:seo:body:start-->
+      <main>
+        <h1>Aside · 可以插话的播客播放器</h1>
+        <p>
+          听到好奇的地方开口提问，Aside 结合前面听过的内容回答；聊完从完整的一句话接着听。
+        </p>
+        <p>
+          Aside is a podcast player you can talk back to: interrupt an episode to
+          ask by voice, keep the conversation going, and resume from a complete
+          sentence.
+        </p>
+      </main>
+      <!--aside:seo:body:end-->
+    </div>
     <noscript>
-      <h1>Aside · 可以插话的播客播放器</h1>
-      <p>
-        听到好奇的地方开口提问，Aside
-        结合前面听过的内容回答；聊完从完整的一句话接着听。
-      </p>
-      <p>
-        Aside is a podcast player you can talk back to: interrupt an episode to
-        ask by voice, keep the conversation going, and resume from a complete
-        sentence.
-      </p>
       <p>
         启用 JavaScript 即可播放示例并开始对话。Enable JavaScript to play the
         samples and start a conversation.
