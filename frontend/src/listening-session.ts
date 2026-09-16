@@ -29,6 +29,7 @@ import {
   type VoiceDependencies,
   type VoiceStatus,
 } from "./on-demand-voice";
+import { withKeepListeningHint } from "./i18n";
 import type { PlayerBackend, PlayerHealth } from "./player-api";
 import type { PodcastAudio } from "./podcast-audio";
 import { systemClock, type RuntimeClock } from "./runtime-clock";
@@ -754,7 +755,7 @@ export class ListeningSession {
             this.answerEnded();
             this.conversation.hold();
           }
-          this.setError(`${message}。可以继续听节目，或重新尝试提问。`);
+          this.setError(withKeepListeningHint(message));
           this.log(message);
         },
         onUsage: (seconds, sessionId) => usage(seconds, sessionId, false),

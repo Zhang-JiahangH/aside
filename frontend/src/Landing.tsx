@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import type { Episode } from "@aside/engine/core";
-import { t, useLocale } from "./i18n";
+import { homeHref, t, useLocale } from "./i18n";
 import { HeroSoundscape } from "./HeroSoundscape";
 import { ScrollStory } from "./ScrollStory";
 import { LanguageSelect } from "./LanguageSelect";
@@ -64,7 +64,7 @@ export function Landing({
   return (
     <div className="landing" ref={rootRef}>
       <header className="landing-nav">
-        <a className="brand" href="/" aria-label="Aside">
+        <a className="brand" href={homeHref()} aria-label="Aside">
           Aside
           <img
             className="brand-mark"

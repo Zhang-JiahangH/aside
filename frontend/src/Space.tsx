@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Episode } from "@aside/engine/core";
 import { MAX_AUDIO_DURATION_MS, MAX_UPLOAD_BYTES } from "@aside/engine/core";
 import { episodeLibrary, type SpacePage } from "./player-api";
-import { message, t } from "./i18n";
+import { homeHref, message, t } from "./i18n";
 import { LanguageSelect } from "./LanguageSelect";
 import "./space.css";
 import { audioCard } from "./library-item";
@@ -228,7 +228,7 @@ export function Space({
 
   const navigation = (
     <>
-      <a className="brand" href="/" aria-label="Aside">
+      <a className="brand" href={homeHref()} aria-label="Aside">
         <span className="brand-word">Aside</span>
         <img
           className="brand-mark"

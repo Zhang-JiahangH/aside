@@ -11,6 +11,15 @@ export function resolveLocale(
   }
   return "en";
 }
+/**
+ * The path prefix outranks the browser and the saved preference: a shared
+ * `/zh` link has to stay Chinese for whoever opens it.
+ */
+export function localeFromPath(pathname: string): Locale | undefined {
+  if (pathname === "/zh" || pathname.startsWith("/zh/")) return "zh";
+  if (pathname === "/en" || pathname.startsWith("/en/")) return "en";
+  return undefined;
+}
 function preference() {
   try {
     return localStorage.getItem("aside.locale");
@@ -18,23 +27,33 @@ function preference() {
     return null;
   }
 }
-let locale = resolveLocale(
-  typeof navigator === "undefined"
-    ? []
-    : navigator.languages?.length
-      ? navigator.languages
-      : [navigator.language],
-  preference(),
-);
+const pathLocale =
+  typeof location === "undefined"
+    ? undefined
+    : localeFromPath(location.pathname);
+let locale =
+  pathLocale ??
+  resolveLocale(
+    typeof navigator === "undefined"
+      ? []
+      : navigator.languages?.length
+        ? navigator.languages
+        : [navigator.language],
+    preference(),
+  );
 const listeners = new Set<() => void>();
 export function getLocale() {
   return locale;
 }
-const titles: Record<Locale, string> = {
+/** The indexable URL of the current interface language. */
+export function homeHref(next: Locale = locale) {
+  return next === "zh" ? "/zh" : "/";
+}
+export const titles: Record<Locale, string> = {
   zh: "Aside · 用语音打断播客，随口提问接着听",
   en: "Aside · Interrupt a podcast, ask out loud, keep listening",
 };
-const descriptions: Record<Locale, string> = {
+export const descriptions: Record<Locale, string> = {
   zh: "Aside 是一个可以插话的播客播放器：听到好奇的地方开口提问，AI 结合前文回答，聊完从完整的一句话接着听。",
   en: "Aside is a podcast player you can talk back to: interrupt an episode to ask by voice, keep the conversation going, and resume from a complete sentence.",
 };
@@ -47,6 +66,18 @@ const indexRobots =
 function setMeta(selector: string, content: string) {
   const element = document.head.querySelector(selector);
   if (element) element.setAttribute("content", content);
+}
+const site = "https://asidefm.com";
+/**
+ * Each public route carries its own canonical. `/space` has none: it is private
+ * and asks not to be indexed.
+ */
+export function canonicalFor(pathname: string): string | undefined {
+  if (pathname === "/space" || pathname.startsWith("/space/")) return undefined;
+  const episode = /^\/episodes\/[a-zA-Z0-9-]+/.exec(pathname);
+  if (episode) return site + episode[0];
+  if (pathname === "/zh" || pathname.startsWith("/zh/")) return `${site}/zh`;
+  return `${site}/`;
 }
 function updateDocument() {
   if (typeof document === "undefined") return;
@@ -68,8 +99,9 @@ function updateDocument() {
     privatePage ? "noindex, nofollow" : indexRobots,
   );
   const canonical = document.head.querySelector('link[rel="canonical"]');
-  if (privatePage) canonical?.remove();
-  else if (canonical) canonical.setAttribute("href", "https://asidefm.com/");
+  const href = canonicalFor(location.pathname);
+  if (!href) canonical?.remove();
+  else if (canonical) canonical.setAttribute("href", href);
 }
 updateDocument();
 export function setLocale(next: Locale) {
@@ -78,6 +110,18 @@ export function setLocale(next: Locale) {
     localStorage.setItem("aside.locale", next);
   } catch {
     /* Private browsing can disable storage. */
+  }
+  // Language is part of the address on the landing page, so switching it keeps
+  // the URL and the interface in step. Episode and space pages have one URL.
+  if (typeof location !== "undefined") {
+    const path = location.pathname;
+    const onHome = path === "/" || path === "/zh" || path === "/en" || path === "";
+    if (onHome && path !== homeHref(next))
+      history.replaceState(
+        null,
+        "",
+        `${homeHref(next)}${location.search}${location.hash}`,
+      );
   }
   updateDocument();
   listeners.forEach((listener) => listener());
@@ -481,6 +525,18 @@ export function translate(text: string, target: Locale): string {
 export function t(text: string): string {
   return translate(text, locale);
 }
+/** Appended to a failure so the listener knows playback continues. */
+export const keepListeningHint = "。可以继续听节目，或重新尝试提问。";
+/** Errors that already tell the listener they can carry on. */
+const reassures = /可以继续听|仍可继续收听|keep listening/i;
+/**
+ * Adds the reassurance once. Some failures -- "AI trials are temporarily
+ * paused. You can keep listening." -- already carry one, and appending the
+ * sentence again reads as a stutter in both languages.
+ */
+export function withKeepListeningHint(text: string) {
+  return reassures.test(text) ? text : `${text}${keepListeningHint}`;
+}
 export function message(text: string): string {
   if (locale === "zh" || !text) return text;
   if (english[text]) return english[text];
@@ -494,7 +550,7 @@ export function message(text: string): string {
     return `${stage[1] === "转录" ? "Transcribing" : "Analyzing"} segment ${stage[2]} of ${stage[3]}`;
   const finished = /^已完成 (\d+)\/(\d+) 段$/.exec(text);
   if (finished) return `${finished[1]} of ${finished[2]} segments analyzed`;
-  const suffix = "。可以继续听节目，或重新尝试提问。";
+  const suffix = keepListeningHint;
   if (text.endsWith(suffix))
     return `${message(text.slice(0, -suffix.length))} You can keep listening or try asking again.`;
   if (text.startsWith("无法开启麦克风："))

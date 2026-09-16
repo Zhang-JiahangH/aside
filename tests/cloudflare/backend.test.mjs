@@ -34,6 +34,7 @@ const controlEvents = [];
 const usedProofs = new Set();
 const origin = "https://aside.test";
 before(async () => {
+  const shell = await readFile("frontend/index.html", "utf8");
   const bundle = await build({
     entryPoints: ["tests/cloudflare/worker.mjs"],
     bundle: true,
@@ -82,7 +83,16 @@ before(async () => {
         GOOGLE_CLIENT_SECRET: "google-test-secret",
         ADMIN_KEY: "admin-test-key-at-least-32-characters",
       },
-      serviceBindings: { ASSETS: () => new Response("assets") },
+      serviceBindings: {
+        // Stand in for the static asset binding: the SEO routes splice their
+        // head and body into the real built shell.
+        ASSETS: (request) =>
+          ["/", "/index.html"].includes(new URL(request.url).pathname)
+            ? new Response(shell, {
+                headers: { "content-type": "text/html; charset=utf-8" },
+              })
+            : new Response("missing asset", { status: 404 }),
+      },
       outboundService: async (request) => {
         networkCalls.push(new URL(request.url).pathname);
         if (request.url === "https://oauth2.googleapis.com/token")
@@ -1945,4 +1955,95 @@ test("the daily rollup captures trial counters before cleanup can drop them", as
     ),
     "the admin report exposes the snapshots",
   );
+});
+
+test("the worker serves indexable pages, a live sitemap and real 404s", async () => {
+  await seed("seo-public", "curator", true, true);
+  await seed("seo-private", "curator", false, true);
+
+  const home = await mf.dispatchFetch(origin + "/");
+  assert.equal(home.status, 200, await home.clone().text());
+  assert.equal(home.headers.get("content-type"), "text/html; charset=utf-8");
+  const homeHtml = await home.text();
+  assert.match(homeHtml, /<link rel="canonical" href="https:\/\/asidefm.com\/" \/>/);
+  assert.match(homeHtml, /hreflang="zh" href="https:\/\/asidefm\.com\/zh"/);
+  assert.match(homeHtml, /<a href="\/episodes\/seo-public">/);
+  assert.ok(!homeHtml.includes("seo-private"), "private audio stays out");
+  assert.match(homeHtml, /<html lang="en">/);
+
+  const chinese = await mf.dispatchFetch(origin + "/zh");
+  const chineseHtml = await chinese.text();
+  assert.match(chineseHtml, /<html lang="zh-CN">/);
+  assert.match(chineseHtml, /<link rel="canonical" href="https:\/\/asidefm.com\/zh" \/>/);
+  assert.ok(chineseHtml.includes("用语音打断播客"));
+
+  const episode = await mf.dispatchFetch(origin + "/episodes/seo-public");
+  assert.equal(episode.status, 200, await episode.clone().text());
+  const episodeHtml = await episode.text();
+  assert.match(episodeHtml, /"@type":"PodcastEpisode"/);
+  assert.match(
+    episodeHtml,
+    /<link rel="canonical" href="https:\/\/asidefm.com\/episodes\/seo-public" \/>/,
+  );
+
+  assert.equal(
+    (await mf.dispatchFetch(origin + "/episodes/seo-private")).status,
+    404,
+  );
+  assert.equal(
+    (await mf.dispatchFetch(origin + "/episodes/does-not-exist")).status,
+    404,
+  );
+
+  const sitemap = await mf.dispatchFetch(origin + "/sitemap.xml");
+  assert.equal(sitemap.status, 200);
+  assert.equal(sitemap.headers.get("content-type"), "application/xml");
+  const xml = await sitemap.text();
+  assert.match(xml, /<loc>https:\/\/asidefm\.com\/zh<\/loc>/);
+  assert.match(xml, /<loc>https:\/\/asidefm\.com\/episodes\/seo-public<\/loc>/);
+  assert.ok(!xml.includes("seo-private"));
+
+  const space = await mf.dispatchFetch(origin + "/space");
+  assert.equal(space.status, 200);
+  assert.equal(space.headers.get("x-robots-tag"), "noindex, nofollow");
+  assert.ok(!(await space.text()).includes('rel="canonical"'));
+
+  // Manual redirects: the default follows the Location and would leave the
+  // isolate for the real network.
+  const english = await mf.dispatchFetch(origin + "/en", {
+    redirect: "manual",
+  });
+  assert.equal(english.status, 301);
+  assert.equal(english.headers.get("location"), "https://aside.test/");
+
+  // A Chinese recording gets a Chinese page, matching its JSON-LD language.
+  const chineseEpisode = {
+    id: "seo-zh",
+    title: "阿Q正传",
+    createdAt: new Date().toISOString(),
+    durationMs: 10000,
+    status: "ready",
+    stage: "ready",
+    progress: 1,
+    attribution: {
+      publisher: "LibriVox",
+      author: "鲁迅",
+      sourceUrl: "https://archive.org/details/truestoryahq_1612_librivox",
+      licenseUrl: "https://librivox.org/pages/public-domain/",
+      license: "Public domain",
+      language: "zh",
+      excerptStartMs: 0,
+      excerptEndMs: 1,
+    },
+  };
+  await seed("seo-zh", "curator", true, true);
+  await db
+    .prepare("UPDATE episodes SET metadata=? WHERE id='seo-zh'")
+    .bind(JSON.stringify(chineseEpisode))
+    .run();
+  const chineseEpisodePage = await mf.dispatchFetch(origin + "/episodes/seo-zh");
+  const chineseEpisodeHtml = await chineseEpisodePage.text();
+  assert.match(chineseEpisodeHtml, /<html lang="zh-CN">/);
+  assert.match(chineseEpisodeHtml, /"inLanguage":"zh-CN"/);
+  assert.match(chineseEpisodeHtml, /<h1>阿Q正传<\/h1>/);
 });

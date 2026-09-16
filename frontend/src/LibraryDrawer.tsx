@@ -1,6 +1,6 @@
 import { useId, useRef, useState, useEffect, type ReactNode } from "react";
 import type { AudioLibraryItem } from "./library-item";
-import { t } from "./i18n";
+import { homeHref, t } from "./i18n";
 import "./library-drawer.css";
 
 // Long titles rest on an ellipsis and only scroll while their row is hovered or focused.
@@ -76,7 +76,7 @@ export function LibraryDrawer({
   children,
   footer,
   collection,
-  publicHref = "/",
+  publicHref = homeHref(),
 }: {
   items: AudioLibraryItem[];
   label: string;
@@ -216,7 +216,7 @@ export function LibraryDrawer({
     return (
       <aside ref={sidebar} className="persistent-library" aria-label={label}>
         <div className="persistent-library-brand">
-          <a className="brand" href="/" aria-label="Aside">
+          <a className="brand" href={homeHref()} aria-label="Aside">
             <span className="brand-word">Aside</span>
             <img
               className="brand-mark"

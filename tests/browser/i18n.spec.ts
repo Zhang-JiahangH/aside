@@ -23,7 +23,7 @@ test("English browser default, persistent switch, and uninterrupted playback", a
   await expect(
     page.getByRole("heading", { name: /Recorded then.*Your turn now/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /给思考留一点空间/ }).click();
+  await page.getByRole("link", { name: /给思考留一点空间/ }).click();
   await expect(page.getByRole("region", { name: "Transcript" })).toContainText(
     "今天天气真好",
   );
