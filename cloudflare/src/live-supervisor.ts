@@ -15,6 +15,12 @@ interface State {
   closing?: boolean;
   confirmed?: boolean;
 }
+/**
+ * The supplier no longer knows this session. Its `session.closed` frame can
+ * never arrive, so the attach can never succeed and must not be retried.
+ */
+class SessionGone extends Error {}
+
 /** The browser never owns the lease or the authoritative close acknowledgement. */
 export class LiveSupervisor extends DurableObject<Env> {
   private socket?: WebSocket;
@@ -89,6 +95,16 @@ export class LiveSupervisor extends DurableObject<Env> {
       throw error;
     }
   }
+  /**
+   * Ends a session the supplier has already dropped. Without this the alarm
+   * retries an attach that can never succeed, and the breaker it writes keeps
+   * every listener's AI paused for good.
+   */
+  private async retire(state: State) {
+    state.confirmed = true;
+    await this.ctx.storage.put("state", state);
+    await this.confirm(state);
+  }
   private async breaker(state: State) {
     await this.env.DB.prepare("INSERT OR IGNORE INTO trial_breakers VALUES(?)")
       .bind(state.owner)
@@ -109,7 +125,12 @@ export class LiveSupervisor extends DurableObject<Env> {
       },
     );
     const socket = response.webSocket;
-    if (!socket) throw Error("Sideband unavailable");
+    if (!socket) {
+      // A 404 is the supplier saying the session is over; anything else is
+      // transient and keeps the breaker until the close is confirmed.
+      if (response.status === 404) throw new SessionGone(state.session);
+      throw Error("Sideband unavailable");
+    }
     socket.accept();
     this.socket = socket;
     socket.addEventListener("message", (event) => {
@@ -162,8 +183,9 @@ export class LiveSupervisor extends DurableObject<Env> {
     try {
       await this.attach(state);
       this.socket!.send(JSON.stringify({ type: "session.close" }));
-    } catch {
-      await this.breaker(state);
+    } catch (error) {
+      if (error instanceof SessionGone) await this.retire(state);
+      else await this.breaker(state);
     }
   }
   alarm() {
@@ -203,8 +225,9 @@ export class LiveSupervisor extends DurableObject<Env> {
         if (waitingForClose) await this.breaker(state);
         this.socket!.send(JSON.stringify({ type: "session.close" }));
       }
-    } catch {
-      await this.breaker(state);
+    } catch (error) {
+      if (error instanceof SessionGone) await this.retire(state);
+      else await this.breaker(state);
     }
   }
 }

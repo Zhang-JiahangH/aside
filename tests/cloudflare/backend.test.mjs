@@ -19,6 +19,7 @@ import { rollupDailyStats } from "../../cloudflare/src/stats.ts";
 let mf, db, bucket;
 let networkCalls = [];
 let acknowledgeClose = true;
+let attachGone = false;
 let rejectLive = false;
 let googleIdentity = {
   sub: "google-sub-1",
@@ -98,6 +99,8 @@ before(async () => {
             ...data,
           });
         }
+        if (request.url.endsWith("/attach") && attachGone)
+          return new Response(null, { status: 404 });
         if (request.url.endsWith("/attach")) {
           const pair = new WebSocketPair();
           pair[1].accept();
@@ -1502,6 +1505,46 @@ test("unconfirmed voice close retains lease and trips breaker despite browser fi
           .bind(a.id)
           .first()),
     );
+  }
+});
+test("a session the supplier has dropped stops pausing everyone", async () => {
+  const a = await visitor();
+  const created = await a.request("/api/episodes/public/live", "POST", {
+    sdp: "offer",
+    atMs: 0,
+  });
+  assert.equal(created.status, 200, await created.clone().text());
+  const session = (await created.json()).session.id;
+  const bindings = await mf.getBindings(),
+    supervisor = bindings.LIVE.get(bindings.LIVE.idFromName(a.id));
+  attachGone = true;
+  try {
+    await supervisor.expire();
+    // The supplier said the session is over, so no close frame can ever
+    // arrive: the breaker and the lease must not outlive it.
+    assert.ok(
+      !(await db
+        .prepare("SELECT owner FROM trial_breakers WHERE owner=?")
+        .bind(a.id)
+        .first()),
+      "the breaker must be released",
+    );
+    assert.ok(
+      !(await db
+        .prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'")
+        .bind(a.id)
+        .first()),
+      "the live lease must be released",
+    );
+    const usage = await db
+      .prepare("SELECT finalized FROM voice_usage WHERE session_id=?")
+      .bind(session)
+      .first();
+    assert.equal(usage.finalized, 1);
+    // Everyone else can talk to the model again.
+    assert.equal((await (await a.request("/api/trial")).json()).enabled, true);
+  } finally {
+    attachGone = false;
   }
 });
 test("oversized history and malformed/long WAV are rejected before any model call", async () => {
