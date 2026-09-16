@@ -49,9 +49,18 @@ export class TestMedia extends DurableObject {
 import { LiveSupervisor } from "../../cloudflare/src/live-supervisor.ts";
 export class TestLive extends LiveSupervisor {
   async expire() {
+    return this.expireAt(0);
+  }
+  /** Drops the sideband socket so the next tick must attach again. */
+  async detach() {
+    this.socket?.close();
+    this.socket = undefined;
+  }
+  /** Forces the session deadline so the supervisor sees it as past due. */
+  async expireAt(deadline) {
     const state = await this.ctx.storage.get("state");
     if (state) {
-      state.deadline = 0;
+      state.deadline = deadline;
       await this.ctx.storage.put("state", state);
     }
     await this.alarm();

@@ -15,6 +15,20 @@ interface State {
   closing?: boolean;
   confirmed?: boolean;
 }
+/**
+ * The supplier no longer knows this session. Its `session.closed` frame can
+ * never arrive, so the attach can never succeed and must not be retried.
+ */
+class SessionGone extends Error {}
+
+/**
+ * How long past its deadline a session may stay unconfirmed before the
+ * supervisor releases it anyway. The breaker it leaves behind pauses every
+ * listener's AI, so an unbounded wait turns one lost close acknowledgement
+ * into a site-wide outage.
+ */
+const closeGraceMs = 15 * 60 * 1000;
+
 /** The browser never owns the lease or the authoritative close acknowledgement. */
 export class LiveSupervisor extends DurableObject<Env> {
   private socket?: WebSocket;
@@ -89,6 +103,53 @@ export class LiveSupervisor extends DurableObject<Env> {
       throw error;
     }
   }
+  /**
+   * Releases everything a finished session holds. `finalize` marks the usage
+   * row as supplier-confirmed, which only a real `session.closed` frame or a
+   * 404 from the supplier may claim.
+   */
+  private async retire(state: State, finalize: boolean) {
+    await this.env.DB.batch([
+      ...(finalize && state.session
+        ? [
+            this.env.DB.prepare(
+              "UPDATE voice_usage SET finalized=1 WHERE session_id=? AND owner_id=?",
+            ).bind(state.session, state.owner),
+          ]
+        : []),
+      this.env.DB.prepare("DELETE FROM trial_breakers WHERE owner=?").bind(
+        state.owner,
+      ),
+      this.env.DB.prepare(
+        "DELETE FROM trial_leases WHERE owner=? AND kind='live' AND token=?",
+      ).bind(state.owner, state.token),
+    ]);
+    await this.ctx.storage.delete("state");
+    await this.ctx.storage.deleteAlarm();
+    this.socket?.close();
+    this.socket = undefined;
+  }
+
+  /**
+   * An attach that cannot be established must not pause every listener's AI
+   * forever. A 404 means the supplier dropped the session; anything else is
+   * still given the whole grace window past the deadline before release.
+   */
+  private async handleAttachFailure(state: State, error: unknown) {
+    const dropped = error instanceof SessionGone;
+    const expired = Date.now() > state.deadline + closeGraceMs;
+    if (!dropped && !expired) {
+      await this.breaker(state);
+      return;
+    }
+    console.error("Aside voice session released without a close acknowledgement", {
+      owner: state.owner,
+      session: state.session,
+      dropped,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await this.retire(state, dropped);
+  }
   private async breaker(state: State) {
     await this.env.DB.prepare("INSERT OR IGNORE INTO trial_breakers VALUES(?)")
       .bind(state.owner)
@@ -109,7 +170,12 @@ export class LiveSupervisor extends DurableObject<Env> {
       },
     );
     const socket = response.webSocket;
-    if (!socket) throw Error("Sideband unavailable");
+    if (!socket) {
+      // A 404 is the supplier saying the session is over; anything else is
+      // transient and keeps the breaker until the close is confirmed.
+      if (response.status === 404) throw new SessionGone(state.session);
+      throw Error("Sideband unavailable");
+    }
     socket.accept();
     this.socket = socket;
     socket.addEventListener("message", (event) => {
@@ -134,21 +200,7 @@ export class LiveSupervisor extends DurableObject<Env> {
     if (current?.token !== state.token) return;
     // Persist the terminal acknowledgement before D1 changes; alarm can finish after a restart.
     await this.ctx.storage.put("state", { ...current, confirmed: true });
-    await this.env.DB.batch([
-      this.env.DB.prepare(
-        "UPDATE voice_usage SET finalized=1 WHERE session_id=? AND owner_id=?",
-      ).bind(state.session!, state.owner),
-      this.env.DB.prepare("DELETE FROM trial_breakers WHERE owner=?").bind(
-        state.owner,
-      ),
-      this.env.DB.prepare(
-        "DELETE FROM trial_leases WHERE owner=? AND kind='live' AND token=?",
-      ).bind(state.owner, state.token),
-    ]);
-    await this.ctx.storage.delete("state");
-    await this.ctx.storage.deleteAlarm();
-    this.socket?.close();
-    this.socket = undefined;
+    await this.retire(state, true);
   }
   close(session: string) {
     return this.serial(() => this.closeSession(session));
@@ -162,8 +214,8 @@ export class LiveSupervisor extends DurableObject<Env> {
     try {
       await this.attach(state);
       this.socket!.send(JSON.stringify({ type: "session.close" }));
-    } catch {
-      await this.breaker(state);
+    } catch (error) {
+      await this.handleAttachFailure(state, error);
     }
   }
   alarm() {
@@ -203,8 +255,8 @@ export class LiveSupervisor extends DurableObject<Env> {
         if (waitingForClose) await this.breaker(state);
         this.socket!.send(JSON.stringify({ type: "session.close" }));
       }
-    } catch {
-      await this.breaker(state);
+    } catch (error) {
+      await this.handleAttachFailure(state, error);
     }
   }
 }
