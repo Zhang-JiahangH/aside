@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { QuestionService } from "../backend/src/question-service.js";
+import {
+  describeCost,
+  QuestionService,
+  type QuestionTelemetry,
+} from "../backend/src/question-service.js";
 import type {
   ModelReply,
   QuestionModel,
@@ -366,4 +370,109 @@ test("a combined request returns its control immediately and preserves the conte
   if (result.action !== "player_control")
     assert.fail("expected remote command");
   assert.equal(result.followUpQuestion, "Why did he say that?");
+});
+
+test("cost is reported once per question, summed across rounds", async () => {
+  const usage = {
+    inputTokens: 1000,
+    cachedInputTokens: 400,
+    outputTokens: 300,
+    reasoningTokens: 250,
+  };
+  let round = 0;
+  const model: QuestionModel = {
+    async reply() {
+      round++;
+      return round === 1
+        ? reply({
+            model: "test-model",
+            serviceTier: "priority",
+            usage,
+            calls: [
+              {
+                id: "search",
+                name: "search_podcast",
+                arguments: '{"query":"散步"}',
+              },
+            ],
+          })
+        : // Second round was downgraded: both tiers stay visible.
+          reply({ model: "test-model", serviceTier: "default", usage });
+    },
+  };
+  const reports: QuestionTelemetry[] = [];
+  await new QuestionService(model).answer(
+    analysis,
+    request,
+    undefined,
+    undefined,
+    (totals) => reports.push(totals),
+  );
+  assert.equal(reports.length, 1);
+  assert.deepEqual(reports[0], {
+    model: "test-model",
+    rounds: 2,
+    tiers: ["priority", "default"],
+    inputTokens: 2000,
+    cachedInputTokens: 800,
+    outputTokens: 600,
+    reasoningTokens: 500,
+  });
+  assert.equal(
+    describeCost(reports[0]),
+    "test-model rounds=2 tier=priority+default in=2000 cached=800 out=600 reasoning=500",
+  );
+});
+
+test("a terminal tool return and a thrown round still report what they spent", async () => {
+  const spend = {
+    model: "test-model",
+    serviceTier: "priority" as const,
+    usage: {
+      inputTokens: 10,
+      cachedInputTokens: 0,
+      outputTokens: 5,
+      reasoningTokens: 5,
+    },
+  };
+  const terminal: QuestionModel = {
+    async reply() {
+      return reply({
+        ...spend,
+        calls: [{ id: "c", name: "resume_podcast", arguments: "{}" }],
+      });
+    },
+  };
+  const reports: QuestionTelemetry[] = [];
+  const result = await new QuestionService(terminal).answer(
+    analysis,
+    request,
+    undefined,
+    undefined,
+    (totals) => reports.push(totals),
+  );
+  assert.equal(result.action, "resume");
+  assert.deepEqual(
+    reports.map((r) => [r.rounds, r.outputTokens]),
+    [[1, 5]],
+  );
+
+  const failing: QuestionModel = {
+    async reply() {
+      throw Error("upstream exploded");
+    },
+  };
+  const none: QuestionTelemetry[] = [];
+  await assert.rejects(
+    new QuestionService(failing).answer(
+      analysis,
+      request,
+      undefined,
+      undefined,
+      (totals) => none.push(totals),
+    ),
+    /upstream exploded/,
+  );
+  // Nothing was served, so there is nothing to report.
+  assert.deepEqual(none, []);
 });

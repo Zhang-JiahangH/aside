@@ -1,0 +1,58 @@
+
+> test:cloudflare
+> node --import tsx --test tests/cloudflare/*.test.mjs
+
+✔ email login creates a stable owner, claims visitor episodes, and protects profile (1311.523417ms)
+✔ parallel guesses cannot exceed the email code attempt limit (165.294416ms)
+✔ Google callback validates state and links a verified email to one account (54.130209ms)
+✔ third-party Google email requires current email proof before linking (103.249833ms)
+✔ real Worker + D1/R2 isolate private episodes, public checkpoints and byte ranges (170.368208ms)
+✔ signed sessions cannot be forged; quota reservations are atomic under concurrency (298.780625ms)
+✔ multipart upload validates size/ownership and completes idempotently into a real Workflow (263.657458ms)
+✔ upload quota allows 100 active or completed files per account per UTC month and frees cancellations (301.734208ms)
+✔ parallel upload starts cannot exceed an account's storage cap (132.5665ms)
+✔ personal Space isolates accounts and deletion removes private data without refunding a completed upload (267.4315ms)
+question public gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+✔ question stream, Live ownership and server-reserved quotas use network-only adapter (111.514666ms)
+✔ analysis retries reuse durable transcript/audio, survive temporary media loss and persist evidence (910.358875ms)
+✔ segments analyze concurrently up to ANALYSIS_CONCURRENCY and assemble in timeline order (2047.269167ms)
+✔ actual FFmpeg service probes, segments, rejects invalid media and reports an unprepared source (220.852125ms)
+✔ actual FFmpeg service cuts contiguous segments at pauses from one speech track (1316.755833ms)
+✔ real media probe accepts exactly five hours and rejects one second more before analysis (88.527708ms)
+✔ actual FFmpeg service extracts embedded artwork only when the file has one (341.262333ms)
+✔ analysis stores extracted artwork and never fails over a lost cover (1224.490208ms)
+✔ production Workflow orchestrates R2, model adapters, D1 and container binding (263.347ms)
+✔ admission failure blocks an upload and removes its original before any model request (121.272666ms)
+✔ repeated upload completion cannot restart failed analysis without a quota reservation (13.513916ms)
+✔ trial proof is mandatory, bound to visitor/IP/hostname/action, and tokens cannot replay (119.009333ms)
+question account-trial-4c1dd2f4-df64-4d96-93b3-057cd84899b4 gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question account-trial-4c1dd2f4-df64-4d96-93b3-057cd84899b4 gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question account-trial-4c1dd2f4-df64-4d96-93b3-057cd84899b4 gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question account-trial-4c1dd2f4-df64-4d96-93b3-057cd84899b4 gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question account-trial-4c1dd2f4-df64-4d96-93b3-057cd84899b4 gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+✔ signed-in accounts skip Turnstile but retain paid question quotas (158.905ms)
+question public gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question public gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question public gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question public gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+question public gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+✔ five question reservations are enforced before providers; kill switch preserves playback (139.076125ms)
+✔ parallel lease acquisition has one winner and stale releases cannot unlock another request (344.719375ms)
+✔ voice deadline sends server-side session.close without browser cooperation (95.217291ms)
+✔ unconfirmed voice close retains lease and trips breaker despite browser finalization (137.604708ms)
+✔ oversized history and malformed/long WAV are rejected before any model call (61.671083ms)
+Aside API request failed { path: '/api/episodes/public/live' }
+✔ definitively rejected Live request consumes quota but releases concurrency without global breaker (69.774166ms)
+✔ D1 stores large Unicode artifacts atomically and keeps structured data out of R2 (400.720417ms)
+✔ mobile bearer session shares the website account, enforces isolation, and revokes on logout (118.120375ms)
+✔ checkpoint writes use compare-and-swap and cannot overwrite a newer device (111.524791ms)
+question public gpt-5.6-luna rounds=1 tier=priority in=1200 cached=500 out=400 reasoning=330
+✔ question cost is ledgered and only the admin key can read it (85.319542ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12369.589541

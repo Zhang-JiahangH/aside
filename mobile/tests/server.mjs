@@ -1,5 +1,5 @@
 /** Local-only real Worker harness. Never bundled into production or the mobile app. */
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, readdir, mkdtemp, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -196,23 +196,16 @@ mf = new Miniflare(
 );
 db = await mf.getD1Database("DB");
 bucket = await mf.getR2Bucket("AUDIO");
-const sql =
-  (await readFile("cloudflare/migrations/0001_initial.sql", "utf8")) +
-  (await readFile("cloudflare/migrations/0002_trial.sql", "utf8")) +
-  (await readFile("cloudflare/migrations/0003_artifacts.sql", "utf8"));
-const accountsSql = await readFile(
-  "cloudflare/migrations/0004_accounts.sql",
-  "utf8",
-);
-const spaceSql = await readFile(
-  "cloudflare/migrations/0005_personal_space.sql",
-  "utf8",
-);
-const mobileSql = await readFile(
-  "cloudflare/migrations/0006_mobile.sql",
-  "utf8",
-);
-for (const statement of (sql + accountsSql + spaceSql + mobileSql)
+const migrationDir = "cloudflare/migrations";
+const migrationFiles = (await readdir(migrationDir))
+  .filter((file) => file.endsWith(".sql"))
+  .sort();
+const sql = (
+  await Promise.all(
+    migrationFiles.map((file) => readFile(join(migrationDir, file), "utf8")),
+  )
+).join("\n");
+for (const statement of sql
   .split(";")
   .map((s) => s.trim())
   .filter(Boolean))

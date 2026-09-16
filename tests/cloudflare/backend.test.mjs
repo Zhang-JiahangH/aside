@@ -1,6 +1,6 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFile, readdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,6 +76,7 @@ before(async () => {
         AUTH_EMAIL_FROM: "login@auth.asidefm.com",
         GOOGLE_CLIENT_ID: "google-test-id",
         GOOGLE_CLIENT_SECRET: "google-test-secret",
+        ADMIN_KEY: "admin-test-key-at-least-32-characters",
       },
       serviceBindings: { ASSETS: () => new Response("assets") },
       outboundService: async (request) => {
@@ -110,6 +111,17 @@ before(async () => {
         if (request.url.endsWith("/responses"))
           return Response.json({
             id: "response-test",
+            service_tier: "priority",
+            usage: {
+              input_tokens: 1200,
+              input_tokens_details: {
+                cached_tokens: 500,
+                cache_write_tokens: 0,
+              },
+              output_tokens: 400,
+              output_tokens_details: { reasoning_tokens: 330 },
+              total_tokens: 1600,
+            },
             output_text: "A short answer",
             output: [
               {
@@ -160,23 +172,15 @@ before(async () => {
   );
   db = await mf.getD1Database("DB");
   bucket = await mf.getR2Bucket("AUDIO");
-  const sql =
-    (await readFile("cloudflare/migrations/0001_initial.sql", "utf8")) +
-    (await readFile("cloudflare/migrations/0002_trial.sql", "utf8")) +
-    (await readFile("cloudflare/migrations/0003_artifacts.sql", "utf8"));
-  const accountsSql = await readFile(
-    "cloudflare/migrations/0004_accounts.sql",
-    "utf8",
-  );
-  const spaceSql = await readFile(
-    "cloudflare/migrations/0005_personal_space.sql",
-    "utf8",
-  );
-  const mobileSql = await readFile(
-    "cloudflare/migrations/0006_mobile.sql",
-    "utf8",
-  );
-  for (const statement of (sql + accountsSql + spaceSql + mobileSql)
+  // Read the directory in order rather than listing files: a new migration must
+  // not silently be missing from the schema these tests run against.
+  const dir = "cloudflare/migrations";
+  const files = (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort();
+  assert.ok(files.length >= 6, `expected migrations, found ${files.join()}`);
+  const sql = (
+    await Promise.all(files.map((f) => readFile(join(dir, f), "utf8")))
+  ).join("\n");
+  for (const statement of sql
     .split(";")
     .map((s) => s.trim())
     .filter(Boolean))
@@ -1894,4 +1898,83 @@ test("checkpoint writes use compare-and-swap and cannot overwrite a newer device
   });
   assert.equal(updated.status, 200);
   assert.equal((await updated.json()).version, 2);
+});
+
+test("question cost is ledgered and only the admin key can read it", async () => {
+  const a = await visitor();
+  const answered = await a.request("/api/episodes/public/question", "POST", {
+    atMs: 0,
+    revision: 1,
+    history: [{ role: "user", text: "Explain" }],
+  });
+  assert.equal(answered.status, 200, await answered.clone().text());
+
+  // The write is deferred with waitUntil, so wait for the row rather than assume.
+  await eventually(async () => {
+    const row = await db
+      .prepare("SELECT COUNT(*) AS n FROM question_usage WHERE owner_id=?")
+      .bind(a.id)
+      .first();
+    return row.n === 1;
+  });
+  const row = await db
+    .prepare("SELECT * FROM question_usage WHERE owner_id=?")
+    .bind(a.id)
+    .first();
+  assert.equal(row.tiers, "priority");
+  assert.equal(row.rounds, 1);
+  assert.equal(row.input_tokens, 1200);
+  assert.equal(row.cached_input_tokens, 500);
+  assert.equal(row.output_tokens, 400);
+  assert.equal(row.reasoning_tokens, 330);
+  // Anonymous trial traffic is the split the cost decision turns on.
+  assert.equal(row.account_id, null);
+
+  const url = origin + "/api/admin/usage?days=7";
+  assert.equal((await mf.dispatchFetch(url)).status, 401);
+  assert.equal(
+    (await mf.dispatchFetch(url, { headers: { "x-admin-key": "wrong-key" } }))
+      .status,
+    401,
+  );
+  // A listener's session must never reach the ledger.
+  assert.equal((await a.request("/api/admin/usage?days=7")).status, 401);
+  assert.equal(
+    (
+      await mf.dispatchFetch(origin + "/api/admin/usage", {
+        method: "POST",
+        headers: {
+          "x-admin-key": "admin-test-key-at-least-32-characters",
+          origin,
+        },
+      })
+    ).status,
+    405,
+  );
+
+  const report = await mf.dispatchFetch(url, {
+    headers: { "x-admin-key": "admin-test-key-at-least-32-characters" },
+  });
+  assert.equal(report.status, 200, await report.clone().text());
+  // An operator CLI is not a listener: no trial identity is handed out.
+  assert.equal(report.headers.get("set-cookie"), null);
+  assert.equal(report.headers.get("cache-control"), "no-store");
+  const data = await report.json();
+  assert.equal(data.days, 7);
+  assert.ok(data.totals.questions >= 1);
+  assert.ok(data.totals.reasoningTokens >= 330);
+  // Earlier tests in this file answered questions too, as a listener and as a
+  // signed-in account, so the rollups legitimately carry their rows as well.
+  assert.deepEqual(
+    data.byTier.map((r) => r.tiers),
+    ["priority"],
+    "every round was served by fast mode, so nothing should report default",
+  );
+  assert.deepEqual(
+    [...data.byAudience.map((r) => r.audience)].sort(),
+    ["account", "trial"],
+    "the ledger must separate anonymous trial spend from account spend",
+  );
+  assert.ok(data.topOwners.some((r) => r.owner === a.id));
+  assert.equal(data.byDay[0].day, new Date().toISOString().slice(0, 10));
 });

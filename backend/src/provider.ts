@@ -5,7 +5,7 @@ import { AudioProvider } from "./audio-provider.js";
 export class OpenAIProvider extends AudioProvider implements AnalysisPort {
   constructor(
     key: string,
-    model = process.env.ASIDE_BACKEND_MODEL || "gpt-5.6-terra",
+    model = process.env.ASIDE_BACKEND_MODEL || "gpt-5.6-luna",
   ) {
     super(key, model);
   }

@@ -60,6 +60,9 @@ test("OpenAI adapter maps question input, tool output, citations and cancellatio
   const result = await provider.reply(request);
   assert.deepEqual(result, {
     id: "response-1",
+    model: "test-model",
+    // The mock reports no tier, so nothing is claimed about how it was served.
+    serviceTier: null,
     answer: "回答",
     searchedWeb: true,
     sources: [{ text: "Source", url: "https://example.com/source" }],
@@ -73,7 +76,9 @@ test("OpenAI adapter maps question input, tool output, citations and cancellatio
     input: [{ role: "user", content: JSON.stringify(request.context) }],
     previous_response_id: undefined,
     tools: [],
-    max_output_tokens: 1000,
+    max_output_tokens: 10000,
+    reasoning: { effort: "medium" },
+    service_tier: "priority",
     parallel_tool_calls: false,
   });
   await provider.reply({
@@ -90,6 +95,84 @@ test("OpenAI adapter maps question input, tool output, citations and cancellatio
     },
   ]);
   assert.equal(calls.mock.callCount(), 2);
+});
+
+test("the served tier and token usage come back with the reply", async (t) => {
+  const provider = new OpenAIProvider("test-placeholder", "test-model");
+  t.mock.method(provider.client.responses, "create", async () => ({
+    id: "response-1",
+    // Asked for priority, served as standard: a ramp-rate downgrade.
+    service_tier: "default",
+    output_text: "回答",
+    output: [],
+    usage: {
+      input_tokens: 4200,
+      input_tokens_details: { cached_tokens: 3000, cache_write_tokens: 0 },
+      output_tokens: 900,
+      output_tokens_details: { reasoning_tokens: 780 },
+      total_tokens: 5100,
+    },
+  }));
+  const reply = await provider.reply({
+    instructions: "政策",
+    tools: [],
+    toolResults: [],
+  });
+  assert.equal(reply.model, "test-model");
+  assert.equal(reply.serviceTier, "default");
+  assert.deepEqual(reply.usage, {
+    inputTokens: 4200,
+    cachedInputTokens: 3000,
+    outputTokens: 900,
+    reasoningTokens: 780,
+  });
+});
+
+test("an exhausted output budget fails instead of resolving to a silent answer", async (t) => {
+  const { InteractiveProvider } = await import(
+    "../backend/src/interactive-provider.js"
+  );
+  const request: Parameters<QuestionModel["reply"]>[0] = {
+    instructions: "政策",
+    tools: [],
+    toolResults: [],
+    context: {
+      playheadMs: 0,
+      currentPassage: null,
+      recentTranscript: [],
+      earlierExcerpts: [],
+      hostStyle: "",
+      history: [],
+    },
+  };
+  for (const [trial, budget] of [
+    [false, 10000],
+    [true, 6000],
+  ] as const) {
+    const provider = new InteractiveProvider(
+      "test-placeholder",
+      "test-model",
+      trial,
+    );
+    const bodies: { max_output_tokens: number }[] = [];
+    t.mock.method(
+      provider.client.responses,
+      "create",
+      async (body: { max_output_tokens: number }) => {
+        bodies.push(body);
+        // Reasoning consumed the budget: no message and no tool call.
+        return {
+          id: "response-1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output_text: "",
+          output: [],
+        };
+      },
+    );
+    await assert.rejects(provider.reply(request), /max_output_tokens/);
+    assert.equal(bodies[0].max_output_tokens, budget);
+  }
 });
 
 test("Live session setup keeps native audio and client delegation, with silent playback control policy", async (t) => {
