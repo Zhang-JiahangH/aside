@@ -40,7 +40,7 @@ Engine 不依赖 Fastify、React、数据库或模型 SDK。前端不得导入 `
 
 1. 本地模式将上传字节流分块写入 SQLite 对象存储；Cloudflare 私人 Space 使用 R2 分片上传，单文件限制 1 GiB、最长 5 小时。两种模式均通过 ffprobe 验证音频并读取时长。
 2. ffmpeg 根据静音位置切出约四分钟的片段，转为单声道压缩音频。
-3. 各块依次进行转录和音频理解，保留词句时间戳、说话人声音倾向、语义分组、摘要和表达风格。
+3. 各块依次进行转录和音频理解，保留句级时间戳、说话人声音倾向、语义分组、摘要和表达风格。转录只请求 segment 粒度；音频理解收到的是 `{id, startMs, endMs, text}` 的提纲，不是完整 passage。
 4. Engine 将结果组装为整期内容地图，形成 Transcript 和自然续播点。声音按说话时长汇总选择预设，未知情况使用回退规则。
 5. 全部分析完成后，节目进入可互动播放状态。
 
@@ -125,8 +125,11 @@ Agent 被指示以当前节目人物的第一人称视角解释，并区分不�
 | `/episodes/:id/transcribe-question` | POST       | 冷启动提问转录      |
 | `/episodes/:id/live`                | POST       | Live 会话协商       |
 | `/episodes/:id/usage`               | GET / POST | 使用时间记录        |
+| `/admin/usage`                      | GET        | 问答成本账本汇总    |
 
 API Key 只在后端读取；配置通过显式白名单提供给前端。使用时间记录不是供应商账单，断线等情况可能造成统计不完整。
+
+`/api/admin/usage` 只在 Cloudflare 模式存在，用 `ADMIN_KEY` 共享密钥认证（`x-admin-key` 请求头，不走 query），未配置密钥时该路由表现为不存在。它在 session 与账号解析**之前**处理，所以运维调用不会领到试听身份或 Cookie。每次问答（含失败）在 D1 `question_usage` 落一行：实际服务档位、轮数与 input/cached/output/reasoning token，匿名试听与登录账号按 `account_id` 是否为空区分。保留 90 天，由既有的 cron 清理。查询用 `node scripts/admin-usage.mjs`，或 `aside-usage` skill。
 
 ## 部署边界
 

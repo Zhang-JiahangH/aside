@@ -7,18 +7,46 @@ import {
   type QuestionResult,
   type QuestionPhase,
 } from "@aside/engine/contracts";
-import type { QuestionModel, ToolResult } from "./question-model.js";
+import type { ModelReply, QuestionModel, ToolResult } from "./question-model.js";
 import {
   questionInstructions,
   playerToolInstructions,
 } from "./dialogue-policy.js";
 import { questionTools } from "./question-tools.js";
+/**
+ * What one question actually cost. `tiers` is per round rather than a single
+ * value so a downgrade partway through a tool loop stays visible.
+ */
+export interface QuestionTelemetry {
+  model?: string;
+  rounds: number;
+  tiers: string[];
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+/**
+ * One compact line for logs: whether fast mode actually served the question
+ * (`tier=default` means it was downgraded) and what the turn cost.
+ */
+export const describeCost = (totals: QuestionTelemetry) =>
+  [
+    totals.model ?? "model?",
+    `rounds=${totals.rounds}`,
+    `tier=${totals.tiers.length ? [...new Set(totals.tiers)].join("+") : "unreported"}`,
+    `in=${totals.inputTokens}`,
+    `cached=${totals.cachedInputTokens}`,
+    `out=${totals.outputTokens}`,
+    `reasoning=${totals.reasoningTokens}`,
+  ].join(" ");
 export interface QuestionAnswerer {
   answer(
     analysis: Analysis,
     request: QuestionRequest,
     signal?: AbortSignal,
     progress?: (phase: QuestionPhase) => void,
+    telemetry?: (totals: QuestionTelemetry) => void,
   ): Promise<QuestionResult>;
 }
 /** Application policy: intent, heard-only retrieval, tool budget and sources. */
@@ -32,6 +60,7 @@ export class QuestionService implements QuestionAnswerer {
     request: QuestionRequest,
     signal?: AbortSignal,
     progress?: (phase: QuestionPhase) => void,
+    telemetry?: (totals: QuestionTelemetry) => void,
   ): Promise<QuestionResult> {
     signal?.throwIfAborted();
     const resume = (): QuestionResult => ({
@@ -47,6 +76,51 @@ export class QuestionService implements QuestionAnswerer {
       return { ...resume(), tools: [] };
     const sources: QuestionResult["sources"] = [],
       used: string[] = [];
+    // Accumulated per round and reported once on the way out, including on a
+    // terminal tool return or a thrown round: a failed question still spent tokens.
+    const totals: QuestionTelemetry = {
+      rounds: 0,
+      tiers: [],
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    };
+    const record = (reply: ModelReply) => {
+      totals.rounds++;
+      if (reply.model) totals.model = reply.model;
+      if (reply.serviceTier) totals.tiers.push(reply.serviceTier);
+      if (reply.usage) {
+        totals.inputTokens += reply.usage.inputTokens;
+        totals.cachedInputTokens += reply.usage.cachedInputTokens;
+        totals.outputTokens += reply.usage.outputTokens;
+        totals.reasoningTokens += reply.usage.reasoningTokens;
+      }
+    };
+    try {
+      return await this.loop(
+        analysis,
+        request,
+        { sources, used },
+        resume,
+        record,
+        signal,
+        progress,
+      );
+    } finally {
+      if (totals.rounds) telemetry?.(totals);
+    }
+  }
+  /** The model/tool loop. Extracted only so `answer` can report on every exit. */
+  private async loop(
+    analysis: Analysis,
+    request: QuestionRequest,
+    { sources, used }: { sources: QuestionResult["sources"]; used: string[] },
+    resume: () => QuestionResult,
+    record: (reply: ModelReply) => void,
+    signal?: AbortSignal,
+    progress?: (phase: QuestionPhase) => void,
+  ): Promise<QuestionResult> {
     let previousId: string | undefined;
     let toolResults: ToolResult[] = [];
     for (let round = 0; round < this.rounds; round++) {
@@ -66,6 +140,7 @@ export class QuestionService implements QuestionAnswerer {
         tools: questionTools,
         signal,
       });
+      record(response);
       signal?.throwIfAborted();
       previousId = response.id;
       toolResults = [];

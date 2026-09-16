@@ -18,7 +18,10 @@ import {
   type QuestionEvent,
 } from "@aside/engine/contracts";
 import { InteractiveProvider } from "../../backend/src/interactive-provider.js";
-import { QuestionService } from "../../backend/src/question-service.js";
+import {
+  describeCost,
+  QuestionService,
+} from "../../backend/src/question-service.js";
 import {
   readMicrophoneConfig,
   readVoiceLifecycleConfig,
@@ -30,6 +33,7 @@ import { HttpError, json, readBody, readJson } from "./http.js";
 import { startAnalysis, uploadRoute } from "./uploads.js";
 import { accountFromRequest, authRoute } from "./auth.js";
 import { cleanupDeletedEpisode, cleanupStaleUploads, spaceRoute } from "./space.js";
+import { RETENTION_DAYS, adminUsageRoute, recordQuestionUsage } from "./usage.js";
 
 async function audio(request: Request, env: Env, id: string, mime: string) {
   const key = `episodes/${id}/original`;
@@ -296,6 +300,19 @@ async function route(
     throw error;
   }
   const questions = new QuestionService(provider, 3);
+  // Workers Logs is the only sink here: a downgrade to standard speed shows up
+  // as tier=default, and the token counts are what fast mode's premium applies to.
+  const cost = (totals: Parameters<typeof describeCost>[0]) => {
+    console.log(`question ${id} ${describeCost(totals)}`);
+    ctx.waitUntil(
+      recordQuestionUsage(env, {
+        owner,
+        accountId,
+        episodeId: id,
+        totals,
+      }),
+    );
+  };
   const abort = new AbortController();
   const signal = AbortSignal.any([
     request.signal,
@@ -306,7 +323,13 @@ async function route(
     try {
       return json(
         questionResultSchema.parse(
-          await questions.answer(episode.analysis, data, signal),
+          await questions.answer(
+            episode.analysis,
+            data,
+            signal,
+            undefined,
+            cost,
+          ),
         ),
       );
     } finally {
@@ -328,8 +351,13 @@ async function route(
         (async () => {
           try {
             const result = questionResultSchema.parse(
-              await questions.answer(episode.analysis!, data, signal, (phase) =>
-                emit({ type: "progress", revision: data.revision, phase }),
+              await questions.answer(
+                episode.analysis!,
+                data,
+                signal,
+                (phase) =>
+                  emit({ type: "progress", revision: data.revision, phase }),
+                cost,
               ),
             );
             emit({ type: "result", result });
@@ -364,6 +392,13 @@ export default {
     if (!path.startsWith("/api/"))
       return env.ASSETS.fetch(request);
     try {
+      // Before session/account work: an operator CLI is not a listener and must
+      // not be issued a trial identity or a cookie.
+      if (path === "/api/admin/usage") {
+        const result = await adminUsageRoute(request, env);
+        result.headers.set("Cache-Control", "no-store");
+        return result;
+      }
       const origin = request.headers.get("origin");
       const googleCallback = path === "/api/auth/google/callback" && request.method === "GET";
       if (origin && origin !== env.APP_ORIGIN)
@@ -405,6 +440,9 @@ export default {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM trial_proofs WHERE expires<?").bind(
         Date.now(),
+      ),
+      env.DB.prepare("DELETE FROM question_usage WHERE ts<?").bind(
+        Date.now() - RETENTION_DAYS * 86400000,
       ),
       env.DB.prepare(
         "DELETE FROM budgets WHERE bucket LIKE 'burst:%' AND CAST(substr(bucket,7,instr(substr(bucket,7),':')-1) AS INTEGER)<?",

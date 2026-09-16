@@ -1,18 +1,13 @@
 export type Voice = "masculine" | "feminine" | "unknown";
 export const MAX_AUDIO_DURATION_MS = 5 * 60 * 60 * 1000;
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
-export interface Word {
-  text: string;
-  startMs: number;
-  endMs: number;
-}
+/** Segment granularity only: nothing presents or seeks below sentence level. */
 export interface Passage {
   id: string;
   startMs: number;
   endMs: number;
   text: string;
   speaker: string;
-  words?: Word[];
 }
 export interface Anchor {
   id: string;

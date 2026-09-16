@@ -10,12 +10,35 @@ import {
 
 export class LiveCreationRejected extends Error {}
 
+/**
+ * The cap covers reasoning tokens as well as the reply, so it is headroom for
+ * the model to think rather than a length limit on the answer: spoken length is
+ * bounded by the dialogue policy (180 words / 350 Chinese characters per turn).
+ * A turn that actually reaches this many tokens hits the caller's 60s abort
+ * first, so raising it further buys nothing.
+ */
+const OUTPUT_TOKENS = 10000;
+/** Anonymous trial turns are rate limited per day, but still get room to reason. */
+const TRIAL_OUTPUT_TOKENS = 6000;
+/** Spoken answers are short; effort buys better tool and intent decisions. */
+const REASONING_EFFORT = "medium" as const;
+/**
+ * Fast mode. `"fast"` and `"priority"` are documented as identical, and the
+ * pinned SDK's union has only the latter, so this spelling is the one that type
+ * checks. No subscription: it is pay-as-you-go at a per-token premium (twice
+ * the standard rate for the GPT-5.6 family), which is why a listener waiting
+ * mid-episode justifies it and batch analysis does not. Support is not
+ * guaranteed for every model, and ramp-rate limits downgrade a request
+ * silently — the response's own `service_tier` says which tier served it.
+ */
+const SERVICE_TIER = "priority" as const;
+
 /** Network-only adapter, shared by Workers and the local Node server. */
 export class InteractiveProvider implements QuestionModel {
   readonly client: OpenAI;
   constructor(
     key: string,
-    readonly model = "gpt-5.6-terra",
+    readonly model = "gpt-5.6-luna",
     readonly trial = false,
   ) {
     this.client = new OpenAI({ apiKey: key, maxRetries: 0, timeout: 90000 });
@@ -44,11 +67,20 @@ export class InteractiveProvider implements QuestionModel {
         tools: this.trial
           ? request.tools.filter((tool) => tool.type !== "web_search")
           : request.tools,
-        max_output_tokens: this.trial ? 600 : 1000,
+        max_output_tokens: this.trial ? TRIAL_OUTPUT_TOKENS : OUTPUT_TOKENS,
+        reasoning: { effort: REASONING_EFFORT },
+        service_tier: SERVICE_TIER,
         parallel_tool_calls: false,
       },
       { signal: request.signal },
     );
+    // Reasoning shares the output budget, so an exhausted turn can carry neither
+    // an answer nor a tool call. Failing here reaches the caller's error path
+    // instead of resolving to an empty answer that nothing ever speaks.
+    if (response.status === "incomplete")
+      throw Error(
+        `Model reply incomplete (${response.incomplete_details?.reason ?? "unknown"})`,
+      );
     const sources: ModelReply["sources"] = [];
     const calls: ModelReply["calls"] = [];
     let searchedWeb = false;
@@ -69,10 +101,23 @@ export class InteractiveProvider implements QuestionModel {
     }
     return {
       id: response.id,
+      model: this.model,
       answer: response.output_text,
       sources,
       calls,
       searchedWeb,
+      serviceTier: response.service_tier ?? null,
+      ...(response.usage
+        ? {
+            usage: {
+              inputTokens: response.usage.input_tokens,
+              cachedInputTokens: response.usage.input_tokens_details.cached_tokens,
+              outputTokens: response.usage.output_tokens,
+              reasoningTokens:
+                response.usage.output_tokens_details.reasoning_tokens,
+            },
+          }
+        : {}),
     };
   }
   async transcribeQuestion(audio: Buffer, signal?: AbortSignal) {

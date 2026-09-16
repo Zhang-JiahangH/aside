@@ -19,6 +19,8 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   OPENAI_API_KEY?: string;
   ASIDE_BACKEND_MODEL?: string;
+  /** Shared secret for /api/admin/*. Unset leaves those routes unmounted. */
+  ADMIN_KEY?: string;
   APP_ORIGIN: string;
   ALLOW_UPLOADS?: string;
   MONTHLY_UPLOAD_LIMIT?: string;

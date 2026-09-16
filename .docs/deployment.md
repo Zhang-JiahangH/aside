@@ -275,3 +275,35 @@ npm run db:cloudflare:production
 生产 Worker `87fd74a6-d52c-42c5-a4fb-3c3300ce6707`（`--containers-rollout=none`，保留现有 Container）。正式域名 `/` 引用本次构建的 `index-BXzSmehr.css`，线上 CSS 含 `grid-template-areas:"title transport speed volume"` 与 `.dock-progress` 的 `48px minmax(0,1fr) 48px` / `font-size:12px`，JS bundle 含抽稀阈值；`/` 200、`/api/health` 200、`liveConfigured=true`、`uploadsEnabled=true`。
 
 未验证：线上没有打开真实的 247 分钟节目人工查看刻度密度，抽稀效果由本地 1200 anchor 的替身节目和截图覆盖；真实节目的 group 分布不均匀，实际观感可能与替身不同。波形形状仍是 `waveShape()` 用 episode id 哈希生成的装饰图形，与音频内容无关，本次未改。
+
+## 问答成本账本与 admin 查询
+
+后端问答模型改为 `gpt-5.6-luna`（reasoning effort `medium`、service tier `priority`，即 fast mode）之后，每 token 单价约为标准档的两倍，因此需要能核账而不是靠感觉。
+
+每次问答（包括失败的）在 D1 `question_usage` 落一行（migration `0006`）：实际服务档位、模型、轮数，以及 input / cached / output / reasoning token。写入走 `ctx.waitUntil`，失败只丢一行账，不影响回答。保留 90 天，由既有的 `*/5 * * * *` cron 清理。
+
+上线步骤：
+
+```bash
+openssl rand -base64 32                 # 生成密钥
+echo "ASIDE_ADMIN_KEY=<key>" >> .env    # 本地（已 gitignore）
+npx wrangler secret put ADMIN_KEY --config wrangler.production.jsonc
+npm run db:cloudflare:production        # 应用 0006 迁移
+```
+
+查询：
+
+```bash
+node scripts/admin-usage.mjs            # 最近 7 天
+node scripts/admin-usage.mjs --days 30 --json
+```
+
+仓库内的 `aside-usage` skill 封装了同一个脚本和读数方法。
+
+判读要点：
+
+- **Served tier** 是实际服务的档位，不是请求的档位。出现 `default` 说明 fast mode 被降级到标准速度；`priority+default` 是一次问答中途降级。
+- **Audience** 区分匿名试听与登录账号，这是判断试听额度是否可承受的依据。
+- **reasoning** 是输出 token 里用于思考的部分，也是 10000 输出预算的实际消耗者。若问答开始报 `Model reply incomplete (max_output_tokens)`，说明预算不够。
+
+`/api/admin/usage` 在 session 与账号解析之前处理，运维调用不会领到试听身份或 Cookie；未配置 `ADMIN_KEY` 时路由返回 404，表现为未挂载。密钥只走 `x-admin-key` 请求头，不进 URL。

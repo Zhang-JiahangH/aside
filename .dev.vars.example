@@ -9,3 +9,6 @@ TURNSTILE_SECRET_KEY=
 # Google sign-in needs a Web OAuth client.
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
+
+# Shared secret for /api/admin/usage; unset leaves the route unmounted.
+ADMIN_KEY=

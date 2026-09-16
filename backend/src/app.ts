@@ -12,6 +12,7 @@ import {
   type QuestionEvent,
 } from "@aside/engine/contracts";
 import { Jobs } from "./jobs.js";
+import { describeCost, type QuestionTelemetry } from "./question-service.js";
 import { withMedia } from "./local-media.js";
 import { readMicrophoneConfig, readVoiceLifecycleConfig } from "./config.js";
 export function createApp(store: Store, services?: BackendServices) {
@@ -219,6 +220,8 @@ export function createApp(store: Store, services?: BackendServices) {
           .header("Content-Type", "application/x-ndjson")
           .header("Cache-Control", "no-cache")
           .send(stream);
+      // Kept outside the try so a failed question still records what it spent.
+      let cost: QuestionTelemetry | undefined;
       try {
         const result = questionResultSchema.parse(
           await services.questions.answer(
@@ -226,11 +229,16 @@ export function createApp(store: Store, services?: BackendServices) {
             { ...q, atMs: Math.min(q.atMs, e.durationMs) },
             AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]),
             (phase) => send({ type: "progress", revision: q.revision, phase }),
+            (totals) => {
+              cost = totals;
+              console.log(`question ${taskId} ${describeCost(totals)}`);
+            },
           ),
         );
         store.saveArtifact(e.id, taskId, {
           status: controller.signal.aborted ? "superseded" : "completed",
           ...result,
+          ...(cost ? { cost } : {}),
         });
         if (stream) {
           send({ type: "result", result });
@@ -242,6 +250,7 @@ export function createApp(store: Store, services?: BackendServices) {
         store.saveArtifact(e.id, taskId, {
           status: controller.signal.aborted ? "superseded" : "failed",
           revision: q.revision,
+          ...(cost ? { cost } : {}),
         });
         if (stream) {
           send({
