@@ -38,6 +38,23 @@ test("a confirmed signed-out session clears stale credentials", async () => {
   assert.equal(forgotten, true);
 });
 
+test("a web-only deployment cannot discard a saved mobile credential", async () => {
+  const user = { id: "account" };
+  let mobileSupported = false;
+  const session = {
+    token: "saved-session" as string | null,
+    restore: async () => {},
+    me: async () => ({ user: mobileSupported ? user : null }),
+    forget: async () => {
+      session.token = null;
+    },
+  };
+  await assert.rejects(restoreAccount(session), /temporarily unavailable/);
+  assert.equal(session.token, "saved-session");
+  mobileSupported = true;
+  assert.equal(await restoreAccount(session), user);
+});
+
 test("an expired token permits signing in again while a server outage preserves it", async () => {
   for (const status of [401, 503]) {
     let forgotten = false;

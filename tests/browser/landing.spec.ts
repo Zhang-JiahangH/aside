@@ -76,8 +76,14 @@ test("sign-in stays visible when the session service fails", async ({
   await page.goto("/");
   const login = page.getByRole("button", { name: "登录 / 注册" });
   await expect(login).toBeVisible();
-  const ctaBox = await page.locator(".hero-cta").boundingBox();
-  const loginBox = await login.boundingBox();
+  // Read both boxes in the same frame while the hero entrance animates.
+  const [ctaBox, loginBox] = await page
+    .locator(".hero-actions")
+    .evaluate((actions) =>
+      [...actions.querySelectorAll("button")].map((button) =>
+        button.getBoundingClientRect().toJSON(),
+      ),
+    );
   expect(loginBox!.height).toBe(ctaBox!.height);
   expect(loginBox!.y).toBeCloseTo(ctaBox!.y, 0);
   await login.click();

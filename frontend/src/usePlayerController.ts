@@ -89,11 +89,13 @@ export function usePlayerController() {
     setEpisode(next);
   }
   useEffect(() => {
+    // Selecting the same audio URL does not emit loadedmetadata again.
+    if (episode && audio.isLoaded) session.metadataLoaded();
     if (episode && autoplayVersion.current === loadVersion.current) {
       autoplayVersion.current = null;
       session.start();
     }
-  }, [episode, session]);
+  }, [episode, session, audio]);
   useEffect(() => {
     let disposed = false;
     void episodeLibrary

@@ -171,6 +171,7 @@ function Main() {
     uploadAbort = useRef<AbortController | null>(null),
     generation = useRef(0),
     appState = useRef(AppState.currentState);
+  const initialSeek = useRef<string | null>(null);
   const failure = (cause: unknown) =>
     setError(cause instanceof Error ? cause.message : String(cause));
   const run = (action: () => Promise<unknown>) => {
@@ -267,6 +268,7 @@ function Main() {
       current.current = next;
       setEpisode(next);
       session.load(next, cp);
+      initialSeek.current = null;
       audio.load(
         api.base + `/api/episodes/${id}/audio`,
         api.headers(),
@@ -315,7 +317,11 @@ function Main() {
       "playbackStatusUpdate",
       (status) => {
         if (!current.current) return;
-        if (status.isLoaded) {
+        if (status.isLoaded && audio.player.isLoaded) {
+          if (initialSeek.current !== current.current.id) {
+            initialSeek.current = current.current.id;
+            session.metadataLoaded();
+          }
           session.audioTick();
         }
         if (status.didJustFinish) session.stop();
@@ -380,26 +386,17 @@ function Main() {
         snapshot.state.positionMs >= p.startMs &&
         snapshot.state.positionMs < p.endMs,
     ) ?? -1;
-  useEffect(() => {
+  const scrollToCurrentPassage = () => {
     if (followTranscript && passageIndex >= 0 && pane === "transcript")
       transcriptRef.current?.scrollToIndex({
         index: passageIndex,
         animated: true,
         viewPosition: 0.25,
       });
-  }, [passageIndex, pane, followTranscript]);
-  const initialSeek = useRef<string | null>(null);
+  };
   useEffect(() => {
-    if (!episode) return;
-    initialSeek.current = null;
-    const sub = audio.player.addListener("playbackStatusUpdate", (status) => {
-      if (status.isLoaded && initialSeek.current !== episode.id) {
-        initialSeek.current = episode.id;
-        session.metadataLoaded();
-      }
-    });
-    return () => sub.remove();
-  }, [episode?.id]);
+    scrollToCurrentPassage();
+  }, [passageIndex, pane, followTranscript]);
   async function login(email: string, code: string) {
     setError("");
     const next = await api.verify(email, code);
@@ -1020,6 +1017,8 @@ function Main() {
                 {pane === "transcript" ? (
                   <FlatList
                     ref={transcriptRef}
+                    onLayout={scrollToCurrentPassage}
+                    onContentSizeChange={scrollToCurrentPassage}
                     onScrollToIndexFailed={({ averageItemLength, index }) =>
                       transcriptRef.current?.scrollToOffset({
                         offset: averageItemLength * index,
@@ -1120,6 +1119,7 @@ function Main() {
                   />
                   <View style={styles.timeRow}>
                     <Text
+                      testID="playback-position"
                       style={{
                         color: colors.muted,
                         fontSize: 11,
