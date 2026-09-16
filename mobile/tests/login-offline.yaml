@@ -1,0 +1,14 @@
+# Stop only the local port-4311 proxy before this flow; retain the fixture DB.
+appId: com.asidefm.app.dev
+---
+- launchApp:
+    clearState: false
+- tapOn:
+    id: tab-account
+- extendedWaitUntil:
+    visible:
+      id: retry-account
+    timeout: 30000
+- assertNotVisible:
+    id: email
+- takeScreenshot: login-offline

@@ -10,6 +10,8 @@ maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice
 ```
 
 - `login.yaml`: sign in an already logged-out app.
+- `login-recovery.yaml`: on an explicit test build, verify invalid email, resend cooldown, wrong/correct code and account restoration after process restart. Supply a unique `EMAIL` for each platform. This still uses the fixture code, not real email delivery.
+- `login-offline.yaml` / `login-reconnect.yaml`: after login through port 4311's proxy, stop only that proxy while retaining the fixture process/database on 4313. Run the offline flow, restart the proxy, then run reconnect with the same `EMAIL`. No app data is cleared; successful profile restoration proves that a connection failure did not delete the saved credential.
 - `restore.yaml`: after login to an account with a completed sample question, verify its complete conversation.
 - `web-sync.mjs`: with Vite also running, sign into the same account using the website Cookie flow and test both conflict choices against real Worker checkpoint versions. It redirects only the isolated test browser's API requests to the fixture origin.
 - `checkpoint.mjs EMAIL [POSITION_MS]`: read or deliberately change a fixture account's sample position to create a native conflict. It never prints the bearer token.

@@ -27,6 +27,7 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
+import Constants from "expo-constants";
 import { File } from "expo-file-system";
 import { Ionicons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
@@ -42,6 +43,8 @@ import {
   microphonePermission,
 } from "./audio";
 import { nativeVoiceFactory } from "./voice";
+import { restoreAccount } from "./account-session";
+import { LoginForm } from "./LoginForm";
 const formatTime = (ms: number) => {
   const seconds = Math.floor(ms / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -71,16 +74,32 @@ function Main() {
   const [cursor, setCursor] = useState<string | null>(null),
     [episode, setEpisode] = useState<Episode | null>(null);
   const [loading, setLoading] = useState(true),
-    [error, setError] = useState(""),
-    [email, setEmail] = useState(""),
-    [code, setCode] = useState(""),
-    [sent, setSent] = useState(false);
-  const [busy, setBusy] = useState(false),
-    [upload, setUpload] = useState<{
-      name: string;
-      progress: number;
-      phase: string;
-    } | null>(null);
+    [error, setError] = useState("");
+  const [accountState, setAccountState] = useState<
+    "checking" | "ready" | "unavailable"
+  >("checking");
+  const [startupFailed, setStartupFailed] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
+      () => setKeyboardVisible(true),
+    );
+    const hide = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
+      () => setKeyboardVisible(false),
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  const startup = useRef({ revision: 0, failed: false });
+  const [upload, setUpload] = useState<{
+    name: string;
+    progress: number;
+    phase: string;
+  } | null>(null);
   const [lastId, setLastId] = useState<string | null>(null),
     [rate, setRate] = useState(1);
   const [, updateSync] = useState(0);
@@ -188,9 +207,46 @@ function Main() {
     );
     await api.forget();
   }
+  async function refreshApplication() {
+    const revision = ++startup.current.revision;
+    setLoading(true);
+    setAccountState("checking");
+    setError("");
+    const results = await Promise.allSettled([
+      restoreAccount(api),
+      api.health(),
+      api.list(),
+    ]);
+    if (revision !== startup.current.revision) return;
+    const [account, health, library] = results;
+    let failed = results.find((result) => result.status === "rejected");
+    if (health.status === "fulfilled") session.configure(health.value);
+    if (library.status === "fulfilled") setEpisodes(library.value);
+    if (account.status === "fulfilled") {
+      setUser(account.value);
+      setAccountState("ready");
+      if (account.value) {
+        setCollection("private");
+        try {
+          await refreshPrivate();
+        } catch (cause) {
+          failed = { status: "rejected", reason: cause };
+        }
+      }
+    } else {
+      setAccountState("unavailable");
+    }
+    if (revision !== startup.current.revision) return;
+    startup.current.failed = Boolean(failed);
+    setStartupFailed(Boolean(failed));
+    if (failed?.status === "rejected") failure(failed.reason);
+    setLoading(false);
+  }
   async function refreshPrivate(next?: string) {
     if (!api.token) return;
+    const token = api.token;
     const page = await api.space(next);
+    if (token !== api.token) return;
     setPrivateEpisodes((old) =>
       next ? [...old, ...page.episodes] : page.episodes,
     );
@@ -234,23 +290,11 @@ function Main() {
       );
     };
     void (async () => {
-      await api.restore();
       const savedLocale = await AsyncStorage.getItem("aside.locale");
       if (savedLocale) setLocale(savedLocale);
       setLastId(await AsyncStorage.getItem("aside.lastEpisode"));
-      const account = await api.me().catch(async () => {
-        await api.forget();
-        return { user: null };
-      });
-      const [health, list] = await Promise.all([api.health(), api.list()]);
       if (disposed) return;
-      session.configure(health);
-      setEpisodes(list);
-      setUser(account.user);
-      if (account.user) {
-        setCollection("private");
-        await refreshPrivate();
-      }
+      await refreshApplication();
     })()
       .catch(failure)
       .finally(() => setLoading(false));
@@ -289,6 +333,10 @@ function Main() {
         session.background();
         void save().catch(failure);
       } else if (before !== "active") {
+        if (startup.current.failed) {
+          void refreshApplication();
+          return;
+        }
         session.audioTick();
         void (async () => {
           await save();
@@ -316,6 +364,7 @@ function Main() {
     }, 2500);
     return () => {
       disposed = true;
+      startup.current.revision++;
       clearInterval(interval);
       clearInterval(polling);
       stateSubscription.remove();
@@ -351,21 +400,21 @@ function Main() {
     });
     return () => sub.remove();
   }, [episode?.id]);
-  async function login() {
-    setBusy(true);
+  async function login(email: string, code: string) {
+    setError("");
+    const next = await api.verify(email, code);
+    setUser(next);
+    setCollection("private");
+    setTab("library");
     try {
-      const next = await api.verify(email, code);
-      setUser(next);
-      setCollection("private");
       await refreshPrivate();
       if (current.current) {
         const cp = await sync.load(current.current.id);
         session.load(current.current, cp);
         session.metadataLoaded();
       }
-      setTab("library");
-    } finally {
-      setBusy(false);
+    } catch (cause) {
+      failure(cause);
     }
   }
   async function selectUpload() {
@@ -523,27 +572,40 @@ function Main() {
   };
   const rawError = error || snapshot.error;
   const microphoneDenied = rawError.includes("Microphone permission denied");
-  const visibleError = microphoneDenied
-    ? tr(
-        "麦克风权限已关闭。请在设置中允许 Aside 使用麦克风。",
-        "Microphone access is off. Allow Aside to use it in Settings.",
-      )
-    : rawError.includes("录音尚未准备好")
+  const visibleError =
+    /Network request failed|Failed to fetch|NetworkError|network connection was lost/i.test(
+      rawError,
+    )
       ? tr(
-          "麦克风还没准备好。请稍候，再按住录音。",
-          "The microphone isn't ready yet. Wait a moment, then hold to record again.",
+          "暂时无法连接，请检查网络后重试。",
+          "Unable to connect. Check your connection and try again.",
         )
-      : rawError.includes("麦克风无法开始录音")
+      : microphoneDenied
         ? tr(
-            "麦克风暂时无法录音，请检查音频输入后重试。",
-            "The microphone couldn't start. Check your audio input and try again.",
+            "麦克风权限已关闭。请在设置中允许 Aside 使用麦克风。",
+            "Microphone access is off. Allow Aside to use it in Settings.",
           )
-        : locale === "en" && /[\u4e00-\u9fff]/.test(rawError)
+        : rawError.includes("录音尚未准备好")
           ? tr(
-              "",
-              "We couldn't complete that action. Please try again when you're ready.",
+              "麦克风还没准备好。请稍候，再按住录音。",
+              "The microphone isn't ready yet. Wait a moment, then hold to record again.",
             )
-          : rawError.replace(/^Error: /, "");
+          : rawError.includes("麦克风无法开始录音")
+            ? tr(
+                "麦克风暂时无法录音，请检查音频输入后重试。",
+                "The microphone couldn't start. Check your audio input and try again.",
+              )
+            : rawError.includes("登录已过期")
+              ? tr(
+                  "登录已过期，请重新登录。",
+                  "Your session has expired. Please sign in again.",
+                )
+              : locale === "en" && /[\u4e00-\u9fff]/.test(rawError)
+                ? tr(
+                    "",
+                    "We couldn't complete that action. Please try again when you're ready.",
+                  )
+                : rawError.replace(/^Error: /, "");
   const textStyle = { color: colors.text };
   const list = collection === "private" ? privateEpisodes : episodes;
   return (
@@ -553,7 +615,7 @@ function Main() {
         style={styles.root}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        {!(episode && tab === "library") ? (
+        {!keyboardVisible && !(episode && tab === "library") ? (
           <View style={styles.header}>
             <Text
               maxFontSizeMultiplier={1}
@@ -586,6 +648,16 @@ function Main() {
                   tr("设置", "Settings"),
                   () => run(() => Linking.openSettings()),
                   "microphone-settings",
+                  true,
+                )
+              : null}
+            {startupFailed && !loading
+              ? button(
+                  tr("重试", "Retry"),
+                  () => {
+                    void refreshApplication();
+                  },
+                  "retry-connection",
                   true,
                 )
               : null}
@@ -646,6 +718,17 @@ function Main() {
             >
               {tr("我的", "Account")}
             </Text>
+            {Constants.expoConfig?.extra?.testApi ? (
+              <Text
+                testID="test-environment"
+                style={{ color: colors.muted, lineHeight: 22 }}
+              >
+                {tr(
+                  "本地验收环境 · 使用测试验证码，数据不与网站同步。",
+                  "Local test environment · Test codes only. Data does not sync with the website.",
+                )}
+              </Text>
+            ) : null}
             {user ? (
               <>
                 <View
@@ -714,74 +797,33 @@ function Main() {
                   true,
                 )}
               </>
-            ) : (
-              <>
-                <Text style={{ color: colors.muted }}>
+            ) : accountState === "checking" ? (
+              <ActivityIndicator
+                accessibilityLabel={tr("正在恢复登录", "Restoring sign-in")}
+              />
+            ) : accountState === "unavailable" ? (
+              <View style={{ gap: 16 }}>
+                <Text style={{ color: colors.muted, lineHeight: 24 }}>
                   {tr(
-                    "登录后上传音频、提问，并在设备间接着听。",
-                    "Sign in to upload, ask questions and continue across devices.",
+                    "暂时无法连接。连接恢复后，你可以继续使用原账号。",
+                    "We couldn’t connect. Your account will be available when the connection returns.",
                   )}
                 </Text>
-                <TextInput
-                  maxFontSizeMultiplier={1.5}
-                  testID="email"
-                  autoComplete="email"
-                  textContentType="emailAddress"
-                  accessibilityLabel="Email"
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="Email"
-                  placeholderTextColor={colors.muted}
-                  style={[
-                    styles.input,
-                    textStyle,
-                    { borderColor: colors.line },
-                  ]}
-                />
                 {button(
-                  tr("发送验证码", "Send code"),
-                  () =>
-                    run(async () => {
-                      await api.startLogin(email);
-                      setSent(true);
-                    }),
-                  "send-code",
+                  tr("重新连接", "Reconnect"),
+                  () => {
+                    void refreshApplication();
+                  },
+                  "retry-account",
                 )}
-                {sent ? (
-                  <>
-                    <TextInput
-                      maxFontSizeMultiplier={1.5}
-                      textContentType="oneTimeCode"
-                      autoComplete="one-time-code"
-                      testID="code"
-                      accessibilityLabel="Verification code"
-                      value={code}
-                      onChangeText={(value) => {
-                        const digits = value.replace(/\D/g, "").slice(0, 8);
-                        setCode(digits);
-                        if (digits.length === 8) Keyboard.dismiss();
-                      }}
-                      keyboardType="number-pad"
-                      inputAccessoryViewID="verification-keyboard"
-                      maxLength={8}
-                      placeholder={tr("8 位验证码", "8-digit code")}
-                      placeholderTextColor={colors.muted}
-                      style={[
-                        styles.input,
-                        textStyle,
-                        { borderColor: colors.line },
-                      ]}
-                    />
-                    {busy ? (
-                      <ActivityIndicator />
-                    ) : (
-                      button(tr("登录", "Sign in"), () => run(login), "sign-in")
-                    )}
-                  </>
-                ) : null}
-              </>
+              </View>
+            ) : (
+              <LoginForm
+                locale={locale}
+                colors={colors}
+                sendCode={(email) => api.startLogin(email)}
+                signIn={login}
+              />
             )}
             <View style={styles.row}>
               {button(
@@ -1465,7 +1507,9 @@ function Main() {
             />
           </>
         )}
-        {(!episode || tab !== "library") && current.current ? (
+        {!keyboardVisible &&
+        (!episode || tab !== "library") &&
+        current.current ? (
           <View style={[styles.row, { backgroundColor: colors.surface }]}>
             <Text numberOfLines={1} style={[textStyle, { flex: 1 }]}>
               {current.current.title}
@@ -1484,6 +1528,7 @@ function Main() {
         <View
           style={[
             styles.tabs,
+            { display: keyboardVisible ? "none" : "flex" },
             { borderColor: colors.line, backgroundColor: colors.background },
           ]}
         >

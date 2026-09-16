@@ -1,5 +1,34 @@
 import type { ExpoConfig } from "expo/config";
-const local = process.env.APP_VARIANT !== "production";
+export function resolveBuildEnvironment(
+  env: Record<string, string | undefined>,
+) {
+  const local = env.APP_VARIANT !== "production";
+  const testApi = env.ASIDE_TEST_API === "1";
+  const apiUrl = new URL(env.EXPO_PUBLIC_API_URL ?? "https://asidefm.com");
+  if (testApi && !local)
+    throw new Error(
+      "Test APIs cannot be used in production distribution builds.",
+    );
+  const loopback = ["localhost", "127.0.0.1", "[::1]", "10.0.2.2"].includes(
+    apiUrl.hostname,
+  );
+  if (!testApi && (apiUrl.protocol !== "https:" || loopback))
+    throw new Error(
+      "Installable builds require a remote HTTPS API. Local acceptance requires ASIDE_TEST_API=1.",
+    );
+  if (
+    apiUrl.username ||
+    apiUrl.password ||
+    apiUrl.search ||
+    apiUrl.hash ||
+    apiUrl.pathname !== "/"
+  )
+    throw new Error(
+      "The API URL must be an origin without credentials, path, query or fragment.",
+    );
+  return { local, testApi, apiUrl: apiUrl.origin };
+}
+const { local, testApi, apiUrl } = resolveBuildEnvironment(process.env);
 const config: ExpoConfig = {
   name: local ? "Aside Dev" : "Aside",
   slug: "aside",
@@ -42,7 +71,8 @@ const config: ExpoConfig = {
     ["@config-plugins/react-native-webrtc", { cameraPermission: false }],
   ],
   extra: {
-    apiUrl: process.env.EXPO_PUBLIC_API_URL ?? "https://asidefm.com",
+    apiUrl,
+    testApi,
     ...(process.env.EAS_PROJECT_ID
       ? { eas: { projectId: process.env.EAS_PROJECT_ID } }
       : {}),

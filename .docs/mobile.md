@@ -15,6 +15,8 @@ The root postinstall applies the one-line upstream [expo-audio paused Now Playin
 
 `APP_VARIANT=local` uses `com.asidefm.app.dev`; production uses `com.asidefm.app`. API defaults to `https://asidefm.com`. Configure `EXPO_PUBLIC_API_URL` at build time. Never include model keys or signing passwords in Expo public variables.
 
+Local **signing** still defaults to the real online service and shares website accounts. Local **acceptance** is a separate, explicit `ASIDE_TEST_API=1` configuration with temporary fixture accounts and codes. Test builds identify that environment on the Account screen. Production distribution rejects the test flag, and ordinary builds reject localhost or non-HTTPS API URLs. See the current [release readiness correction](mobile-acceptance.md#release-readiness-correction) before installing a build for daily use.
+
 ## iOS distribution
 
 Local signing, Ad Hoc (`internal`) and TestFlight (`testflight`) are maintained together. All build Release binaries with embedded JS. Local uses a separate bundle identifier so it can coexist with a production-channel install. Ad Hoc and TestFlight share the production bundle identifier and replace each other on a device.

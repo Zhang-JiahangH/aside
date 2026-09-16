@@ -2,6 +2,14 @@
 
 Branch: `codex/mobile-cross-platform`. [Pull request #2](https://github.com/qiz029/aside/pull/2).
 
+## Release readiness correction
+
+**This is local integration evidence. The mobile app is not ready for production use.** On September 15 at 20:22 PDT, the production mobile email-start route returned `403 Origin required` without an Origin and `404` with the website Origin. Production D1 still listed `0006_mobile.sql` as unapplied. The installed simulator binaries connect to temporary local data and fixed test codes; they cannot demonstrate real email delivery or synchronization with website accounts. Restoring the fixture service does not close these gaps.
+
+The latest upstream `main` also advanced to `5b59981` after the integration below. Its asynchronous player-control changes require integration before this branch can replace the production Worker/website. Do not deploy this branch over the current service without that integration and regression verification.
+
+Login follow-up fixes preserve stored credentials across failed session lookups, distinguish an expired session from a connection outage, offer explicit reconnection, and add a two-step email/code form with resend cooldown and error recovery. Keyboard entry hides surrounding navigation so the send action stays reachable. Distribution configurations reject test flags and localhost/non-HTTPS API URLs; explicit local test builds identify their separate data on the Account screen. Real email delivery and production account restoration remain outstanding.
+
 Installed **Release** builds were tested on iPhone 16 Pro and iPhone SE 3 simulators (iOS 18.3), and Pixel 6 / API 33 ARM64 Android emulator. JavaScript is embedded; Metro was not used. Tests exercised the real local Worker, D1, R2, FFmpeg media decoder and analysis workflow. External transcription/model results were deterministic fixtures; voice answers used a real receive-only WebRTC peer and audio/data transport.
 
 ## Integration with current main

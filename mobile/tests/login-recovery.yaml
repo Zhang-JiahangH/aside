@@ -1,0 +1,70 @@
+appId: com.asidefm.app.dev
+---
+- launchApp:
+    clearState: false
+- tapOn:
+    id: tab-account
+- tapOn:
+    id: locale-en
+- runFlow:
+    when:
+      visible:
+        id: sign-out
+    commands:
+      - tapOn:
+          id: sign-out
+- extendedWaitUntil:
+    visible:
+      id: email
+    timeout: 15000
+- assertVisible:
+    id: test-environment
+- tapOn:
+    id: email
+- inputText: invalid-email
+- assertVisible:
+    id: send-code
+    enabled: false
+- eraseText
+- inputText: ${EMAIL}
+- takeScreenshot: login-email
+- tapOn:
+    id: send-code
+- extendedWaitUntil:
+    visible:
+      id: code
+    timeout: 15000
+- assertVisible:
+    id: send-code
+    enabled: false
+- takeScreenshot: login-code
+- tapOn:
+    id: code
+- inputText: "00000000"
+- tapOn:
+    id: sign-in
+- extendedWaitUntil:
+    visible: "The code is incorrect or expired.*"
+    timeout: 10000
+- tapOn:
+    id: code
+- eraseText
+- inputText: "12345678"
+- tapOn:
+    id: sign-in
+- extendedWaitUntil:
+    visible:
+      id: private-library
+    timeout: 15000
+- tapOn:
+    id: tab-account
+- assertVisible: ${EMAIL}
+- takeScreenshot: login-account
+- stopApp
+- launchApp:
+    clearState: false
+- tapOn:
+    id: tab-account
+- extendedWaitUntil:
+    visible: ${EMAIL}
+    timeout: 15000

@@ -60,6 +60,7 @@ export class MobileApi implements PlayerBackend {
       : ({} as Record<string, string>);
   }
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const requestToken = this.token;
     const response = await fetch(this.base + "/api" + path, {
       ...init,
       headers: { ...this.headers(), ...init.headers },
@@ -71,7 +72,12 @@ export class MobileApi implements PlayerBackend {
       const error = await response
         .json()
         .catch(() => ({ error: "Request failed" }));
-      if (response.status === 401) this.onExpired?.();
+      if (
+        response.status === 401 &&
+        requestToken &&
+        requestToken === this.token
+      )
+        this.onExpired?.();
       throw new ApiError(
         response.status,
         error.error ?? `HTTP ${response.status}`,
