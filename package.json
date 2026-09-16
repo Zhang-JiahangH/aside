@@ -25,6 +25,7 @@
     "build:cloudflare": "npm run build && wrangler deploy --dry-run --containers-rollout=none --outdir .wrangler/build",
     "test:cloudflare": "node --import tsx --test tests/cloudflare/*.test.mjs",
     "build:media": "docker build --platform linux/amd64 -f cloudflare/Dockerfile -t aside-media:local .",
+    "test:media-container": "node scripts/test-media-container.mjs",
     "migrate:storage": "node --import tsx scripts/migrate-storage.ts",
     "deploy:cloudflare": "npm run build && wrangler deploy --config wrangler.production.jsonc",
     "db:cloudflare:production": "wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc",
