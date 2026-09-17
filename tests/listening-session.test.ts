@@ -1526,3 +1526,67 @@ test("a session start that is still wanted is not closed", async () => {
   assert.deepEqual(s.usages, []);
 });
 
+test("the listener's own voice ducks the podcast deeply before any transcript, and classification never raises it", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.callbacks.onSpeech(true);
+  assert.deepEqual(s.audio.ducks, [attention.speechLevel]);
+  assert.equal(s.audio.playing, true);
+  s.push({ type: "classifying", version: s.serverState.version });
+  s.callbacks.onSpeech(false);
+  assert.deepEqual(s.audio.ducks, [attention.speechLevel]);
+  s.push(s.decision("ignore"));
+  await flush();
+  assert.deepEqual(s.audio.ducks, [attention.speechLevel, 1]);
+  assert.equal(s.audio.playing, true);
+  // Speech that produces no transcript comes back up on its own.
+  s.callbacks.onSpeech(true);
+  s.callbacks.onSpeech(false);
+  s.clock.advance(attention.holdMs);
+  assert.deepEqual(s.audio.ducks, [
+    attention.speechLevel,
+    1,
+    attention.speechLevel,
+    1,
+  ]);
+  s.session.dispose();
+});
+
+test("under server voice control only a backend answer is heard or recorded", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push(s.decision("player_control"));
+  await flush();
+  const lastMute = () =>
+    s.commands.filter((x) => x.startsWith("mute:")).at(-1);
+  // The voice acknowledges the pause on its own initiative.
+  s.commands.length = 0;
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "好,我等一下");
+  s.callbacks.onOutput(false);
+  assert.equal(lastMute(), "mute:true");
+  assert.equal(s.commands.includes("mute:false"), false);
+  assert.deepEqual(s.session.getSnapshot().history, []);
+  assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+  // A backend answer opens the window...
+  s.push(s.decision("answer"));
+  await flush();
+  assert.equal(lastMute(), "mute:false");
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "An answer");
+  assert.equal(s.session.getSnapshot().state.assistantSpeaking, true);
+  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "An answer");
+  // ...which new listener input does not cut off mid-answer, but closes after it.
+  s.push({ type: "observing", version: s.serverState.version });
+  assert.equal(lastMute(), "mute:false");
+  s.callbacks.onOutput(false);
+  s.push({ type: "observing", version: s.serverState.version });
+  assert.equal(lastMute(), "mute:true");
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", " and an aside of its own");
+  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "An answer");
+  s.session.dispose();
+});
+

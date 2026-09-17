@@ -53,6 +53,12 @@ export interface SessionOptions {
 export const attention = {
   /** Fraction of the configured volume while an utterance is being classified. */
   level: 0.6,
+  /**
+   * Fraction while the listener is audibly speaking. On loudspeakers the
+   * podcast otherwise reaches the microphone with the listener: its lines are
+   * transcribed as theirs and echo cancellation swallows a short "wait".
+   */
+  speechLevel: 0.15,
   duckMs: 150,
   releaseMs: 300,
   /** Longest soft yield without a fresh classification or decision. */
@@ -99,6 +105,9 @@ export class ListeningSession {
   private resumeTimer?: () => void;
   private attentionTimer?: () => void;
   private attending = false;
+  private attendLevel = 1;
+  /** Server voice control: the voice may only be heard while it delivers a backend answer. */
+  private answerWindow = false;
   private heartbeat?: () => void;
   private connectionKind: "cold" | "warm" = "cold";
   private clock: RuntimeClock;
@@ -471,6 +480,7 @@ export class ListeningSession {
       });
     }
     if (!this.inputSpeaking) this.dispatch({ type: "user_end" });
+    this.answerWindow = true;
     this.voice?.mute(false);
     this.startHeartbeat();
     this.sendContext(true);
@@ -483,7 +493,7 @@ export class ListeningSession {
     this.voice?.playbackResumed();
     const soft = gentle && !play;
     if (!soft) this.audio.pause();
-    this.voice?.mute(true);
+    this.silenceVoice();
     this.dispatch({ type: "seek", atMs });
     if (soft) {
       const revision = this.playback.revision;
@@ -514,16 +524,24 @@ export class ListeningSession {
     this.release();
     this.conversation.cancel();
   }
+  /** Whatever the voice says next is its own initiative, not a backend answer. */
+  private silenceVoice() {
+    this.answerWindow = false;
+    this.voice?.mute(true);
+  }
   /** Soft yield: the podcast ducks while an utterance is classified, and comes back on its own. */
-  private attend() {
+  private attend(level: number = attention.level) {
     if (this.playback.mode !== "playing") return;
     this.attentionTimer?.();
     this.attentionTimer = this.clock.after(attention.holdMs, () =>
       this.release(),
     );
-    if (this.attending) return;
+    // Within one yield the podcast only gets quieter: classification must not
+    // bring it back up over a listener who is still speaking.
+    if (this.attending && level >= this.attendLevel) return;
     this.attending = true;
-    this.audio.duck(attention.level, attention.duckMs);
+    this.attendLevel = level;
+    this.audio.duck(level, attention.duckMs);
     this.log("Podcast yielding");
   }
   private release() {
@@ -531,6 +549,7 @@ export class ListeningSession {
     this.attentionTimer = undefined;
     if (!this.attending) return;
     this.attending = false;
+    this.attendLevel = 1;
     this.audio.duck(1, attention.releaseMs);
     this.log("Podcast resumed full volume");
   }
@@ -539,6 +558,7 @@ export class ListeningSession {
     this.attentionTimer?.();
     this.attentionTimer = undefined;
     this.attending = false;
+    this.attendLevel = 1;
     return this.audio.settle(attention.settleMs);
   }
   private interrupt() {
@@ -593,7 +613,7 @@ export class ListeningSession {
     if (this.playback.interruption) this.requestResume(0);
     else {
       this.dispatch({ type: "play" });
-      this.voice?.mute(true);
+      this.silenceVoice();
       const revision = this.playback.revision;
       const play = () => {
         if (
@@ -646,7 +666,7 @@ export class ListeningSession {
       "instructions",
       "Podcast playback is resuming. Stop speaking and remain silent until the user asks another question.",
     );
-    this.voice?.mute(true);
+    this.silenceVoice();
     this.answerEnded();
     this.dispatch({ type: "resume" });
     const revision = this.playback.revision;
@@ -658,7 +678,7 @@ export class ListeningSession {
         this.playback.assistantSpeaking
       )
         return;
-      this.voice?.mute(true);
+      this.silenceVoice();
       const positioning = this.positionAudio(
         this.playback.interruption?.resumeMs ?? this.playback.positionMs,
       );
@@ -718,6 +738,7 @@ export class ListeningSession {
     this.publish();
   }
   private closeVoice() {
+    this.answerWindow = false;
     this.cancelManual();
     this.controlAbort?.abort();
     this.controlAbort = undefined;
@@ -743,7 +764,7 @@ export class ListeningSession {
     this.beginInput("voice");
     this.cancelWork();
     this.dispatch({ type: "pause" });
-    this.voice?.mute(true);
+    this.silenceVoice();
     this.audio.pause();
     try {
       const voice = await this.connect();
@@ -923,6 +944,8 @@ export class ListeningSession {
   private receiveControl(event: LiveControlEvent) {
     if (event.type === "observing" || event.type === "classifying") {
       if (event.version !== this.controlVersion) return;
+      if (this.answerWindow && !this.playback.assistantSpeaking)
+        this.silenceVoice();
       this.conversation.liveInputPending(true);
       if (event.type === "classifying") this.attend();
       if (this.debugRecognition && event.text !== undefined) {
@@ -1048,7 +1071,9 @@ export class ListeningSession {
           this.inputSpeaking = active;
           this.log(active ? "Local speech started" : "Local speech ended");
           if (this.serverVoice && voice.isWarm && !voice.isCold) {
-            // VAD is UI telemetry only. The sideband owns turn segmentation.
+            // VAD never segments turns or pauses: the sideband owns that. It
+            // only makes room for the listener's voice before any transcript.
+            if (active) this.attend(attention.speechLevel);
             if (active && this.playback.interruption)
               this.conversation.liveInputPending(true);
             if (!active && this.playback.interruption) {
@@ -1084,6 +1109,12 @@ export class ListeningSession {
         },
         onOutput: (active) => {
           if (!valid()) return;
+          // The server answers every question; anything else the voice says
+          // (acknowledgements, its own replies) stays unheard and unrecorded.
+          if (this.serverVoice && !this.answerWindow) {
+            voice.mute(true);
+            return;
+          }
           if (
             !acceptsInput() ||
             !this.playback.interruption ||
@@ -1113,6 +1144,8 @@ export class ListeningSession {
                 "Live captions only; backend receives transcripts directly over sideband";
             return;
           }
+          if (this.serverVoice && role === "assistant" && !this.answerWindow)
+            return;
           if (role === "user" && !text.trim() && !this.input) {
             if (valid() && this.debugRecognition)
               this.lastInputDisposition = "Whitespace before any input skipped";
