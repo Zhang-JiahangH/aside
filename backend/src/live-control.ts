@@ -50,7 +50,13 @@ export class LiveControl {
     // Event names only: which supplier signals accompany an utterance that
     // produced no transcript (speech detected, or nothing at all).
     const type = typeof event.type === "string" ? event.type : "unknown";
-    if (!type.endsWith(".delta") || !this.eventTypes.has(type))
+    // Audio frames arrive five times a second; once per session is enough.
+    const repeating =
+      type.endsWith(".delta") ||
+      type.endsWith(".append") ||
+      type.endsWith(".appended") ||
+      type === "session.usage.updated";
+    if (!repeating || !this.eventTypes.has(type))
       console.log("Aside voice sideband event", {
         type,
         subscribed: !!this.sink,
