@@ -351,3 +351,68 @@ test("continuous automatic listening warms Live before speech and retains it dur
   assert.equal(s.closed, 1);
   assert.equal(s.micStopped, 1);
 });
+
+test("continuous listening: a detector that keeps firing after the connection cannot keep the microphone detached", async () => {
+  const s = setup(false, true);
+  await s.voice.enable();
+  await tick();
+  // The listener speaks before the session is connected: local capture.
+  s.speech(true);
+  assert.equal(s.captures, 1);
+  s.ready();
+  await tick();
+  s.speech(false);
+  const first = s.signal;
+  // Loudspeaker bleed re-triggers the detector while that transcription runs.
+  s.speech(true);
+  s.speech(false);
+  s.speech(true);
+  assert.equal(s.captures, 1);
+  assert.equal(first?.aborted, false);
+  assert.equal(s.signal, first);
+  s.text("wait");
+  await tick();
+  assert.deepEqual(s.questions, ["wait"]);
+  assert.equal(s.voice.isCold, false);
+  assert.equal(s.events.at(-1) === "input:true" || s.events.includes("input:true"), true);
+  // From here on speech belongs to the open session.
+  s.speech(false);
+  s.speech(true);
+  assert.equal(s.captures, 1);
+  assert.equal(s.closed, 0);
+  await s.voice.close();
+});
+
+test("continuous listening: noise or a failed transcription before the connection keeps the session and attaches the microphone", async () => {
+  const s = setup(false, true);
+  await s.voice.enable();
+  await tick();
+  s.speech(true);
+  s.ready();
+  await tick();
+  s.speech(false);
+  s.text("  ");
+  await tick();
+  assert.deepEqual(s.questions, []);
+  assert.equal(s.voice.isCold, false);
+  assert.equal(s.closed, 0);
+  assert.ok(s.events.includes("input:true"));
+  assert.equal(s.events.some((x) => x.startsWith("error:")), false);
+  await s.voice.close();
+});
+
+test("on-demand listening still waits for the listener to finish before answering", async () => {
+  const s = setup();
+  await s.voice.enable();
+  s.speech(true);
+  await tick();
+  s.ready();
+  await tick();
+  s.speech(false);
+  const first = s.signal;
+  s.speech(true);
+  assert.equal(first?.aborted, true);
+  assert.equal(s.captures, 2);
+  await s.voice.close();
+});
+

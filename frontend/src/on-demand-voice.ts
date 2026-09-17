@@ -65,6 +65,7 @@ export class OnDemandVoice {
   private closing: Promise<void> = Promise.resolve();
   private recognition?: AbortController;
   private graceTimer?: ReturnType<typeof setTimeout>;
+  private coldTimer?: ReturnType<typeof setTimeout>;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private status: VoiceStatus = "off";
   private desiredMuted = true;
@@ -158,6 +159,15 @@ export class OnDemandVoice {
     }
     this.clearTimers();
     if (active) {
+      // Continuous listening keeps one session open, so a capture that began
+      // before it connected is only waiting for its transcription. On
+      // loudspeakers the podcast keeps re-triggering the detector; restarting
+      // the capture each time would leave the microphone detached for good.
+      if (this.settlingCold) {
+        if (!this.recognition) this.leaveCold();
+        this.cb.onSpeech(true);
+        return;
+      }
       this.questionVersion++;
       this.recognition?.abort();
       if (!this.cloud || this.connecting || this.cold) {
@@ -168,9 +178,31 @@ export class OnDemandVoice {
       } else this.cb.onSpeech(true);
     } else {
       this.cb.onSpeech(false);
-      if (this.cold) void this.finishFirstQuestion();
-      else this.activity();
+      if (this.cold) {
+        if (!(this.settlingCold && this.recognition))
+          void this.finishFirstQuestion();
+      } else this.activity();
     }
+  }
+  /** A pre-connection capture that outlived the connection it was covering for. */
+  private get settlingCold() {
+    return (
+      this.continuous &&
+      !this.manual &&
+      this.cold &&
+      !!this.cloud &&
+      !this.connecting
+    );
+  }
+  /** Hands the microphone to the open session; whatever was captured locally is dropped. */
+  private leaveCold() {
+    clearTimeout(this.coldTimer);
+    this.mic.discard();
+    this.cold = false;
+    this.setStatus("on");
+    this.cloud?.input(!this.manual);
+    this.cloud?.mute(this.desiredMuted);
+    this.activity();
   }
   private ensureCloud(): Promise<void> {
     if (this.connecting) return this.connecting;
@@ -246,6 +278,15 @@ export class OnDemandVoice {
       }
       if (!this.cold)
         this.cloud?.input(!this.manual && !this.suppressUntilSpeechEnd);
+      // Speech that never audibly ends (podcast bleed) must not keep the
+      // session deaf: the local capture gets a bounded head start.
+      else if (this.continuous && !this.manual) {
+        clearTimeout(this.coldTimer);
+        this.coldTimer = setTimeout(() => {
+          if (version === this.version && this.cold && !this.recognition)
+            this.leaveCold();
+        }, 4000);
+      }
       this.setStatus(this.cold ? "transcribing" : "on");
     })();
     this.connecting = work;
@@ -277,12 +318,25 @@ export class OnDemandVoice {
         abort.signal.aborted ||
         !this.enabled ||
         version !== this.version ||
-        revision !== this.questionVersion ||
-        this.speaking ||
         !this.cloud
       )
         return;
-      if (!text.trim()) throw Error("没有识别到完整问题，请再说一次");
+      // An on-demand session waits for the listener to finish. A continuous
+      // one is already listening, so the first transcription ends the local
+      // phase whatever the detector reports since.
+      if (
+        !this.continuous &&
+        (revision !== this.questionVersion || this.speaking)
+      )
+        return;
+      if (!text.trim()) {
+        if (!this.continuous)
+          throw Error("没有识别到完整问题，请再说一次");
+        // Noise before the connection is not a failed question.
+        this.leaveCold();
+        return;
+      }
+      clearTimeout(this.coldTimer);
       this.mic.discard();
       this.cold = false;
       this.setStatus("on");
@@ -306,7 +360,9 @@ export class OnDemandVoice {
         revision === this.questionVersion
       ) {
         this.cb.onError((error as Error).message);
-        this.endCloud();
+        // One failed transcription is no reason to drop a healthy open session.
+        if (this.continuous && !this.manual && this.cloud) this.leaveCold();
+        else this.endCloud();
       }
     } finally {
       if (this.recognition === abort) this.recognition = undefined;
@@ -354,6 +410,7 @@ export class OnDemandVoice {
   }
   private endCloud() {
     this.clearTimers();
+    clearTimeout(this.coldTimer);
     this.questionVersion++;
     this.recognition?.abort();
     this.mic.discard();
