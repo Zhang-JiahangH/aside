@@ -395,3 +395,5 @@ node scripts/admin-usage.mjs --days 30 --json
 - `d63d03c`（Worker `17685380-2f8d-4f14-8d79-60e51183e2fa`）：模型只看到 passage 声明的五个字段；`buildContext` 加 24000 字节预算，依次丢旧对话、早期摘录、最旧的近期文字稿，当前段永不丢；流式问答失败同样记录原因（`Aside question failed`）。同一节目实测上下文降到 7–11KB。两次都用 `--containers-rollout=none` 保留现有 Container，`/api/health` 200。
 
 验证：`npm run check`、227 项单元测试（新增 passage 投影、字节预算、会话结束文案三条）、43 项 Cloudflare 集成测试通过。未验证：尚未由用户在该节目上重新开麦实测；`words` 仍保存在分析记录并原样返回给前端，本次只改模型上下文。
+
+补记：`17685380` 上线两分钟后（04:02:21Z），协作者从未含 `d63d03c` 的旧 main 部署了 `de481958-7677-4895-8430-6af0323fa05b`，线上回退到修复之前；04:05Z 用户再次开麦，服务端日志记录 `Trial context too large`（call 1），证实根因判断，也证实回退。04:06:59Z 从当前 main（`2be8361`）重新部署为 `8caf78c0-92a6-44c1-97cd-327bb012e388`，`--containers-rollout=none`，`/api/health` 200。多人部署同一 Worker 没有互斥，发布前应先 `git pull` 并确认 `wrangler deployments list` 的最新版本。
