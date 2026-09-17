@@ -7,7 +7,7 @@ from fractions import Fraction
 
 import numpy as np
 from aiohttp import web
-from aiortc import AudioStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import AudioStreamTrack, RTCConfiguration, RTCPeerConnection, RTCSessionDescription
 from av import AudioFrame
 
 peers = set()
@@ -39,16 +39,37 @@ class AnswerTrack(AudioStreamTrack):
 
 async def live(request):
     data = await request.json()
-    peer = RTCPeerConnection()
+    peer = RTCPeerConnection(RTCConfiguration(iceServers=[]))
     peers.add(peer)
+    input_ready = asyncio.Event()
+    pending = set()
+
+    def spawn(coro):
+        task = asyncio.create_task(coro)
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+    @peer.on("track")
+    def incoming(audio):
+        async def consume():
+            try:
+                while True:
+                    await audio.recv()
+                    input_ready.set()
+            except Exception:
+                pass
+        spawn(consume())
+
     track = AnswerTrack()
     peer.addTrack(track)
 
     @peer.on("connectionstatechange")
     async def connection_changed():
         if peer.connectionState in ("closed", "failed"):
-            peers.discard(peer)
+            for task in tuple(pending):
+                task.cancel()
             await peer.close()
+            peers.discard(peer)
 
     @peer.on("datachannel")
     def channel_opened(channel):
@@ -66,8 +87,14 @@ async def live(request):
             if event["type"] == "session.commentary.append":
                 # Instructions are model input; never echo them into the UI.
                 if event["content"] == "A short answer":
-                    channel.send(json.dumps({"type": "session.output_transcript.delta", "delta": event["content"]}))
-                    track.until = time.monotonic() + 2
+                    async def answer():
+                        # GPT-Live advances from incoming media, including silence.
+                        # A recvonly peer must not falsely pass voice acceptance.
+                        await input_ready.wait()
+                        if channel.readyState == "open":
+                            channel.send(json.dumps({"type": "session.output_transcript.delta", "delta": event["content"]}))
+                            track.until = time.monotonic() + 2
+                    spawn(answer())
             elif event["type"] == "session.close":
                 channel.send(json.dumps({"type": "session.closed"}))
                 asyncio.create_task(peer.close())
@@ -86,4 +113,5 @@ async def shutdown(_app):
 app = web.Application()
 app.router.add_post("/live", live)
 app.on_shutdown.append(shutdown)
-web.run_app(app, host="127.0.0.1", port=4312)
+if __name__ == "__main__":
+    web.run_app(app, host="127.0.0.1", port=4312)
