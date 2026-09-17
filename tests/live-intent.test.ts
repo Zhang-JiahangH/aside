@@ -231,6 +231,19 @@ test("closing aborts work and a model failure is observable without a playback a
   assert.equal(s.requests.length, 1);
 });
 
+test("a stopped trial session tells the listener the session ended, not that classification broke", async () => {
+  const s = setup();
+  s.speak("Pause");
+  await s.advance();
+  s.requests[0].reject(Error("Trial stopped"));
+  await flush();
+  assert.deepEqual(s.events.at(-1), {
+    type: "error",
+    error: "Voice session ended. Please reconnect the microphone.",
+  });
+  s.intent.close();
+});
+
 test("session work is bounded and no model call is created per audio frame", async () => {
   const s = setup(false, 1);
   s.intent.receive({ type: "session.input_audio.append", audio: "fake" });
@@ -249,31 +262,65 @@ test("session work is bounded and no model call is created per audio frame", asy
 
 test("mixed control and question continues on the server only after playback acknowledgement", async () => {
   const s = setup();
-  s.speak("Slow down and explain that"); await s.advance();
+  s.speak("Slow down and explain that");
+  await s.advance();
   const first = s.requests[0];
-  first.resolve({ action: "player_control", revision: 1, commandId: "mixed", commands: [{ type: "adjust_rate", direction: "slower" }], followUpQuestion: "Explain that", answer: "", sources: [], tools: [] });
+  first.resolve({
+    action: "player_control",
+    revision: 1,
+    commandId: "mixed",
+    commands: [{ type: "adjust_rate", direction: "slower" }],
+    followUpQuestion: "Explain that",
+    answer: "",
+    sources: [],
+    tools: [],
+  });
   await flush();
-  const decision = s.events.find(e => e.type === "decision")!;
-  s.intent.update(state({ sequence: 1 }), { decisionId: decision.decisionId, applied: true });
+  const decision = s.events.find((e) => e.type === "decision")!;
+  s.intent.update(state({ sequence: 1 }), {
+    decisionId: decision.decisionId,
+    applied: true,
+  });
   await s.advance();
   assert.equal(s.requests.length, 2);
   assert.equal(s.requests[1].data.history.at(-1)?.text, "Explain that");
   await s.finish("answer");
-  const answer = s.events.filter(e => e.type === "decision").at(-1)!;
-  s.intent.update(state({ sequence: 2, revision: 2 }), { decisionId: answer.decisionId, applied: true });
-  s.speak("What else?", 3000, 3100); await s.advance();
-  assert.ok(s.requests[2].data.history.some(t => t.role === "assistant" && t.text === "A response"));
+  const answer = s.events.filter((e) => e.type === "decision").at(-1)!;
+  s.intent.update(state({ sequence: 2, revision: 2 }), {
+    decisionId: answer.decisionId,
+    applied: true,
+  });
+  s.speak("What else?", 3000, 3100);
+  await s.advance();
+  assert.ok(
+    s.requests[2].data.history.some(
+      (t) => t.role === "assistant" && t.text === "A response",
+    ),
+  );
   s.intent.close();
 });
 
 test("rejected and missing acknowledgements never silently allow another command", async () => {
-  const rejected = setup(); rejected.speak("Pause"); await rejected.advance(); await rejected.finish("player_control");
-  const decision = rejected.events.find(e => e.type === "decision")!;
-  rejected.intent.update(state({ sequence: 1 }), { decisionId: decision.decisionId, applied: false });
-  await rejected.advance(); assert.equal(rejected.requests.length, 1);
+  const rejected = setup();
+  rejected.speak("Pause");
+  await rejected.advance();
+  await rejected.finish("player_control");
+  const decision = rejected.events.find((e) => e.type === "decision")!;
+  rejected.intent.update(state({ sequence: 1 }), {
+    decisionId: decision.decisionId,
+    applied: false,
+  });
+  await rejected.advance();
+  assert.equal(rejected.requests.length, 1);
   rejected.intent.close();
-  const missing = setup(); missing.speak("Pause"); await missing.advance(); await missing.finish("player_control");
+  const missing = setup();
+  missing.speak("Pause");
+  await missing.advance();
+  await missing.finish("player_control");
   await missing.advance(10000);
-  assert.match((missing.events.at(-1) as { error: string }).error, /acknowledgement timed out/);
+  assert.match(
+    (missing.events.at(-1) as { error: string }).error,
+    /acknowledgement timed out/,
+  );
   missing.intent.close();
 });
