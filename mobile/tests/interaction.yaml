@@ -1,4 +1,4 @@
-# Use STREAM_DELAY_MS=6000 with the local fixture so intermediate text remains
+# Use STREAM_DELAY_MS=20000 with the local fixture so intermediate text remains
 # visible long enough for a native accessibility assertion.
 appId: com.asidefm.app.dev
 ---
@@ -22,7 +22,7 @@ appId: com.asidefm.app.dev
 - assertVisible: "Ask about what you heard…"
 - extendedWaitUntil:
     visible: "A short answer"
-    timeout: 20000
+    timeout: 45000
 - assertVisible: "What did I hear?"
 - assertVisible: "Ask about what you heard…"
 - takeScreenshot: streamed-answer
