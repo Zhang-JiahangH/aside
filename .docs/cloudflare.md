@@ -82,6 +82,14 @@ Dockerfile 的构建上下文是仓库根目录。`.dockerignore` 排除 `.env`�
 4. 配置 R2 multipart 生命周期（例如一天后清理未完成 multipart），并确认 bucket 没有启用公共开发 URL。应用没有给外部开放容器转发路径。
 5. 用两个独立浏览器验证身份隔离；上传一段有权限处理的短音频；验证分析、Range 播放、首次语音、追问、续播，以及容器重启后恢复。最后再开放参赛入口。
 
+### 网站和 App 共用部署
+
+生产 Worker 同时提供网页、移动端验证码登录和 Bearer 会话。发布前先合并最新主分支与移动端支持；只包含网页的旧分支会覆盖移动端路由，即使网页仍然正常，手机也会无法登录。
+
+`npm run deploy:cloudflare` 使用生产配置，并在部署后执行 `npm run test:mobile-service`。单独使用 Wrangler 部署或回滚后，也必须运行此检查。它使用空登录请求和无效 Bearer 验证移动端路由、会话鉴权与网页 Origin 保护，不发送邮件、不尝试验证码、不调用模型。可通过 `npm run test:mobile-service -- https://example.com` 检查其他环境。
+
+这些检查用于检测已经部署的版本是否兼容 App，不会阻止他人从不含检查脚本的旧分支发布。部署分支必须保留移动端接口及相关数据库迁移。
+
 ## 上传与恢复
 
 前端根据 `/api/health` 的 `uploadMode` 自动选择本地 multipart 表单或云端分片接口：

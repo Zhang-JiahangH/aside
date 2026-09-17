@@ -281,6 +281,15 @@ export function PlayerView({
     <main
       className={`player-main${compact ? " listening-layout" : ""}${debugOpen ? " diagnostics-open" : ""}`}
     >
+      {player.checkpointConflict && (
+        <section role="alert" className="error">
+          <p>{t("另一台设备更新了进度")}</p>
+          <button onClick={player.keepLocalCheckpoint}>{t("继续本机")}</button>
+          <button onClick={player.useRemoteCheckpoint}>
+            {t("接着另一设备听")}
+          </button>
+        </section>
+      )}
       <header className="player-header">
         <div className="player-navigation">
           {navigation ?? <span>{t("听到这里，你也有话想说。")}</span>}

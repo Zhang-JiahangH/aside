@@ -1,0 +1,7 @@
+Running on emulator-5554
+ > Flow login-reconnect
+Tap on id: retry-account... COMPLETED
+Assert that "${EMAIL}" is visible... COMPLETED
+Assert that id: login-error is not visible... COMPLETED
+Assert that id: dismiss-error is not visible... COMPLETED
+Take screenshot login-reconnected... COMPLETED

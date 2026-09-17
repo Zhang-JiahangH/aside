@@ -1,0 +1,19 @@
+Authorized production rollout — 2026-09-15 PDT
+Website/API: https://asidefm.com
+Worker version: 42ae2de6-2664-4c1a-a9e3-2e7c3bb52b92
+MOBILE_AUDIO_ENABLED: true (persisted in wrangler.production.jsonc)
+D1: fresh private backup exported; no pending migrations after rollout
+Applied: 0006_mobile.sql, 0006_question_usage.sql, 0007_daily_stats.sql
+Container rollout: 2e3c1b9e-9801-4e29-b968-13c0b6f7769c
+Container rollout status: completed
+Target image: sha256:e46e08855bdff04174aca980c4f2246f25951237c2b371e39857a058a11ed573
+Target version: 7
+Target instances: 3
+Old-version instances: 0
+Target coverage: 100%
+Completed at: 2026-09-16T05:50:06.14Z
+Rollout errors: []
+Post-deploy health: HTTP 200; liveConfigured=true; uploadsEnabled=true
+Installed online iOS Release: real email-code request and one expired-code resend succeeded.
+Actual mailbox verification and signed-in end-to-end acceptance: PENDING user code.
+Paid model calls during this rollout: 0

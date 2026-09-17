@@ -25,6 +25,9 @@ export class BrowserPodcastAudio implements PodcastAudio {
   get positionMs() {
     return (this.element?.currentTime ?? 0) * 1000;
   }
+  get isLoaded() {
+    return (this.element?.readyState ?? 0) >= 1;
+  }
   set positionMs(value: number) {
     if (this.element) this.element.currentTime = value / 1000;
   }

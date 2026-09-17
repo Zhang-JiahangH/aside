@@ -1,0 +1,78 @@
+appId: ${APP_ID}
+---
+# Requires a real mailbox login completed through the app first.
+# Never supplies a fixed code, clears credentials, uploads, or calls a model.
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible:
+      id: tab-account
+    timeout: 60000
+- tapOn:
+    id: tab-account
+    waitToSettleTimeoutMs: 1000
+- assertNotVisible:
+    id: test-environment
+- extendedWaitUntil:
+    visible:
+      id: sign-out
+    timeout: 15000
+- tapOn:
+    id: tab-library
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: public-library
+    waitToSettleTimeoutMs: 1000
+- scrollUntilVisible:
+    element:
+      id: episode-${EPISODE_ID}
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    id: episode-${EPISODE_ID}
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: transcript
+    timeout: 30000
+- assertVisible: ${EPISODE_TITLE}
+- tapOn:
+    id: seek-forward
+    waitToSettleTimeoutMs: 1000
+- assertVisible: Pause
+- tapOn:
+    id: play-toggle
+    waitToSettleTimeoutMs: 1000
+- assertVisible: Play
+- copyTextFrom:
+    id: playback-position
+- evalScript: ${output.savedPosition = maestro.copiedText}
+- assertTrue: ${output.savedPosition !== "0:00"}
+- takeScreenshot: online-signed-in-player
+- pressKey: Home
+- launchApp:
+    clearState: false
+- tapOn:
+    id: tab-account
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: sign-out
+    timeout: 15000
+- tapOn:
+    id: tab-library
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: continue-last
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: transcript
+    timeout: 30000
+- assertVisible: ${EPISODE_TITLE}
+- assertVisible: Play
+- copyTextFrom:
+    id: playback-position
+- assertTrue: ${maestro.copiedText === output.savedPosition}
+- takeScreenshot: online-restored-player

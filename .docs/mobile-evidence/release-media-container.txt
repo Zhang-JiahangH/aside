@@ -1,0 +1,6 @@
+
+> test:media-container
+> node scripts/test-media-container.mjs registry.cloudflare.com/221784d24eb2a95d148bc96b6f06d6be/asidefm-mediacontainer:24c124bd
+
+PASS: M4A decodes to mono 16 kHz PCM; invalid and overlong recordings are rejected
+PASS: episode admission, MP3 segmentation, JPEG cover extraction and cleanup

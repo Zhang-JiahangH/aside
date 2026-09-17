@@ -51,6 +51,7 @@ export const liveSchema = z.object({
     .optional(),
 });
 export const checkpointSchema = z.object({
+  version: z.number().int().nonnegative().optional(),
   positionMs: positionSchema,
   resumeMs: positionSchema.optional(),
   history: historySchema,

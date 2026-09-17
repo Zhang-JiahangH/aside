@@ -1,0 +1,35 @@
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible:
+      id: tab-library
+    timeout: 60000
+- tapOn:
+    id: tab-library
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: public-library
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: episode-${EPISODE_ID}
+    timeout: 30000
+- assertNotVisible:
+    id: episode-mobile-sample
+- takeScreenshot: online-library
+- tapOn:
+    id: episode-${EPISODE_ID}
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: transcript
+    timeout: 30000
+- takeScreenshot: online-episode
+- tapOn:
+    id: tab-account
+    waitToSettleTimeoutMs: 1000
+- assertNotVisible:
+    id: test-environment
+- takeScreenshot: online-account

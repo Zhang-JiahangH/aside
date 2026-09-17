@@ -1,0 +1,134 @@
+appId: com.asidefm.app.dev
+---
+- stopApp
+- launchApp:
+    clearState: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "tab-library"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "public-library"
+- extendedWaitUntil:
+    visible:
+      id: "episode-mobile-sample"
+    timeout: 30000
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "tab-account"
+- scrollUntilVisible:
+    element:
+      id: locale-en
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "locale-en"
+- runFlow:
+    when:
+      visible:
+        id: sign-out
+    commands:
+      - tapOn:
+          waitToSettleTimeoutMs: 1000
+          id: sign-out
+- scrollUntilVisible:
+    element:
+      id: email
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "email"
+- inputText: "${EMAIL}"
+- scrollUntilVisible:
+    element:
+      id: send-code
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "send-code"
+- scrollUntilVisible:
+    element:
+      id: code
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "code"
+- inputText: "12345678"
+- waitForAnimationToEnd
+- scrollUntilVisible:
+    element:
+      id: sign-in
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "sign-in"
+- extendedWaitUntil:
+    visible:
+      id: "public-library"
+    timeout: 15000
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "public-library"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "episode-mobile-sample"
+- assertVisible:
+    id: "transcript"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "play-toggle"
+- assertVisible: "Pause"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "seek-forward"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "speed"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "play-toggle"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "question"
+- inputText: "What is curiosity?"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "send-question"
+- extendedWaitUntil:
+    visible: "A short answer"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Pause"
+    timeout: 15000
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "tab-account"
+- assertVisible: "${EMAIL}"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "locale-zh"
+- assertVisible: "音频库"
+- scrollUntilVisible:
+    element:
+      id: locale-en
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "locale-en"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "sign-out"
+- assertVisible:
+    id: "email"

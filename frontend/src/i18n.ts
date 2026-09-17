@@ -115,7 +115,8 @@ export function setLocale(next: Locale) {
   // the URL and the interface in step. Episode and space pages have one URL.
   if (typeof location !== "undefined") {
     const path = location.pathname;
-    const onHome = path === "/" || path === "/zh" || path === "/en" || path === "";
+    const onHome =
+      path === "/" || path === "/zh" || path === "/en" || path === "";
     if (onHome && path !== homeHref(next))
       history.replaceState(
         null,
@@ -136,6 +137,9 @@ export function useLocale() {
   return useSyncExternalStore(subscribe, getLocale, getLocale);
 }
 export const english: Record<string, string> = {
+  另一台设备更新了进度: "Another device updated your progress",
+  继续本机: "Keep this device",
+  接着另一设备听: "Use other device",
   中文: "Chinese",
   英文: "English",
   收起详情: "Close details",
@@ -525,18 +529,11 @@ export function translate(text: string, target: Locale): string {
 export function t(text: string): string {
   return translate(text, locale);
 }
-/** Appended to a failure so the listener knows playback continues. */
-export const keepListeningHint = "。可以继续听节目，或重新尝试提问。";
-/** Errors that already tell the listener they can carry on. */
-const reassures = /可以继续听|仍可继续收听|keep listening/i;
-/**
- * Adds the reassurance once. Some failures -- "AI trials are temporarily
- * paused. You can keep listening." -- already carry one, and appending the
- * sentence again reads as a stutter in both languages.
- */
-export function withKeepListeningHint(text: string) {
-  return reassures.test(text) ? text : `${text}${keepListeningHint}`;
-}
+import { keepListeningHint } from "@aside/player-runtime/recovery-message";
+export {
+  keepListeningHint,
+  withKeepListeningHint,
+} from "@aside/player-runtime/recovery-message";
 export function message(text: string): string {
   if (locale === "zh" || !text) return text;
   if (english[text]) return english[text];

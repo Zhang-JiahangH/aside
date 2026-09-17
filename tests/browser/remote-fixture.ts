@@ -81,7 +81,15 @@ export async function mockPlayer(page: Page) {
     if (path === "/api/auth/session")
       return route.fulfill({ json: { user: null } });
     if (path === "/api/episodes") return route.fulfill({ json: episodes });
-    if (path.endsWith("/checkpoint")) return route.fulfill({ json: null });
+    if (path.endsWith("/checkpoint")) {
+      if (route.request().method() === "PUT") {
+        const checkpoint = route.request().postDataJSON();
+        return route.fulfill({
+          json: { ...checkpoint, version: (checkpoint.version ?? 0) + 1 },
+        });
+      }
+      return route.fulfill({ json: null });
+    }
     if (path.endsWith("/audio")) {
       const range = /bytes=(\d+)-(\d*)/.exec(
         route.request().headers().range ?? "",

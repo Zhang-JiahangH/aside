@@ -1,0 +1,33 @@
+# Source needed to install this npm monorepo and build the native app.
+# Signing material is passed separately through EAS local credentials.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!engine
+!engine/**
+!player-runtime
+!player-runtime/**
+!mobile
+!mobile/**
+!backend
+!backend/package.json
+!frontend
+!frontend/package.json
+**/node_modules
+mobile/android
+mobile/ios
+mobile/.expo
+mobile/.credentials
+mobile/credentials.json
+mobile/artifacts
+mobile/tests
+mobile/dist
+**/.env
+**/.env.*
+**/*.log
+**/.DS_Store
+**/*.keystore
+**/*.jks
+**/*.apk
+**/*.ipa

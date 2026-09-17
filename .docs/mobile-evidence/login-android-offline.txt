@@ -1,0 +1,7 @@
+Running on emulator-5554
+ > Flow login-offline
+Launch app "com.asidefm.app.dev"... COMPLETED
+Tap on id: tab-account... COMPLETED
+Assert that id: retry-account is visible... COMPLETED
+Assert that id: email is not visible... COMPLETED
+Take screenshot login-offline... COMPLETED

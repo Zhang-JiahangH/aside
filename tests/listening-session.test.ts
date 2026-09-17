@@ -250,6 +250,7 @@ function setup(
     },
   });
   session.load(episode, { positionMs: 31000, history: [] });
+  session.metadataLoaded();
   audio.positionMs = 31000;
   return {
     clock,
@@ -316,6 +317,21 @@ function setup(
     },
   };
 }
+
+test("loading a checkpoint publishes only its complete state to persistence subscribers", () => {
+  const s = setup();
+  s.session.start();
+  const observed: ReturnType<typeof s.session.checkpoint>[] = [];
+  s.session.subscribe(() => observed.push(s.session.checkpoint()));
+  const history = [
+    { role: "user" as const, text: "Restored question" },
+    { role: "assistant" as const, text: "Restored answer" },
+  ];
+  s.session.load({ ...episode, id: "another" }, { positionMs: 5000, history });
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].positionMs, 5000);
+  assert.deepEqual(observed[0].history, history);
+});
 
 test("recognition diagnostics are opt-in and never turn raw deltas into a question", async () => {
   const s = setup("auto");
@@ -574,6 +590,155 @@ test("a late failure from an old play promise cannot stop a newer manual recordi
   s.session.dispose();
 });
 
+test("background keeps native podcast playback but cancels an unfinished question", async () => {
+  const s = setup("manual");
+  s.session.start();
+  await flush();
+  s.session.background();
+  assert.equal(s.audio.playing, true);
+  s.session.submitQuestion("An unfinished question");
+  assert.equal(s.requests.length, 1);
+  s.session.background();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.requests[0].signal.aborted, true);
+  assert.deepEqual(s.session.checkpoint().history, []);
+  assert.equal(s.session.checkpoint().resumeMs, 20000);
+  s.clock.advance(60000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
+test("a native asynchronous seek finishes before resumption starts the player", async () => {
+  const s = setup();
+  let finish!: () => void;
+  Object.assign(s.audio, {
+    seek: (positionMs: number) =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          s.audio.positionMs = positionMs;
+          resolve();
+        };
+      }),
+  });
+  s.session.seek(45000);
+  s.session.start();
+  await flush();
+  assert.equal(s.audio.playing, false);
+  finish();
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, 45000);
+  s.session.dispose();
+});
+
+test("native loaded status cannot erase a restored checkpoint before metadata seeking", async () => {
+  const s = setup();
+  let finish!: () => void;
+  Object.assign(s.audio, {
+    seek: (positionMs: number) =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          s.audio.positionMs = positionMs;
+          resolve();
+        };
+      }),
+  });
+  s.audio.positionMs = 0;
+  s.session.load(episode, { positionMs: 16000, history: [] });
+  // Native App's persistent status listener runs before its metadata listener.
+  s.session.audioTick();
+  assert.equal(s.session.checkpoint().positionMs, 16000);
+  s.session.metadataLoaded();
+  s.session.audioTick();
+  assert.equal(s.session.checkpoint().positionMs, 16000);
+  finish();
+  await flush();
+  s.session.audioTick();
+  assert.equal(s.audio.positionMs, 16000);
+  assert.equal(s.session.checkpoint().positionMs, 16000);
+  s.audio.positionMs = 17000;
+  s.session.audioTick();
+  assert.equal(s.session.checkpoint().positionMs, 17000);
+  s.session.dispose();
+});
+
+test("play waits for restored media, and pause cancels a pending start", async () => {
+  const s = setup();
+  let finish!: () => void;
+  Object.assign(s.audio, {
+    seek: (positionMs: number) =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          s.audio.positionMs = positionMs;
+          resolve();
+        };
+      }),
+  });
+  s.audio.positionMs = 0;
+  s.session.load(episode, { positionMs: 16000, history: [] });
+  s.session.start();
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.metadataLoaded();
+  s.session.stop();
+  finish();
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.audio.positionMs, 16000);
+  s.session.start();
+  await flush();
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("completion from a previous media load cannot unlock the next checkpoint", async () => {
+  const s = setup();
+  const finishes: (() => void)[] = [];
+  Object.assign(s.audio, {
+    seek: (positionMs: number) =>
+      new Promise<void>((resolve) => {
+        finishes.push(() => {
+          s.audio.positionMs = positionMs;
+          resolve();
+        });
+      }),
+  });
+  s.session.load(episode, { positionMs: 16000, history: [] });
+  s.session.metadataLoaded();
+  s.session.load(
+    { ...episode, id: "next" },
+    { positionMs: 42000, history: [] },
+  );
+  finishes[0]();
+  await flush();
+  s.session.audioTick();
+  assert.equal(s.session.checkpoint().positionMs, 42000);
+  s.session.start();
+  assert.equal(s.audio.playing, false);
+  s.session.metadataLoaded();
+  finishes[1]();
+  await flush();
+  assert.equal(s.audio.positionMs, 42000);
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("an unavailable media load times out without erasing the checkpoint or starting late", async () => {
+  const s = setup();
+  s.audio.positionMs = 0;
+  s.session.load(episode, { positionMs: 16000, history: [] });
+  s.session.start();
+  s.clock.advance(30000);
+  assert.equal(s.session.getSnapshot().state.mode, "paused");
+  assert.match(s.session.getSnapshot().error, /loading timed out/);
+  assert.equal(s.session.checkpoint().positionMs, 16000);
+  s.session.metadataLoaded();
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
 test("player configuration applies immediately, survives episode changes and stays in the snapshot", () => {
   const s = setup("off", undefined, { playbackRate: 0.8, volume: 0.4 });
   assert.equal(s.audio.config.playbackRate, 0.8);
@@ -697,6 +862,7 @@ test("invalid remote input has no side effects on playing audio or pending quest
 test("remote controls work without analysis or model configuration", async () => {
   const s = setup();
   s.session.load({ ...episode, analysis: undefined }, null);
+  s.session.metadataLoaded();
   s.session.configure({
     liveConfigured: false,
     microphone: { threshold: 0.025, minSpeechMs: 120, silenceMs: 650 },

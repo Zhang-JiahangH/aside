@@ -1,0 +1,13 @@
+# Restart the local port-4311 proxy before this flow, without clearing app data.
+appId: com.asidefm.app.dev
+---
+- tapOn:
+    id: retry-account
+- extendedWaitUntil:
+    visible: ${EMAIL}
+    timeout: 15000
+- assertNotVisible:
+    id: login-error
+- assertNotVisible:
+    id: dismiss-error
+- takeScreenshot: login-reconnected

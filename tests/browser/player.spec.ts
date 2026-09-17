@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { LiveIntent } from "../../backend/src/live-intent";
+import type { LiveControlEvent } from "@aside/engine/contracts";
 
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/episodes/demo-natural-resume/checkpoint", (route) =>
@@ -6,22 +8,42 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
-test("transcript sentence cue seeks and starts playback in the bottom player", async ({ page }) => {
+test("transcript sentence cue seeks and starts playback in the bottom player", async ({
+  page,
+}) => {
   await page.goto("/");
   await page.getByRole("link", { name: /给思考留一点空间/ }).click();
   const transcript = page.getByRole("region", { name: "文字稿" });
-  const passages = (await (await page.request.get("/api/episodes/demo-natural-resume")).json()).analysis.passages as { startMs: number }[];
+  const passages = (
+    await (await page.request.get("/api/episodes/demo-natural-resume")).json()
+  ).analysis.passages as { startMs: number }[];
   const line = transcript.locator(".transcript-line").nth(4);
   await line.scrollIntoViewIfNeeded();
   await line.hover();
   const jump = line.getByRole("button", { name: /从这句播放/ });
   await expect(jump).toHaveCSS("opacity", "1");
   await jump.click();
-  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.paused)).toBe(false);
-  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.currentTime)).toBeGreaterThanOrEqual(passages[4].startMs / 1000);
-  await expect(transcript.locator('[aria-current="true"]')).toContainText("你可以随时打断我");
+  await expect
+    .poll(() =>
+      page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.paused),
+    )
+    .toBe(false);
+  await expect
+    .poll(() =>
+      page
+        .locator("audio")
+        .evaluate((audio: HTMLAudioElement) => audio.currentTime),
+    )
+    .toBeGreaterThanOrEqual(passages[4].startMs / 1000);
+  await expect(transcript.locator('[aria-current="true"]')).toContainText(
+    "你可以随时打断我",
+  );
   const dock = page.locator(".player-dock");
-  expect(await dock.evaluate((element) => Math.abs(element.getBoundingClientRect().bottom - innerHeight))).toBeLessThan(2);
+  expect(
+    await dock.evaluate((element) =>
+      Math.abs(element.getBoundingClientRect().bottom - innerHeight),
+    ),
+  ).toBeLessThan(2);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "暂停", exact: true }).click();
@@ -31,10 +53,26 @@ test("transcript sentence cue seeks and starts playback in the bottom player", a
   const mobileJump = mobileLine.getByRole("button", { name: /从这句播放/ });
   await expect(mobileJump).toHaveCSS("opacity", "1");
   await mobileJump.click();
-  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.paused)).toBe(false);
-  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.currentTime)).toBeGreaterThanOrEqual(passages[2].startMs / 1000);
-  expect(await dock.evaluate((element) => Math.abs(element.getBoundingClientRect().bottom - innerHeight))).toBeLessThan(2);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await expect
+    .poll(() =>
+      page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.paused),
+    )
+    .toBe(false);
+  await expect
+    .poll(() =>
+      page
+        .locator("audio")
+        .evaluate((audio: HTMLAudioElement) => audio.currentTime),
+    )
+    .toBeGreaterThanOrEqual(passages[2].startMs / 1000);
+  expect(
+    await dock.evaluate((element) =>
+      Math.abs(element.getBoundingClientRect().bottom - innerHeight),
+    ),
+  ).toBeLessThan(2);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
 });
 
 test("real demo playback, interruption, sentence rewind and responsive layout", async ({
@@ -145,7 +183,9 @@ test("real demo playback, interruption, sentence rewind and responsive layout", 
   await page.getByRole("textbox", { name: "输入消息" }).fill("Why?");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect(page.locator(".return-note")).toContainText("0:00");
-  await expect(page.locator(".conversation-origin")).toHaveText(/从 \d+:\d{2} 开始聊/);
+  await expect(page.locator(".conversation-origin")).toHaveText(
+    /从 \d+:\d{2} 开始聊/,
+  );
   expect(
     await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
   ).toBe(true);
@@ -191,7 +231,7 @@ test("real demo playback, interruption, sentence rewind and responsive layout", 
   await page.getByRole("button", { name: "暂停", exact: true }).click();
   await expect(page.locator(".player-card")).not.toHaveClass(/compact/);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", {name:"聊两句",exact:true}).click();
+  await page.getByRole("button", { name: "聊两句", exact: true }).click();
   await expect
     .poll(() =>
       page
@@ -209,9 +249,7 @@ test("real demo playback, interruption, sentence rewind and responsive layout", 
   await expect(page.getByRole("log", { name: "对话记录" })).toBeHidden();
   await page.getByRole("button", { name: "聊两句" }).click();
   await expect(page.getByRole("log", { name: "对话记录" })).toBeVisible();
-  await expect(
-    page.getByRole("region", { name: "文字稿" }),
-  ).toBeHidden();
+  await expect(page.getByRole("region", { name: "文字稿" })).toBeHidden();
   const dockBottom = await page
     .locator(".player-dock")
     .evaluate((element) =>
@@ -333,6 +371,20 @@ for (const manual of [false]) {
       transcriptions = 0;
     const usage: any[] = [];
     let capturedHistory: any;
+    let intent!: LiveIntent;
+    let emitted = Promise.resolve();
+    page.on("close", () => intent?.close());
+    const emit = (event: LiveControlEvent) => {
+      emitted = emitted
+        .then(() =>
+          page.evaluate(
+            (value) =>
+              (window as any).asideControlPush?.(JSON.stringify(value) + "\n"),
+            event,
+          ),
+        )
+        .catch(() => {});
+    };
     await page.route("**/api/health", async (route) => {
       const r = await route.fetch();
       await route.fulfill({
@@ -359,24 +411,60 @@ for (const manual of [false]) {
       });
     });
     await page.route("**/api/episodes/*/question", async (route) => {
-      questions++;
-      const q = route.request().postDataJSON();
-      capturedHistory = q.history;
       await route.fulfill({
+        status: 500,
         json: {
-          revision: q.revision,
-          action: q.history.at(-1)?.text === "Okay, go on." ? "resume" : "answer",
-          answer: "散步给思考留下一点空间。",
-          sources: [],
-          tools: ["search_podcast"],
+          error: "Voice decisions must arrive through the server stream",
         },
       });
+    });
+    await page.route("**/api/episodes/*/live-control", (route) => {
+      const update = route.request().postDataJSON();
+      intent.update(update.player, update.acknowledgement);
+      return route.fulfill({ json: { ok: true } });
     });
     await page.route("**/api/episodes/*/usage", async (route) => {
       usage.push(route.request().postDataJSON());
       await route.fulfill({ json: { ok: true } });
     });
     await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        if (
+          String(input).includes("/live-control?") &&
+          (!init?.method || init.method === "GET")
+        ) {
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              (window as any).asideControlPush = (line: string) =>
+                controller.enqueue(encoder.encode(line));
+              controller.enqueue(
+                encoder.encode(
+                  '{"type":"ready","sessionId":"loopback-test-session"}\n',
+                ),
+              );
+              init?.signal?.addEventListener(
+                "abort",
+                () => {
+                  (window as any).asideControlPush = undefined;
+                  controller.close();
+                },
+                { once: true },
+              );
+            },
+            cancel() {
+              (window as any).asideControlPush = undefined;
+            },
+          });
+          return Promise.resolve(
+            new Response(stream, {
+              headers: { "Content-Type": "application/x-ndjson" },
+            }),
+          );
+        }
+        return originalFetch(input, init);
+      };
       Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
         value: async () => {
           const ctx = new AudioContext(),
@@ -396,7 +484,31 @@ for (const manual of [false]) {
     });
     await page.route("**/api/episodes/*/live", async (route) => {
       creates++;
-      const { sdp } = route.request().postDataJSON();
+      const { sdp, control } = route.request().postDataJSON();
+      expect(control).toBeTruthy();
+      intent = new LiveIntent(control.player, [], {
+        answer: async (request) => {
+          questions++;
+          capturedHistory = request.history;
+          return {
+            revision: request.revision,
+            action:
+              request.history.at(-1)?.text === "Okay, go on."
+                ? "resume"
+                : "answer",
+            answer: "散步给思考留下一点空间。",
+            sources: [],
+            tools: ["search_podcast"],
+          };
+        },
+        emit,
+        context: () => {},
+        now: Date.now,
+        after: (ms, run) => {
+          const timer = setTimeout(run, ms);
+          return () => clearTimeout(timer);
+        },
+      });
       const answer = await page.evaluate(async (offer) => {
         const peer = new RTCPeerConnection();
         Object.assign(window, { asideLoopback: peer, asideCloudEvents: [] });
@@ -454,6 +566,7 @@ for (const manual of [false]) {
         json: {
           session: { id: "loopback-test-session" },
           transport: { sdp: answer },
+          control: true,
         },
       });
     });
@@ -461,7 +574,9 @@ for (const manual of [false]) {
     await page.getByRole("link", { name: /给思考留一点空间/ }).click();
     await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
     await page.getByRole("button", { name: "播放", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "● 语音交流中" })).toBeVisible();
+    await expect(
+      page.getByRole("status").filter({ hasText: "● 语音交流中" }),
+    ).toBeVisible();
     expect(creates).toBe(1);
     if (manual) {
       await page.getByRole("button", { name: "按住说话", exact: true }).focus();
@@ -473,10 +588,27 @@ for (const manual of [false]) {
     }
     await expect.poll(() => creates).toBe(1);
     await page.waitForTimeout(250);
-    if (!manual) await page.evaluate(() => {
-      const channel = (window as any).asideCloudChannel;
-      channel.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "为什么散步会带来灵感？" }));
-      channel.send(JSON.stringify({ type: "session.delegation.created", delegation: { target: "client", id: "question-1" } }));
+    if (!manual)
+      await page.evaluate(() => {
+        const channel = (window as any).asideCloudChannel;
+        channel.send(
+          JSON.stringify({
+            type: "session.input_transcript.delta",
+            delta: "为什么散步会带来灵感？",
+          }),
+        );
+        channel.send(
+          JSON.stringify({
+            type: "session.delegation.created",
+            delegation: { target: "client", id: "question-1" },
+          }),
+        );
+      });
+    intent.receive({
+      type: "session.input_transcript.delta",
+      delta: "为什么散步会带来灵感？",
+      start_ms: 0,
+      end_ms: 500,
     });
     if (manual) await page.keyboard.up("Space");
     else
@@ -512,7 +644,9 @@ for (const manual of [false]) {
             Math.max(
               ...bars.map((bar) =>
                 Number(
-                  /scaleY\(([\d.]+)\)/.exec((bar as HTMLElement).style.transform)?.[1] ?? 0,
+                  /scaleY\(([\d.]+)\)/.exec(
+                    (bar as HTMLElement).style.transform,
+                  )?.[1] ?? 0,
                 ),
               ),
             ),
@@ -522,8 +656,6 @@ for (const manual of [false]) {
     await page
       .locator(".player-dock")
       .screenshot({ path: "test-results/dock-agent-answering.png" });
-    await page.getByRole("button", { name: /开发观察/ }).click();
-    await expect(page.locator(".debug")).toContainText('"connection": "warm"');
     await expect(page.locator(".followup-window")).not.toContainText(
       "秒后继续播放",
     );
@@ -559,7 +691,18 @@ for (const manual of [false]) {
             delta: "Okay, go on.",
           }),
         );
-        (window as any).asideCloudChannel.send(JSON.stringify({ type: "session.delegation.created", delegation: { target: "client", id: "resume-1" } }));
+        (window as any).asideCloudChannel.send(
+          JSON.stringify({
+            type: "session.delegation.created",
+            delegation: { target: "client", id: "resume-1" },
+          }),
+        );
+      });
+      intent.receive({
+        type: "session.input_transcript.delta",
+        delta: "Okay, go on.",
+        start_ms: 3000,
+        end_ms: 3500,
       });
     }
     await expect(page.locator(".status")).toContainText("回到音频");
