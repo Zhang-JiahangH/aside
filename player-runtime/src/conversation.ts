@@ -51,6 +51,7 @@ export class Conversation {
   private provisionalTurns = new Set<string>();
   private references: Source[] = [];
   private draft = "";
+  private answerPreview = "";
   private held = false;
   private deadline: number | null = null;
   private waitMs = 3000;
@@ -89,6 +90,7 @@ export class Conversation {
       ),
       sources: this.references,
       question: this.draft,
+      answerPreview: this.answerPreview,
       busy: !!this.pending && this.acceptedInput,
       resumeHeld: this.held,
       followupMs: this.waitMs,
@@ -129,6 +131,7 @@ export class Conversation {
     this.host.changed();
   }
   cancel(preserveProvisional = false) {
+    this.answerPreview = "";
     // A second breath can extend unclassified input. Keep that context only
     // within the active interaction; explicit cancellation discards it.
     const provisional = preserveProvisional
@@ -474,14 +477,23 @@ export class Conversation {
         },
         controller.signal,
         (phase) => progress.update(phase),
+        !(delegationId || speak)
+          ? (text) => {
+              if (!valid()) return;
+              this.answerPreview = text;
+              this.host.changed();
+            }
+          : undefined,
       );
       progress.close();
       if (!valid()) return;
       if (result.revision !== revision) throw Error("回答轮次不匹配，请重试");
       this.host.log(`Backend intent: ${result.action}`);
+      this.answerPreview = "";
       this.consumeResult(result, handledText, delegationId, speak);
     } catch (error) {
       if (valid()) {
+        this.answerPreview = "";
         this.hold();
         this.latency.cancel();
         this.delegation = undefined;

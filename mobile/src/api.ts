@@ -1,12 +1,10 @@
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { File } from "expo-file-system";
+import { fetch as fetchStream } from "expo/fetch";
+import { readQuestion } from "@aside/player-runtime/question-stream";
 import type { Episode } from "@aside/engine/core";
-import {
-  checkpointSchema,
-  questionResultSchema,
-  type Checkpoint,
-} from "@aside/engine/contracts";
+import { checkpointSchema, type Checkpoint } from "@aside/engine/contracts";
 import { CheckpointConflict } from "@aside/player-runtime/checkpoint-sync";
 import type { PlayerBackend, PlayerHealth } from "@aside/player-runtime/ports";
 export interface User {
@@ -148,19 +146,28 @@ export class MobileApi implements PlayerBackend {
     request: Parameters<PlayerBackend["question"]>[1],
     signal: AbortSignal,
     progress: Parameters<PlayerBackend["question"]>[3],
+    onAnswer?: (text: string) => void,
   ) {
     progress("working");
-    return questionResultSchema.parse(
-      await this.request(`/episodes/${id}/question`, {
+    const requestToken = this.token;
+    const response = await fetchStream(
+      this.base + `/api/episodes/${id}/question`,
+      {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json",
+          ...this.headers(),
+          Accept: "application/x-ndjson",
+          ...(onAnswer ? { "X-Aside-Answer-Stream": "1" } : {}),
         },
         body: JSON.stringify(request),
         signal,
-      }),
+        credentials: "omit",
+      },
     );
+    if (response.status === 401 && requestToken && requestToken === this.token)
+      this.onExpired?.();
+    return readQuestion(response, progress, request.revision, onAnswer);
   }
   live(id: string, request: Parameters<PlayerBackend["live"]>[1]) {
     return this.json<Awaited<ReturnType<PlayerBackend["live"]>>>(

@@ -65,6 +65,9 @@ test("local server attaches sideband before returning Live and streams server de
             outputTokens: 1,
             reasoningTokens: 0,
           });
+          // Let the controller publish this result before ending its stream.
+          // A fixed 300 ms close can beat the debounce on a loaded build host.
+          setImmediate(() => receive({ type: "session.closed" }));
           return {
             revision: q.revision,
             action: "ignore",
@@ -119,7 +122,7 @@ test("local server attaches sideband before returning Live and streams server de
         receive({ type: "session.input_transcript.delta", delta: "Dinner?" }),
       30,
     );
-    const end = setTimeout(() => receive({ type: "session.closed" }), 300);
+    const end = setTimeout(() => receive({ type: "session.closed" }), 5000);
     const stream = await reading;
     clearTimeout(input);
     clearTimeout(end);

@@ -120,3 +120,54 @@ test("NDJSON carries a complete validated player command across arbitrary networ
   ])
     assert.equal(questionResultSchema.safeParse(malformed).success, false);
 });
+
+test("answer text arrives before the final result and validates every revision", async () => {
+  let sink!: ReadableStreamDefaultController<Uint8Array>;
+  let finished = false;
+  const previews: string[] = [];
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      sink = c;
+    },
+  });
+  const pending = readQuestion(
+    new Response(body, {
+      headers: { "Content-Type": "application/x-ndjson" },
+    }),
+    () => {},
+    2,
+    (text) => previews.push(text),
+  ).then((result) => {
+    finished = true;
+    return result;
+  });
+  sink.enqueue(
+    new TextEncoder().encode(
+      JSON.stringify({ type: "answer", revision: 2, text: "正在逐步回答" }) +
+        "\n",
+    ),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(previews, ["正在逐步回答"]);
+  assert.equal(finished, false);
+  sink.enqueue(
+    new TextEncoder().encode(
+      JSON.stringify({ type: "result", result: valid }) + "\n",
+    ),
+  );
+  assert.deepEqual(await pending, valid);
+  await assert.rejects(
+    readQuestion(
+      new Response(
+        JSON.stringify({ type: "answer", revision: 1, text: "stale" }) + "\n",
+        {
+          headers: { "Content-Type": "application/x-ndjson" },
+        },
+      ),
+      () => {},
+      2,
+      () => assert.fail("stale preview reached UI"),
+    ),
+    /轮次/,
+  );
+});

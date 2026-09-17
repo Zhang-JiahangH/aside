@@ -450,6 +450,10 @@ async function route(
                 (phase) =>
                   emit({ type: "progress", revision: data.revision, phase }),
                 cost,
+                request.headers.get("X-Aside-Answer-Stream") === "1"
+                  ? (text) =>
+                      emit({ type: "answer", revision: data.revision, text })
+                  : undefined,
               ),
             );
             emit({ type: "result", result });

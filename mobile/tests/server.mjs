@@ -12,6 +12,7 @@ import {
 } from "miniflare";
 import { CloudStore } from "../../cloudflare/src/store.ts";
 import { mediaApp } from "../../backend/src/container/app.ts";
+import { streamedResponse } from "../../tests/fixtures/streamed-response.ts";
 let mf, db, bucket;
 const root = await mkdtemp(join(tmpdir(), "aside-mobile-fixture-"));
 const media = mediaApp(join(root, "media"));
@@ -130,6 +131,14 @@ mf = new Miniflare(
         });
         return new WorkerResponse(null, { status: 101, webSocket: pair[0] });
       }
+      if (
+        request.url.endsWith("/responses") &&
+        JSON.parse(payload.toString()).stream
+      )
+        return streamedResponse(
+          "A short answer",
+          Number(process.env.STREAM_DELAY_MS ?? 1500),
+        );
       if (request.url.endsWith("/responses"))
         return Response.json({
           id: "response-test",

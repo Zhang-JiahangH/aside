@@ -7,7 +7,11 @@ import {
   type QuestionResult,
   type QuestionPhase,
 } from "@aside/engine/contracts";
-import type { ModelReply, QuestionModel, ToolResult } from "./question-model.js";
+import type {
+  ModelReply,
+  QuestionModel,
+  ToolResult,
+} from "./question-model.js";
 import {
   questionInstructions,
   playerToolInstructions,
@@ -47,6 +51,7 @@ export interface QuestionAnswerer {
     signal?: AbortSignal,
     progress?: (phase: QuestionPhase) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
+    onAnswer?: (text: string) => void,
   ): Promise<QuestionResult>;
 }
 /** Application policy: intent, heard-only retrieval, tool budget and sources. */
@@ -61,6 +66,7 @@ export class QuestionService implements QuestionAnswerer {
     signal?: AbortSignal,
     progress?: (phase: QuestionPhase) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
+    onAnswer?: (text: string) => void,
   ): Promise<QuestionResult> {
     signal?.throwIfAborted();
     const resume = (): QuestionResult => ({
@@ -106,6 +112,7 @@ export class QuestionService implements QuestionAnswerer {
         record,
         signal,
         progress,
+        request.player?.source === "text" ? onAnswer : undefined,
       );
     } finally {
       if (totals.rounds) telemetry?.(totals);
@@ -120,12 +127,15 @@ export class QuestionService implements QuestionAnswerer {
     record: (reply: ModelReply) => void,
     signal?: AbortSignal,
     progress?: (phase: QuestionPhase) => void,
+    onAnswer?: (text: string) => void,
   ): Promise<QuestionResult> {
     let previousId: string | undefined;
     let toolResults: ToolResult[] = [];
     for (let round = 0; round < this.rounds; round++) {
       signal?.throwIfAborted();
       progress?.(round === 0 ? "working" : "continuing");
+      let preview = "";
+      onAnswer?.("");
       const response = await this.model.reply({
         context:
           round === 0
@@ -139,6 +149,15 @@ export class QuestionService implements QuestionAnswerer {
         instructions: questionInstructions + playerToolInstructions,
         tools: questionTools,
         signal,
+        ...(onAnswer
+          ? {
+              onText: (delta: string) => {
+                if (signal?.aborted) return;
+                preview = (preview + delta).slice(0, 64000);
+                onAnswer(preview);
+              },
+            }
+          : {}),
       });
       record(response);
       signal?.throwIfAborted();
@@ -147,6 +166,7 @@ export class QuestionService implements QuestionAnswerer {
       if (response.searchedWeb) used.push("search_web");
       sources.push(...response.sources);
       if (response.calls.length > 8) throw Error("Tool call limit reached");
+      if (response.calls.length) onAnswer?.("");
       const terminal = response.calls.some((call) =>
         [
           "control_podcast",

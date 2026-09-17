@@ -126,6 +126,7 @@ export class NativeVoice implements VoicePort {
             this.connect(),
           ]);
           if (generation !== this.generation || abort.signal.aborted) return;
+          this.cb.onStatus("on");
           this.mute(false);
           this.cb.onFirstQuestion(text);
         } finally {
@@ -304,9 +305,8 @@ export class NativeVoice implements VoicePort {
           if (file.exists) file.delete();
         }
         if (generation === this.generation && !this.capturing) {
-          await this.coordinator.answer(this.audioOwner);
-          if (!this.ready)
-            await this.coordinator.finishQuestion(this.audioOwner);
+          if (this.ready) await this.coordinator.answer(this.audioOwner);
+          else await this.coordinator.finishQuestion(this.audioOwner);
         }
       });
   }

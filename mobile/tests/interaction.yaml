@@ -1,0 +1,28 @@
+# Use STREAM_DELAY_MS=20000 with the local fixture so intermediate text remains
+# visible long enough for a native accessibility assertion.
+appId: com.asidefm.app.dev
+---
+- runFlow: login.yaml
+- tapOn:
+    id: public-library
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: episode-mobile-sample
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: question
+    waitToSettleTimeoutMs: 500
+- inputText: "What did I hear?"
+- tapOn:
+    id: send-question
+    waitToSettleTimeoutMs: 100
+- extendedWaitUntil:
+    visible: "A short"
+    timeout: 8000
+- assertVisible: "Ask about what you heard…"
+- extendedWaitUntil:
+    visible: "A short answer"
+    timeout: 45000
+- assertVisible: "What did I hear?"
+- assertVisible: "Ask about what you heard…"
+- takeScreenshot: streamed-answer

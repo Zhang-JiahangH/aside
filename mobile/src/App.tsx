@@ -45,6 +45,7 @@ import {
 import { nativeVoiceFactory } from "./voice";
 import { restoreAccount } from "./account-session";
 import { LoginForm } from "./LoginForm";
+import { errorMessage } from "./error-message";
 const formatTime = (ms: number) => {
   const seconds = Math.floor(ms / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -52,14 +53,15 @@ const formatTime = (ms: number) => {
 function Main() {
   const dark = useColorScheme() === "dark";
   const colors = {
-    background: dark ? "#1a1816" : "#f6f1e8",
-    surface: dark ? "#282522" : "#fffbf4",
-    text: dark ? "#efe9df" : "#2b2520",
-    muted: dark ? "#bdb3a6" : "#6a5f55",
-    accent: dark ? "#9cc0aa" : "#34503f",
+    background: dark ? "#111612" : "#f0f1ed",
+    surface: dark ? "#202721" : "#fffefa",
+    navigation: dark ? "#19201b" : "#fffefa",
+    text: dark ? "#f0f2eb" : "#202a23",
+    muted: dark ? "#adb8ad" : "#68746b",
+    accent: dark ? "#a7cbb3" : "#315b43",
     onAccent: dark ? "#1a281e" : "#ffffff",
-    highlight: dark ? "#303d32" : "#e3e9df",
-    line: dark ? "#3a3530" : "#e6ddcf",
+    highlight: dark ? "#2a3b30" : "#e1eadf",
+    line: dark ? "#344037" : "#d9dfd7",
   };
   const [locale, setLocale] = useState(
     getLocales()[0]?.languageCode === "zh" ? "zh" : "en",
@@ -148,7 +150,10 @@ function Main() {
     chatRef = useRef<FlatList>(null),
     pressVersion = useRef(0),
     held = useRef(false);
-  const captureBounds = useRef({ width: 0, height: 0 });
+  const captureStart = useRef({ x: 0, y: 0 });
+  const [captureCancelled, setCaptureCancelled] = useState(false);
+  const questionInput = useRef<TextInput>(null);
+  const followConversation = useRef(true);
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
       "hardwareBackPress",
@@ -301,15 +306,16 @@ function Main() {
       .catch(failure)
       .finally(() => setLoading(false));
     let previousMode = session.getSnapshot().state.mode,
-      previousHistory = session.getSnapshot().history;
+      previousHistory = session.checkpoint().history;
     const unsubscribe = session.subscribe(() => {
       const next = session.getSnapshot();
+      const completedHistory = session.checkpoint().history;
       if (
         next.state.mode !== previousMode ||
-        next.history !== previousHistory
+        completedHistory !== previousHistory
       ) {
         previousMode = next.state.mode;
-        previousHistory = next.history;
+        previousHistory = completedHistory;
         void save().catch(failure);
       }
     });
@@ -568,64 +574,44 @@ function Main() {
     );
   };
   const rawError = error || snapshot.error;
-  const microphoneDenied = rawError.includes("Microphone permission denied");
-  const visibleError =
-    /Network request failed|Failed to fetch|NetworkError|network connection was lost/i.test(
+  const microphoneDenied =
+    /Microphone permission denied|Recording permission has not been granted/i.test(
       rawError,
-    )
-      ? tr(
-          "暂时无法连接，请检查网络后重试。",
-          "Unable to connect. Check your connection and try again.",
-        )
-      : microphoneDenied
-        ? tr(
-            "麦克风权限已关闭。请在设置中允许 Aside 使用麦克风。",
-            "Microphone access is off. Allow Aside to use it in Settings.",
-          )
-        : rawError.includes("录音尚未准备好")
-          ? tr(
-              "麦克风还没准备好。请稍候，再按住录音。",
-              "The microphone isn't ready yet. Wait a moment, then hold to record again.",
-            )
-          : rawError.includes("麦克风无法开始录音")
-            ? tr(
-                "麦克风暂时无法录音，请检查音频输入后重试。",
-                "The microphone couldn't start. Check your audio input and try again.",
-              )
-            : rawError.includes("登录已过期")
-              ? tr(
-                  "登录已过期，请重新登录。",
-                  "Your session has expired. Please sign in again.",
-                )
-              : locale === "en" && /[\u4e00-\u9fff]/.test(rawError)
-                ? tr(
-                    "",
-                    "We couldn't complete that action. Please try again when you're ready.",
-                  )
-                : rawError.replace(/^Error: /, "");
+    );
+  const visibleError = errorMessage(rawError, locale);
   const textStyle = { color: colors.text };
   const list = collection === "private" ? privateEpisodes : episodes;
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: colors.background }]}>
+    <SafeAreaView style={[styles.root, { backgroundColor: colors.navigation }]}>
       <StatusBar barStyle={dark ? "light-content" : "dark-content"} />
       <KeyboardAvoidingView
-        style={styles.root}
+        style={[styles.root, { backgroundColor: colors.background }]}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         {!keyboardVisible && !(episode && tab === "library") ? (
-          <View style={styles.header}>
+          <View
+            style={[
+              styles.header,
+              {
+                backgroundColor: colors.navigation,
+                borderBottomColor: colors.line,
+              },
+            ]}
+          >
             <Text
               maxFontSizeMultiplier={1}
               style={[styles.brand, { color: colors.accent }]}
             >
               Aside.
             </Text>
+            <Ionicons name="headset-outline" size={22} color={colors.accent} />
           </View>
         ) : null}
         {error || snapshot.error ? (
           <View
             style={[
               styles.notice,
+              styles.errorNotice,
               { backgroundColor: colors.surface, borderColor: colors.line },
             ]}
           >
@@ -928,7 +914,15 @@ function Main() {
           </ScrollView>
         ) : episode ? (
           <>
-            <View style={styles.playerHeader}>
+            <View
+              style={[
+                styles.playerHeader,
+                {
+                  backgroundColor: colors.navigation,
+                  borderBottomColor: colors.line,
+                },
+              ]}
+            >
               {button(
                 tr("返回音频库", "Library"),
                 () => {
@@ -964,13 +958,25 @@ function Main() {
                   />
                 </View>
               )}
-              <Text
-                numberOfLines={2}
-                maxFontSizeMultiplier={1.6}
-                style={[styles.subtitle, textStyle, { flex: 1 }]}
-              >
-                {episode.title}
-              </Text>
+              <View style={{ flex: 1, gap: 3 }}>
+                <Text
+                  style={{
+                    color: colors.muted,
+                    fontSize: 10,
+                    fontWeight: "700",
+                    letterSpacing: 1.2,
+                  }}
+                >
+                  {tr("正在收听", "NOW LISTENING")}
+                </Text>
+                <Text
+                  numberOfLines={2}
+                  maxFontSizeMultiplier={1.6}
+                  style={[styles.subtitle, textStyle]}
+                >
+                  {episode.title}
+                </Text>
+              </View>
             </View>
             {episode.status !== "ready" ? (
               <View style={styles.content}>
@@ -992,7 +998,16 @@ function Main() {
               </View>
             ) : (
               <>
-                <View style={styles.row}>
+                <View
+                  style={[
+                    styles.row,
+                    styles.paneTabs,
+                    {
+                      backgroundColor: colors.navigation,
+                      borderBottomColor: colors.line,
+                    },
+                  ]}
+                >
                   {button(
                     tr("逐字稿", "Transcript"),
                     () => setPane("transcript"),
@@ -1060,27 +1075,97 @@ function Main() {
                   <FlatList
                     ref={chatRef}
                     onContentSizeChange={() =>
+                      followConversation.current &&
                       chatRef.current?.scrollToEnd({ animated: true })
                     }
+                    onScroll={({ nativeEvent }) => {
+                      followConversation.current =
+                        nativeEvent.contentSize.height -
+                          nativeEvent.layoutMeasurement.height -
+                          nativeEvent.contentOffset.y <
+                        80;
+                    }}
+                    scrollEventThrottle={100}
                     testID="conversation"
                     data={snapshot.history}
                     keyExtractor={(_, i) => String(i)}
                     contentContainerStyle={styles.content}
                     ListEmptyComponent={
-                      <Text style={{ color: colors.muted }}>
-                        {tr(
-                          "对刚才听到的内容，有什么好奇？",
-                          "What caught your curiosity?",
-                        )}
-                      </Text>
+                      <View style={styles.emptyConversation}>
+                        <Ionicons
+                          name="chatbubbles-outline"
+                          size={30}
+                          color={colors.accent}
+                        />
+                        <Text style={[styles.subtitle, textStyle]}>
+                          {tr("聊聊刚才听到的", "A little room to talk")}
+                        </Text>
+                        <Text
+                          style={{
+                            color: colors.muted,
+                            textAlign: "center",
+                            lineHeight: 23,
+                          }}
+                        >
+                          {tr(
+                            "对刚才听到的内容，有什么好奇？",
+                            "What caught your curiosity?",
+                          )}
+                        </Text>
+                      </View>
+                    }
+                    ListFooterComponent={
+                      snapshot.busy ? (
+                        <View
+                          testID="answer-stream"
+                          style={[
+                            styles.bubble,
+                            {
+                              backgroundColor: colors.surface,
+                              borderColor: colors.line,
+                              borderWidth: StyleSheet.hairlineWidth,
+                            },
+                          ]}
+                        >
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 8,
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color: colors.accent,
+                                fontSize: 12,
+                                fontWeight: "700",
+                              }}
+                            >
+                              Aside
+                            </Text>
+                            <ActivityIndicator
+                              size="small"
+                              color={colors.accent}
+                            />
+                          </View>
+                          <Text style={[textStyle, styles.transcript]}>
+                            {snapshot.answerPreview ||
+                              tr("正在想一想…", "Thinking it through…")}
+                          </Text>
+                        </View>
+                      ) : null
                     }
                     renderItem={({ item }) => (
                       <View
                         style={[
                           styles.bubble,
                           {
-                            backgroundColor: colors.surface,
-                            marginLeft: item.role === "user" ? 30 : 0,
+                            backgroundColor:
+                              item.role === "user"
+                                ? colors.highlight
+                                : colors.surface,
+                            marginLeft: item.role === "user" ? 36 : 0,
+                            marginRight: item.role === "user" ? 0 : 12,
                           },
                         ]}
                       >
@@ -1216,6 +1301,7 @@ function Main() {
                   ) : null}
                   <View style={styles.row}>
                     <TextInput
+                      ref={questionInput}
                       maxFontSizeMultiplier={1.5}
                       testID="question"
                       accessibilityLabel="Question"
@@ -1229,7 +1315,11 @@ function Main() {
                       style={[
                         styles.input,
                         textStyle,
-                        { borderColor: colors.line, flex: 1 },
+                        {
+                          borderColor: colors.line,
+                          backgroundColor: colors.background,
+                          flex: 1,
+                        },
                       ]}
                     />
                     {button(
@@ -1239,9 +1329,15 @@ function Main() {
                           setTab("account");
                           return;
                         }
-                        Keyboard.dismiss();
-                        session.submitQuestion(snapshot.question);
-                        setPane("conversation");
+                        // Read the current draft; a keyboard event can precede React's render.
+                        if (
+                          session.submitQuestion(session.getSnapshot().question)
+                        ) {
+                          questionInput.current?.clear();
+                          followConversation.current = true;
+                          Keyboard.dismiss();
+                          setPane("conversation");
+                        }
                       },
                       "send-question",
                     )}
@@ -1250,10 +1346,22 @@ function Main() {
                     testID="hold-to-talk"
                     accessibilityRole="button"
                     accessibilityLabel={tr("按住说话", "Hold to talk")}
-                    onPressIn={() => {
+                    pressRetentionOffset={{
+                      top: 80,
+                      bottom: 64,
+                      left: 64,
+                      right: 64,
+                    }}
+                    onPressIn={(event) => {
+                      captureStart.current = {
+                        x: event.nativeEvent.pageX,
+                        y: event.nativeEvent.pageY,
+                      };
+                      setCaptureCancelled(false);
                       held.current = true;
                       const pv = ++pressVersion.current;
-                      run(async () => {
+                      setError("");
+                      void (async () => {
                         if (!user) {
                           setTab("account");
                           return;
@@ -1269,24 +1377,31 @@ function Main() {
                         }
                         if (!held.current || pv !== pressVersion.current)
                           return;
-                        setPane("conversation");
                         await session.beginManual();
-                      });
+                      })().catch(failure);
                     }}
                     onPressOut={() => {
+                      const send = held.current;
                       held.current = false;
                       pressVersion.current++;
-                      session.endManual();
-                    }}
-                    onLayout={(event) => {
-                      captureBounds.current = event.nativeEvent.layout;
+                      if (send) {
+                        session.endManual();
+                        followConversation.current = true;
+                        setPane("conversation");
+                        Keyboard.dismiss();
+                      }
+                      setCaptureCancelled(false);
                     }}
                     onTouchMove={(event) => {
-                      const { locationX: x, locationY: y } = event.nativeEvent;
-                      const { width, height } = captureBounds.current;
-                      if (x < 0 || x > width || y < 0 || y > height) {
+                      const { pageX: x, pageY: y } = event.nativeEvent;
+                      if (
+                        held.current &&
+                        (Math.abs(x - captureStart.current.x) > 64 ||
+                          Math.abs(y - captureStart.current.y) > 64)
+                      ) {
                         held.current = false;
                         pressVersion.current++;
+                        setCaptureCancelled(true);
                         session.cancelManualCapture();
                       }
                     }}
@@ -1294,9 +1409,9 @@ function Main() {
                       styles.button,
                       {
                         backgroundColor: snapshot.manualHeld
-                          ? "#a73838"
-                          : colors.highlight,
-                        minHeight: 48,
+                          ? "#943e3d"
+                          : colors.accent,
+                        minHeight: 52,
                         flexDirection: "row",
                         gap: 8,
                       },
@@ -1305,25 +1420,34 @@ function Main() {
                     <Ionicons
                       name={snapshot.manualHeld ? "radio" : "mic-outline"}
                       size={19}
-                      color={snapshot.manualHeld ? "#fff" : colors.accent}
+                      color={snapshot.manualHeld ? "#fff" : colors.onAccent}
                     />
                     <Text
                       style={{
-                        color: snapshot.manualHeld ? "#fff" : colors.accent,
+                        color: snapshot.manualHeld ? "#fff" : colors.onAccent,
                         fontWeight: "600",
                         fontSize: 13,
                       }}
                     >
-                      {snapshot.manualHeld
-                        ? snapshot.liveStatus === "arming"
-                          ? tr("正在准备麦克风…", "Preparing microphone…")
-                          : tr(
-                              `松开发送 · 滑出取消 · ${recordingSeconds}s`,
-                              `Release to send · Slide to cancel · ${recordingSeconds}s`,
-                            )
-                        : snapshot.busy
-                          ? tr("正在思考…", "Thinking…")
-                          : tr("按住说话", "Hold to talk")}
+                      {captureCancelled
+                        ? tr("已取消", "Recording cancelled")
+                        : snapshot.manualHeld
+                          ? snapshot.liveStatus === "arming"
+                            ? tr("正在准备麦克风…", "Preparing microphone…")
+                            : tr(
+                                `松开发送 · 滑出取消 · ${recordingSeconds}s`,
+                                `Release to send · Slide to cancel · ${recordingSeconds}s`,
+                              )
+                          : snapshot.liveStatus === "transcribing"
+                            ? tr("正在转写…", "Transcribing…")
+                            : snapshot.liveStatus === "connecting"
+                              ? tr("正在连接语音…", "Connecting voice…")
+                              : snapshot.busy
+                                ? tr(
+                                    "按住继续提问",
+                                    "Hold to ask another question",
+                                  )
+                                : tr("按住说话", "Hold to talk")}
                     </Text>
                   </Pressable>
                 </View>
@@ -1332,7 +1456,12 @@ function Main() {
           </>
         ) : (
           <>
-            <View style={styles.libraryHeading}>
+            <View
+              style={[
+                styles.libraryHeading,
+                { backgroundColor: colors.navigation },
+              ]}
+            >
               <Text
                 maxFontSizeMultiplier={1.35}
                 style={[styles.title, textStyle]}
@@ -1351,7 +1480,14 @@ function Main() {
             <View
               style={[
                 styles.row,
-                { justifyContent: "flex-start", paddingHorizontal: 24 },
+                {
+                  justifyContent: "flex-start",
+                  paddingHorizontal: 24,
+                  paddingBottom: 16,
+                  backgroundColor: colors.navigation,
+                  borderBottomColor: colors.line,
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                },
               ]}
             >
               {button(
@@ -1531,7 +1667,7 @@ function Main() {
           style={[
             styles.tabs,
             { display: keyboardVisible ? "none" : "flex" },
-            { borderColor: colors.line, backgroundColor: colors.background },
+            { borderColor: colors.line, backgroundColor: colors.navigation },
           ]}
         >
           {(["library", "upload", "account"] as const).map((key, i) => (
@@ -1553,11 +1689,17 @@ function Main() {
               <Ionicons
                 name={
                   (
-                    [
-                      "library-outline",
-                      "add-circle-outline",
-                      "person-outline",
-                    ] as const
+                    (tab === key
+                      ? ["library", "add-circle", "person"]
+                      : [
+                          "library-outline",
+                          "add-circle-outline",
+                          "person-outline",
+                        ]) as [
+                      "library" | "library-outline",
+                      "add-circle" | "add-circle-outline",
+                      "person" | "person-outline",
+                    ]
                   )[i]
                 }
                 size={22}
@@ -1629,7 +1771,15 @@ export default function App() {
 }
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  header: { paddingHorizontal: 24, paddingTop: 14, paddingBottom: 22, gap: 6 },
+  header: {
+    paddingHorizontal: 24,
+    paddingTop: 10,
+    paddingBottom: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   compactHeader: {
     paddingBottom: 8,
     paddingTop: 4,
@@ -1639,10 +1789,10 @@ const styles = StyleSheet.create({
   },
   brand: {
     fontFamily: Platform.OS === "ios" ? "Georgia" : "serif",
-    fontSize: 30,
-    letterSpacing: -1.3,
+    fontSize: 28,
+    letterSpacing: -1,
   },
-  content: { padding: 24, gap: 18 },
+  content: { padding: 20, gap: 16 },
   title: {
     fontSize: 34,
     fontWeight: "700",
@@ -1652,9 +1802,9 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 16, lineHeight: 23, fontWeight: "600" },
   libraryHeading: {
     paddingHorizontal: 24,
-    paddingTop: 8,
-    paddingBottom: 22,
-    gap: 10,
+    paddingTop: 24,
+    paddingBottom: 18,
+    gap: 8,
   },
   row: {
     flexDirection: "row",
@@ -1704,6 +1854,20 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
   },
+  errorNotice: {
+    position: "absolute",
+    top: 8,
+    left: 16,
+    right: 16,
+    margin: 0,
+    marginHorizontal: 0,
+    zIndex: 20,
+    shadowColor: "#17251b",
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
   notice: {
     marginHorizontal: 20,
     padding: 12,
@@ -1718,9 +1882,20 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  artwork: { width: 68, height: 76, borderRadius: 8 },
+  paneTabs: {
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  emptyConversation: {
+    alignItems: "center",
+    paddingVertical: 38,
+    paddingHorizontal: 20,
+    gap: 12,
+  },
+  artwork: { width: 64, height: 72, borderRadius: 10 },
   uploadArt: {
     width: 96,
     height: 96,
@@ -1730,20 +1905,25 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   card: {
-    borderRadius: 14,
-    padding: 16,
+    borderRadius: 18,
+    padding: 18,
     marginBottom: 4,
     borderWidth: StyleSheet.hairlineWidth,
   },
   passage: { borderRadius: 10, padding: 14, gap: 8 },
   transcript: { fontSize: 17, lineHeight: 28 },
-  bubble: { borderRadius: 14, padding: 16, gap: 8, marginBottom: 8 },
+  bubble: { borderRadius: 18, padding: 18, gap: 8, marginBottom: 4 },
   controls: {
     paddingHorizontal: 20,
-    paddingTop: 8,
+    paddingTop: 10,
     paddingBottom: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     gap: 4,
+    shadowColor: "#102418",
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 6,
   },
   timeRow: {
     flexDirection: "row",

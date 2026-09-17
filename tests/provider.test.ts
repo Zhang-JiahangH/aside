@@ -285,3 +285,24 @@ test("the recorded-audio fallback forwards cancellation, and trial requests filt
     /Trial context too large/,
   );
 });
+
+test("OpenAI text streaming exposes real SDK deltas before the final response", async (t) => {
+  const { streamedResponse } = await import("./fixtures/streamed-response.js");
+  const provider = new OpenAIProvider("test-placeholder", "test-model");
+  const received: string[] = [];
+  t.mock.method(provider.client.responses, "create", async (body: any, options: any) => {
+    assert.equal(body.stream, true);
+    const OpenAI = (await import("openai")).default;
+    const client = new OpenAI({ apiKey: "fixture", fetch: async () => streamedResponse("Hello world", 10) });
+    return client.responses.create(body, options);
+  });
+  let resolved = false;
+  const pending = provider.reply({ instructions: "test", tools: [], toolResults: [], onText(delta) {
+    assert.equal(resolved, false);
+    received.push(delta);
+  } }).then((result) => { resolved = true; return result; });
+  const result = await pending;
+  assert.ok(received.length > 1);
+  assert.equal(received.join(""), "Hello world");
+  assert.equal(result.answer, "Hello world");
+});

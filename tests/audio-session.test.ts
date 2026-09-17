@@ -65,6 +65,64 @@ test("a failed session transition does not poison subsequent attempts", async ()
   await c.playPodcast();
   assert.deepEqual(active, [true]);
 });
+
+test("follow-up capture stops the live audio unit before changing the native session", async () => {
+  let liveUnit = false;
+  const events: string[] = [];
+  const c = new AudioSessionCoordinator({
+    async enableAnswer(enabled) {
+      liveUnit = enabled;
+      events.push(enabled ? "live-start" : "live-stop");
+    },
+    async configure(recording) {
+      if (liveUnit) throw Error("Session activation failed");
+      events.push(recording ? "record" : "playback");
+    },
+    async activate(active) {
+      events.push(active ? "active" : "inactive");
+    },
+  });
+  const question = Symbol();
+  await c.record(question);
+  await c.answer(question);
+  assert.equal(liveUnit, true);
+  events.length = 0;
+  await c.record(question);
+  assert.deepEqual(events, ["live-stop", "record", "active"]);
+  assert.equal(liveUnit, false);
+  await c.answer(question);
+  events.length = 0;
+  await c.playPodcast();
+  assert.deepEqual(events, ["live-stop", "playback", "active"]);
+  assert.equal(liveUnit, false);
+});
+
+test("cancel during native activation cannot restart the old answer audio unit", async () => {
+  let unblock!: () => void;
+  let delayActivation = false;
+  const wait = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  const grants: boolean[] = [];
+  const c = new AudioSessionCoordinator({
+    configure: async () => {},
+    activate: async () => {
+      if (delayActivation) await wait;
+    },
+    enableAnswer: async (enabled) => {
+      grants.push(enabled);
+    },
+  });
+  const owner = Symbol();
+  await c.record(owner);
+  delayActivation = true;
+  const answer = c.answer(owner);
+  await new Promise((resolve) => setImmediate(resolve));
+  const finish = c.finishQuestion(owner);
+  unblock();
+  await Promise.all([answer, finish]);
+  assert.equal(grants.includes(true), false);
+});
 test("a release queued during native preparation prevents late activation", async () => {
   let unblock!: () => void;
   const wait = new Promise<void>((resolve) => {

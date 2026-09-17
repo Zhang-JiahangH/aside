@@ -45,6 +45,7 @@ export interface PlayerBackend {
     request: QuestionRequest,
     signal: AbortSignal,
     progress: (phase: QuestionPhase) => void,
+    onAnswer?: (text: string) => void,
   ): Promise<QuestionResult>;
   live(id: string, request: LiveRequest): Promise<LiveResult>;
   control?(

@@ -10,6 +10,7 @@ import type {
   QuestionModel,
 } from "../backend/src/question-model.js";
 import type { Analysis } from "@aside/engine/core";
+import { createPlayerConfig } from "@aside/engine/player";
 const analysis: Analysis = {
   version: "test",
   passages: [
@@ -475,4 +476,58 @@ test("a terminal tool return and a thrown round still report what they spent", a
   );
   // Nothing was served, so there is nothing to report.
   assert.deepEqual(none, []);
+});
+
+test("text answers expose model deltas before completion and reset tool-round previews", async () => {
+  const previews: string[] = [];
+  let round = 0;
+  const service = new QuestionService({
+    async reply(input) {
+      if (++round === 1) {
+        input.onText?.("Checking a passage");
+        assert.equal(previews.at(-1), "Checking a passage");
+        return reply({
+          calls: [
+            {
+              id: "search",
+              name: "search_podcast",
+              arguments: '{"query":"散步"}',
+            },
+          ],
+        });
+      }
+      assert.equal(previews.at(-1), "");
+      input.onText?.("Walking ");
+      input.onText?.("helps thinking.");
+      assert.equal(previews.at(-1), "Walking helps thinking.");
+      return reply({ answer: "Walking helps thinking." });
+    },
+  });
+  const result = await service.answer(
+    analysis,
+    {
+      ...request,
+      player: {
+        turnId: "typed",
+        source: "text",
+        positionMs: 1500,
+        wasPlaying: false,
+        audibleSource: "none",
+        config: createPlayerConfig(),
+      },
+    },
+    undefined,
+    undefined,
+    undefined,
+    (text) => previews.push(text),
+  );
+  assert.equal(result.answer, "Walking helps thinking.");
+  assert.deepEqual(previews, [
+    "",
+    "Checking a passage",
+    "",
+    "",
+    "Walking ",
+    "Walking helps thinking.",
+  ]);
 });

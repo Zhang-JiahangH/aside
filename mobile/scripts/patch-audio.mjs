@@ -22,3 +22,17 @@ else if (!source.includes(after))
   throw Error(
     "Review the expo-audio Now Playing backport after upgrading the SDK.",
   );
+
+// SDK 54 resets the mode only when category options are empty. Recording uses
+// Bluetooth options, so a previous WebRTC .voiceChat mode otherwise survives.
+const modulePath = join(dirname(path), "AudioModule.swift");
+const moduleSource = await readFile(modulePath, "utf8");
+const modeBefore = "try session.setCategory(category, options: sessionOptions)";
+const modeAfter =
+  "try session.setCategory(category, mode: .default, options: sessionOptions)";
+if (moduleSource.includes(modeBefore))
+  await writeFile(modulePath, moduleSource.replace(modeBefore, modeAfter));
+else if (!moduleSource.includes(modeAfter))
+  throw Error(
+    "Review the expo-audio recording mode reset after upgrading the SDK.",
+  );

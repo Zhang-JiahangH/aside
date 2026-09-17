@@ -1,8 +1,27 @@
 const {
   withAndroidManifest,
   withAppBuildGradle,
+  withXcodeProject,
+  IOSConfig,
 } = require("expo/config-plugins");
+const fs = require("node:fs");
+const path = require("node:path");
 module.exports = function (config) {
+  config = withXcodeProject(config, (config) => {
+    const project = config.modResults;
+    const projectName = config.modRequest.projectName;
+    const sourceName = "AsideAudioSession.m";
+    fs.copyFileSync(
+      path.join(__dirname, "../native", sourceName),
+      path.join(config.modRequest.platformProjectRoot, projectName, sourceName),
+    );
+    IOSConfig.XcodeUtils.addBuildSourceFileToGroup({
+      filepath: `${projectName}/${sourceName}`,
+      groupName: projectName,
+      project,
+    });
+    return config;
+  });
   config = withAndroidManifest(config, (config) => {
     const app = config.modResults.manifest.application[0];
     if (process.env.ASIDE_TEST_API === "1")

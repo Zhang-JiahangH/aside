@@ -210,12 +210,10 @@ export function createApp(store: Store, services?: BackendServices) {
         version?: number;
       } | null;
       if ((data.version ?? 0) !== (current?.version ?? 0))
-        return reply
-          .code(409)
-          .send({
-            error: "其他设备已更新收听进度",
-            code: "checkpoint_conflict",
-          });
+        return reply.code(409).send({
+          error: "其他设备已更新收听进度",
+          code: "checkpoint_conflict",
+        });
       return store.checkpoint(req.params.id, {
         ...data,
         version: (current?.version ?? 0) + 1,
@@ -269,6 +267,9 @@ export function createApp(store: Store, services?: BackendServices) {
               cost = totals;
               console.log(`question ${taskId} ${describeCost(totals)}`);
             },
+            req.headers["x-aside-answer-stream"] === "1"
+              ? (text) => send({ type: "answer", revision: q.revision, text })
+              : undefined,
           ),
         );
         store.saveArtifact(e.id, taskId, {
@@ -362,15 +363,13 @@ export function createApp(store: Store, services?: BackendServices) {
           q.history,
           services.questions,
           (text) =>
-            controls
-              .get(id)
-              ?.socket?.send(
-                JSON.stringify({
-                  type: "session.thinking.append",
-                  delegation_id: null,
-                  content: text,
-                }),
-              ),
+            controls.get(id)?.socket?.send(
+              JSON.stringify({
+                type: "session.thinking.append",
+                delegation_id: null,
+                content: text,
+              }),
+            ),
           (totals) => console.log(`live intent ${id} ${describeCost(totals)}`),
         );
         const entry: {

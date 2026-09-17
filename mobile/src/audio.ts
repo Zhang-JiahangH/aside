@@ -1,4 +1,5 @@
 import type { PlayerConfig } from "@aside/engine/player";
+import { NativeModules, Platform } from "react-native";
 import {
   AudioModule,
   createAudioPlayer,
@@ -11,15 +12,23 @@ import { AudioSessionCoordinator, NativePlaybackEvents } from "./audio-session";
 export class AudioCoordinator extends AudioSessionCoordinator {
   constructor() {
     super({
-      configure: (recording) =>
-        setAudioModeAsync({
+      configure: async (recording) => {
+        // Reconfigure only after the previous audio unit has stopped. iOS can
+        // reject activation when switching a still-active voice session.
+        await setIsAudioActiveAsync(false);
+        await setAudioModeAsync({
           allowsRecording: recording,
           playsInSilentMode: true,
           shouldPlayInBackground: !recording,
           interruptionMode: "doNotMix",
           shouldRouteThroughEarpiece: false,
-        }),
+        });
+      },
       activate: setIsAudioActiveAsync,
+      enableAnswer: async (enabled) => {
+        if (Platform.OS === "ios")
+          await NativeModules.AsideAudioSession.setAnswerEnabled(enabled);
+      },
     });
   }
 }
