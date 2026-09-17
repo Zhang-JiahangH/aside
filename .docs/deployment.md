@@ -397,3 +397,29 @@ node scripts/admin-usage.mjs --days 30 --json
 验证：`npm run check`、227 项单元测试（新增 passage 投影、字节预算、会话结束文案三条）、43 项 Cloudflare 集成测试通过。未验证：尚未由用户在该节目上重新开麦实测；`words` 仍保存在分析记录并原样返回给前端，本次只改模型上下文。
 
 补记：`17685380` 上线两分钟后（04:02:21Z），协作者从未含 `d63d03c` 的旧 main 部署了 `de481958-7677-4895-8430-6af0323fa05b`，线上回退到修复之前；04:05Z 用户再次开麦，服务端日志记录 `Trial context too large`（call 1），证实根因判断，也证实回退。04:06:59Z 从当前 main（`2be8361`）重新部署为 `8caf78c0-92a6-44c1-97cd-327bb012e388`，`--containers-rollout=none`，`/api/health` 200。多人部署同一 Worker 没有互斥，发布前应先 `git pull` 并确认 `wrangler deployments list` 的最新版本。
+
+
+## 移动端音频交接与流式回答：发布（2026-09-17）
+
+发布内容：PR #12（`3c946ce`，含 `87c0e12`、`17f207a`、`1d5ae25`）。服务端只有一处行为变化：`/question` 的请求带 `X-Aside-Answer-Stream: 1` 时，NDJSON 流在 `progress` 与 `result` 之间增加 `answer` 事件，逐段推送回答文本（`engine/src/contracts.ts` 新增该事件类型，`QuestionModel` 增加可选 `onText`）；不带该请求头的客户端收到的事件序列不变。其余改动在 `mobile/`（原生音频会话交接、错误文案、流式显示），不随 Worker 发布。无数据库迁移，Container 代码未改。
+
+发布前先 `git pull`（快进 5 个提交，无冲突），`wrangler deployments list` 确认线上仍是 `8caf78c0`、其后无他人部署。`npm run check`、236 项单元测试、44 项 Cloudflare 集成测试通过。
+
+生产 Worker `00afc10c-9416-472a-ab53-1d79573babe6`，`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container）；`npm run test:mobile-service` 4 项通过。正式域名 `/` 引用 `index-CXzFoCX2.js`、`index-MG_NYjXQ.css`；发布后第一次请求新 JS 返回 404，数秒后稳定为 200、`text/javascript`、476,657 字节，与本地构建一致（与此前记录的静态资源短暂滞后同类）。`/api/health` 200、`liveConfigured=true`、`uploadsEnabled=true`；`/api/trial` 返回 `enabled:true`；`/zh` 200，`/no-such-page` 404。
+
+未验证：没有在生产发起带 `X-Aside-Answer-Stream` 的真实提问（会产生付费调用），`answer` 事件的线上表现只由单元与 Miniflare 集成测试覆盖；移动端改动未在真机上运行验证；未在浏览器里打开线上播放器核对。
+
+
+## 暂时取消每日试用额度（2026-09-17）
+
+按用户要求，生产暂不限制每日试用次数。新增 Worker 变量 `TRIAL_DAILY_LIMITS`：值为 `"false"` 时，`budget()` 对每身份 5 次、每 IP 10/20 次、全站 10/100 次（语音 / 提问与转写）三档都不再拒绝，但**计数照常累加**，所以 `daily_stats` 的试用指标不受影响。只在 `wrangler.production.jsonc` 里设为 `"false"`；本地配置未设，默认仍然限额。恢复限额：删掉该变量或改为其它值后重新发布，当天已累加的计数会立刻生效。
+
+起因：当天 05:41Z 生产 `budgets` 里两个身份分别用满语音 5/5、转写 5/5 与提问 5/5，全站语音 9/10，页面提示「今日体验额度已用完」。语音控制模式一次连接同时扣 `live` 与 `question` 各一次，消耗比直觉快。
+
+未改动：Turnstile 验证、每分钟速率限制（`burst`）、并发位（`trial_leases`）、Live 时长、全站紧急开关与熔断、上传额度。
+
+生产 Worker `818f7c05-e24a-49f3-b97c-45c6f965f883`，`--containers-rollout=none`，绑定显示 `TRIAL_DAILY_LIMITS="false"`；发布前确认线上仍是 `00afc10c`。`npm run check`、236 项单元测试、45 项 Cloudflare 集成测试通过（新增一条：开关关闭时三类请求在全站池已满的情况下连续 6 次均放行且计数累加，开关恢复后同一池立即拒绝）。`npm run test:mobile-service` 4 项通过，`/api/health` 200，`/api/trial` 返回 `enabled:true`。
+
+费用提示：现在匿名访客的模型花费只受每分钟速率限制与并发位约束，没有每日上限。建议在 OpenAI 后台设月度花费上限兜底，并用 `node scripts/admin-usage.mjs` 留意匿名流量。
+
+未验证：没有在生产用已耗尽额度的身份重新提问或开语音实测（会产生付费调用），放行由集成测试与绑定值推断。
