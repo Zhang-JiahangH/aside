@@ -1,5 +1,5 @@
 import { AudioModule, RecordingPresets } from "expo-audio";
-import { Platform } from "react-native";
+import { NativeEventEmitter, NativeModules, Platform } from "react-native";
 import { RTCPeerConnection, type MediaStreamTrack } from "react-native-webrtc";
 import { File } from "expo-file-system";
 import type {
@@ -9,6 +9,7 @@ import type {
 } from "@aside/player-runtime/ports";
 import type { AudioCoordinator } from "./audio";
 import type { AudioFile } from "./api";
+import { createSilentTrack } from "./silent-track";
 type Remote = Parameters<VoiceFactory>[3];
 const recordingOptions = {
   ...RecordingPresets.HIGH_QUALITY,
@@ -31,8 +32,10 @@ export class NativeVoice implements VoicePort {
       : recordingOptions.android),
   });
   private peer?: RTCPeerConnection;
+  private connecting?: Promise<void>;
   private channel?: ReturnType<RTCPeerConnection["createDataChannel"]>;
   private tracks: MediaStreamTrack[] = [];
+  private silence?: MediaStreamTrack;
   private generation = 0;
   private capturing = false;
   private closed = false;
@@ -46,14 +49,25 @@ export class NativeVoice implements VoicePort {
   private lastSound = 0;
   private muted = true;
   private lastEnergy = 0;
+  private lastSamplesDuration = 0;
   private closeWait?: () => void;
   private working = false;
   private readonly audioOwner = Symbol("voice");
+  private interruption?: { remove(): void };
   constructor(
     private cb: VoiceCallbacks,
     private remote: Remote,
     private coordinator: AudioCoordinator,
-  ) {}
+  ) {
+    if (Platform.OS === "ios")
+      this.interruption = new NativeEventEmitter(
+        NativeModules.AsideAudioSession,
+      ).addListener("AsideAnswerInterrupted", () => {
+        if (!this.isEnabled || this.closed) return;
+        this.cb.onError("音频已被系统中断 / Audio was interrupted");
+        void this.close();
+      });
+  }
   async enable() {
     this.isEnabled = true;
     this.closed = false;
@@ -114,20 +128,40 @@ export class NativeVoice implements VoicePort {
         const abort = (this.abort = new AbortController());
         try {
           const [text] = await Promise.all([
-            this.remote.transcribe(
-              {
-                uri,
-                name: "question.m4a",
-                mimeType: "audio/mp4",
-                size: file.size,
-              } satisfies AudioFile,
-              abort.signal,
-            ),
+            this.remote
+              .transcribe(
+                {
+                  uri,
+                  name: "question.m4a",
+                  mimeType: "audio/mp4",
+                  size: file.size,
+                } satisfies AudioFile,
+                abort.signal,
+              )
+              .then((text) => {
+                if (generation !== this.generation || abort.signal.aborted)
+                  return "";
+                const question = text.trim();
+                if (!question)
+                  throw Error(
+                    "没有识别到语音，请再按住说一次 / No speech was recognized. Hold to try again",
+                  );
+                if (!this.ready) this.cb.onStatus("connecting");
+                return question;
+              }),
             this.connect(),
           ]);
           if (generation !== this.generation || abort.signal.aborted) return;
           this.cb.onStatus("on");
           this.mute(false);
+          this.append(
+            "thinking",
+            `Latest actual user utterance (locally transcribed, pending backend result): ${text}`,
+          );
+          this.append(
+            "instructions",
+            "The app is handling this locally recorded question. Wait silently for its backend result; do not delegate it again. Use the language of the latest actual user utterance for the spoken answer. Preserve the backend answer's language and concise length.",
+          );
           this.cb.onFirstQuestion(text);
         } finally {
           if (file.exists) file.delete();
@@ -140,11 +174,35 @@ export class NativeVoice implements VoicePort {
         }
       });
   }
-  private async connect() {
-    if (this.ready) return;
-    this.cb.onStatus("connecting");
+  private connect(): Promise<void> {
+    if (this.ready) return Promise.resolve();
+    // A new hold can supersede ASR while the same cold session is negotiating.
+    // Share that negotiation; creating a second peer leaks the first session
+    // and lets its late events modify the current answer.
+    if (!this.connecting) {
+      const pending = this.openConnection();
+      this.connecting = pending;
+      void pending
+        .finally(() => {
+          if (this.connecting === pending) this.connecting = undefined;
+        })
+        .catch(() => {});
+    }
+    return this.connecting;
+  }
+  private async openConnection() {
     const peer = (this.peer = new RTCPeerConnection({}));
-    peer.addTransceiver("audio", { direction: "recvonly" });
+    if (Platform.OS === "ios") {
+      const track = await createSilentTrack();
+      if (this.closed) {
+        track.stop();
+        track.release();
+        peer.close();
+        return;
+      }
+      this.silence = track;
+      peer.addTrack(track);
+    } else peer.addTransceiver("audio", { direction: "recvonly" });
     const channel = (this.channel = peer.createDataChannel("oai-events"));
     let resolve!: () => void, reject!: (error: Error) => void;
     const started = new Promise<void>((yes, no) => {
@@ -152,10 +210,13 @@ export class NativeVoice implements VoicePort {
       reject = no;
     });
     void started.catch(() => {});
-    const timeout = setTimeout(
-      () => reject(Error("语音连接启动超时 / Voice connection timed out")),
-      30000,
-    );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, fail) => {
+      timeout = setTimeout(
+        () => fail(Error("语音连接启动超时 / Voice connection timed out")),
+        30000,
+      );
+    });
     peer.ontrack = (event: unknown) => {
       const track = (event as { track: MediaStreamTrack }).track;
       this.tracks.push(track);
@@ -166,7 +227,7 @@ export class NativeVoice implements VoicePort {
         const m = JSON.parse(String(event.data));
         if (m.type === "session.started") {
           this.ready = true;
-          this.cb.onStatus("on");
+          // Capture owns progress until both transcription and Live are ready.
           this.cb.onReady();
           resolve();
           if (this.closed) this.send({ type: "session.close" });
@@ -203,19 +264,26 @@ export class NativeVoice implements VoicePort {
       }
     };
     try {
-      const offer = await peer.createOffer({});
-      await peer.setLocalDescription(offer);
-      const result = await this.remote.create(offer.sdp!);
-      this.sessionId = result.session.id;
-      if (this.closed) {
-        this.cb.onClose(false, this.seconds, this.sessionId, true);
-        throw Error("Voice closed");
-      }
-      await peer.setRemoteDescription({
-        type: "answer",
-        sdp: result.transport.sdp,
-      });
-      await started;
+      // Include HTTP negotiation in the deadline: waiting only on `started`
+      // leaves the UI stuck forever when the session request never returns.
+      await Promise.race([
+        (async () => {
+          const offer = await peer.createOffer({});
+          await peer.setLocalDescription(offer);
+          const result = await this.remote.create(offer.sdp!);
+          this.sessionId = result.session.id;
+          if (this.closed) {
+            this.cb.onClose(false, this.seconds, this.sessionId, true);
+            throw Error("Voice closed");
+          }
+          await peer.setRemoteDescription({
+            type: "answer",
+            sdp: result.transport.sdp,
+          });
+          await started;
+        })(),
+        deadline,
+      ]);
       let polling = false;
       this.statsTimer = setInterval(() => {
         if (polling) return;
@@ -224,19 +292,29 @@ export class NativeVoice implements VoicePort {
           .getStats()
           .then((stats) => {
             let measured = false,
-              energy = 0;
+              energy = 0,
+              duration = 0;
             stats.forEach((r: Record<string, unknown>) => {
               if (
                 r.type === "inbound-rtp" &&
                 (r.kind === "audio" || r.mediaType === "audio") &&
-                typeof r.totalAudioEnergy === "number"
+                typeof r.totalAudioEnergy === "number" &&
+                typeof r.totalSamplesDuration === "number"
               ) {
                 measured = true;
                 energy += r.totalAudioEnergy;
+                duration += r.totalSamplesDuration;
               }
             });
             if (!measured) return; // No reliable playback evidence: leave resumption manual.
-            if (energy > this.lastEnergy && !this.muted) {
+            // Opus comfort noise has nonzero energy. Treating any increase as
+            // speech kept the answer "playing" forever and prevented resume.
+            const elapsed = duration - this.lastSamplesDuration;
+            const rms =
+              elapsed > 0
+                ? Math.sqrt(Math.max(0, energy - this.lastEnergy) / elapsed)
+                : 0;
+            if (rms > 0.001 && !this.muted) {
               this.lastSound = Date.now();
               if (!this.output) {
                 this.output = true;
@@ -244,6 +322,7 @@ export class NativeVoice implements VoicePort {
               }
             }
             this.lastEnergy = energy;
+            this.lastSamplesDuration = duration;
             if (this.output && Date.now() - this.lastSound > 1200) {
               this.output = false;
               this.cb.onOutput(false);
@@ -320,6 +399,8 @@ export class NativeVoice implements VoicePort {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    this.interruption?.remove();
+    this.interruption = undefined;
     this.isEnabled = false;
     this.cancelCapture();
     this.mute(true);
@@ -337,6 +418,9 @@ export class NativeVoice implements VoicePort {
     this.ready = false;
     this.channel?.close();
     this.peer?.close();
+    this.silence?.stop();
+    this.silence?.release();
+    this.silence = undefined;
     this.tracks = [];
     await this.recording.catch(() => {});
     await this.coordinator.finishQuestion(this.audioOwner);

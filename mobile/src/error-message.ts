@@ -28,6 +28,11 @@ export function errorMessage(raw: string, locale: string) {
       "The microphone couldn't start. Check your audio input and try again.",
     ],
     [
+      /没有识别到语音|No speech was recognized/i,
+      "没有识别到语音，请再按住说一次。",
+      "No speech was recognized. Hold to record your question again.",
+    ],
+    [
       /语音连接启动超时|Voice connection timed out/i,
       "语音连接超时，请检查网络后重新提问。",
       "The voice connection timed out. Check your connection, then ask again.",

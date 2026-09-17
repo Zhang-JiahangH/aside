@@ -10,16 +10,26 @@ module.exports = function (config) {
   config = withXcodeProject(config, (config) => {
     const project = config.modResults;
     const projectName = config.modRequest.projectName;
-    const sourceName = "AsideAudioSession.m";
-    fs.copyFileSync(
-      path.join(__dirname, "../native", sourceName),
-      path.join(config.modRequest.platformProjectRoot, projectName, sourceName),
-    );
-    IOSConfig.XcodeUtils.addBuildSourceFileToGroup({
-      filepath: `${projectName}/${sourceName}`,
-      groupName: projectName,
-      project,
-    });
+    for (const sourceName of [
+      "AsideAudioSession.m",
+      "AsideSilentAudioDevice.m",
+      "AsideSilentAudioDevice.h",
+    ]) {
+      fs.copyFileSync(
+        path.join(__dirname, "../native", sourceName),
+        path.join(
+          config.modRequest.platformProjectRoot,
+          projectName,
+          sourceName,
+        ),
+      );
+      if (sourceName.endsWith(".m"))
+        IOSConfig.XcodeUtils.addBuildSourceFileToGroup({
+          filepath: `${projectName}/${sourceName}`,
+          groupName: projectName,
+          project,
+        });
+    }
     return config;
   });
   config = withAndroidManifest(config, (config) => {
