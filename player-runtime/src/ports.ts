@@ -9,6 +9,8 @@ import type {
   QuestionRequest,
   QuestionResult,
   QuestionPhase,
+  LiveControlEvent,
+  LiveControlUpdate,
 } from "@aside/engine/contracts";
 import type { PlayerConfig } from "@aside/engine/player";
 export interface PodcastAudio {
@@ -26,6 +28,17 @@ export interface PlayerBackend {
     progress: (phase: QuestionPhase) => void,
   ): Promise<QuestionResult>;
   live(id: string, request: LiveRequest): Promise<LiveResult>;
+  control?(
+    id: string,
+    sessionId: string,
+    signal: AbortSignal,
+    receive: (event: LiveControlEvent) => void,
+  ): Promise<void>;
+  updateControl?(
+    id: string,
+    update: LiveControlUpdate,
+    signal: AbortSignal,
+  ): Promise<void>;
   transcribe(id: string, audio: unknown, signal: AbortSignal): Promise<string>;
   usage(
     id: string,
@@ -45,6 +58,8 @@ export interface PlayerHealth {
 export type VoiceStatus =
   "off" | "arming" | "armed" | "connecting" | "transcribing" | "on" | "closing";
 export interface VoiceCallbacks {
+  onInputTranscript?(text: string): void;
+  onDiagnostic?(message: string): void;
   onReady(): void;
   onOutput(active: boolean): void;
   onTranscript(role: Turn["role"], text: string): void;
@@ -81,6 +96,7 @@ export interface VoicePort {
   activity(): void;
   setWorking(value: boolean): void;
   outputLevels?(levels: Float32Array): boolean;
+  diagnostics?(): Promise<unknown>;
 }
 export type VoiceFactory = (
   microphone: MicrophoneConfig,

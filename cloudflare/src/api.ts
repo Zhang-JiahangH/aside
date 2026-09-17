@@ -16,6 +16,7 @@ import {
   questionSchema,
   questionEventSchema,
   questionResultSchema,
+  liveControlUpdateSchema,
   type QuestionEvent,
 } from "@aside/engine/contracts";
 import { InteractiveProvider } from "../../backend/src/interactive-provider.js";
@@ -252,6 +253,21 @@ async function route(
       return json({ ok: true });
     }
   }
+  if (action === "live-control" && ["GET", "PUT"].includes(method)) {
+    const data = method === "PUT" ? liveControlUpdateSchema.parse(await readJson(request)) : undefined;
+    const sessionId = data?.sessionId ?? url.searchParams.get("sessionId");
+    if (!sessionId || sessionId.length > 200) throw new HttpError(400, "Invalid voice session");
+    const target = new URL("https://live/control");
+    target.searchParams.set("sessionId", sessionId);
+    target.searchParams.set("episode", id);
+    // This is an existing authenticated Live lease, not a billable request per
+    // fragment. Updates carry playback state and execution acknowledgements,
+    // never browser-selected speech or intent decisions.
+    return env.LIVE.get(env.LIVE.idFromName(owner)).fetch(new Request(target, {
+      method,
+      ...(data ? { body: JSON.stringify(data), headers: { "Content-Type": "application/json" } } : {}),
+    }));
+  }
   if (
     method !== "POST" ||
     !["question", "live", "transcribe-question"].includes(action)
@@ -334,6 +350,7 @@ async function route(
     const token = await acquire(env, owner, "live");
     try {
       await budget(env, owner, "live", request);
+      if (data.control) await budget(env, owner, "question", request);
     } catch (error) {
       await release(env, owner, "live", token);
       throw error;
@@ -348,6 +365,8 @@ async function route(
         episode.analysis,
         Math.min(data.atMs, episode.durationMs),
         data.history,
+        data.control,
+        accountId,
       ),
     );
   }

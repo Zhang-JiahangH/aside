@@ -14,6 +14,9 @@ import {
   type Checkpoint,
   type PlayerInput,
   type QuestionResult,
+  type LiveControlEvent,
+  type LiveControlUpdate,
+  type LivePlayerState,
 } from "@aside/engine/contracts";
 import {
   createPlayerConfig,
@@ -35,6 +38,7 @@ import { systemClock, type RuntimeClock } from "./runtime-clock";
 export type { VoicePort, VoiceFactory } from "./ports";
 export type ListeningMode = "auto" | "manual" | "off";
 export interface SessionOptions {
+  debugRecognition?: boolean;
   playerConfig?: Partial<PlayerConfig>;
   mode?: ListeningMode;
   followupMs?: number;
@@ -43,6 +47,16 @@ export interface SessionOptions {
 }
 /** Owns complete listening actions. React and DOM code never coordinate device order. */
 export class ListeningSession {
+  private controlAbort?: AbortController;
+  private controlSession = "";
+  private controlVersion = 0;
+  private controlSequence = 0;
+  private controlLastSync = -Infinity;
+  private controlUpdates: Promise<void> = Promise.resolve();
+  private controlStatus = "off";
+  private serverInput = "";
+  private serverClassifying = "";
+  private seenDecisions = new Set<string>();
   private playerConfig: PlayerConfig;
   private input?: PlayerInput;
   private inputSpeaking = false;
@@ -63,6 +77,10 @@ export class ListeningSession {
   private customWait: boolean;
   private error = "";
   private events: string[] = [];
+  private debugRecognition: boolean;
+  private liveInputText = "";
+  private liveInputDeltas: { atMs: number; text: string }[] = [];
+  private lastInputDisposition = "No input received";
   private contextAt = -1;
   private resumeTimer?: () => void;
   private heartbeat?: () => void;
@@ -82,6 +100,7 @@ export class ListeningSession {
     private backend: PlayerBackend,
     options: SessionOptions,
   ) {
+    this.debugRecognition = options.debugRecognition ?? false;
     this.playerConfig = createPlayerConfig(options.playerConfig);
     this.audio.configure(this.playerConfig);
     this.clock = options.clock ?? systemClock;
@@ -151,7 +170,7 @@ export class ListeningSession {
     this.events = [
       `${new Date(this.clock.now()).toLocaleTimeString()} ${message}`,
       ...this.events,
-    ].slice(0, 30);
+    ].slice(0, 100);
     this.publish();
   }
   private dispatch(event: PlaybackEvent) {
@@ -184,6 +203,7 @@ export class ListeningSession {
     this.changingEpisode = true;
     try {
       this.stop();
+      this.resetRecognitionDiagnostics();
       this.mediaRevision++;
       this.restoringMedia = true;
       this.positioning = undefined;
@@ -224,6 +244,41 @@ export class ListeningSession {
   voiceLevels(levels: Float32Array) {
     return this.voice?.outputLevels?.(levels) ?? false;
   }
+  async voiceDiagnostics() {
+    return {
+      mode: this.mode,
+      active: this.active,
+      status: this.status,
+      configured: this.configured,
+      error: this.error,
+      microphoneConfig: this.microphone,
+      control: {
+        owner: this.serverVoice ? "server" : "manual",
+        status: this.controlStatus,
+      },
+      recognition: this.debugRecognition
+        ? {
+            liveInputText: this.liveInputText,
+            recentDeltas: this.liveInputDeltas,
+            lastInputDisposition: this.lastInputDisposition,
+            ...this.conversation.inputDiagnostics(),
+            ...(this.serverVoice
+              ? {
+                  conversationInput: this.serverInput,
+                  submittedText: this.serverClassifying,
+                }
+              : {}),
+          }
+        : undefined,
+      voice: await this.voice?.diagnostics?.(),
+    };
+  }
+  private resetRecognitionDiagnostics() {
+    this.serverInput = this.serverClassifying = "";
+    this.liveInputText = "";
+    this.liveInputDeltas = [];
+    this.lastInputDisposition = "No input received";
+  }
   setQuestion(text: string) {
     this.conversation.setDraft(text);
   }
@@ -263,6 +318,7 @@ export class ListeningSession {
     if (this.restoringMedia) return;
     this.dispatch({ type: "tick", atMs: this.audio.positionMs });
     this.sendContext();
+    if (this.clock.now() - this.controlLastSync >= 1000) this.syncControl();
   }
   setPlaybackRate(rate: number) {
     this.executePlayerCommand({ type: "set_rate", rate });
@@ -286,9 +342,11 @@ export class ListeningSession {
       durationMs: this.episode?.durationMs ?? 0,
       anchors: this.episode?.analysis?.anchors ?? [],
     });
+    this.controlVersion++;
     this.cancelWork();
     this.input = undefined;
     this.applyPlayerCommand(command);
+    this.syncControl();
   }
   private applyPlayerCommand(command: PlayerCommand, referenceMs?: number) {
     const effect = resolvePlayerCommand(command, {
@@ -415,6 +473,7 @@ export class ListeningSession {
   }
   submitQuestion(text: string, speak = false) {
     if (!text.trim() || !this.episode?.analysis || !this.configured) return;
+    this.controlVersion++;
     this.cancelManual();
     this.beginInput("text");
     this.interrupt();
@@ -447,6 +506,7 @@ export class ListeningSession {
     this.dispatch({ type: "assistant_end", revision: this.playback.revision });
   }
   private sendContext(force = false) {
+    if (force) this.syncControl();
     if (!this.episode?.analysis) return;
     const state = this.playback;
     const passages = this.episode.analysis.passages;
@@ -604,6 +664,10 @@ export class ListeningSession {
   }
   private closeVoice() {
     this.cancelManual();
+    this.controlAbort?.abort();
+    this.controlAbort = undefined;
+    this.controlSession = "";
+    this.controlStatus = "off";
     this.voiceGeneration++;
     const voice = this.voice;
     this.voice = undefined;
@@ -671,6 +735,179 @@ export class ListeningSession {
       void this.connect();
     this.publish();
   }
+  private get serverVoice() {
+    return (
+      this.mode === "auto" &&
+      !!this.backend.control &&
+      !!this.backend.updateControl
+    );
+  }
+  private livePlayerState(): LivePlayerState {
+    return {
+      version: this.controlVersion,
+      sequence: ++this.controlSequence,
+      revision: this.playback.revision,
+      positionMs: this.audio.positionMs,
+      wasPlaying:
+        this.playback.mode === "playing" || this.playback.mode === "resuming",
+      audibleSource:
+        this.playback.mode === "playing"
+          ? "podcast"
+          : this.playback.assistantSpeaking
+            ? "assistant"
+            : "none",
+      config: this.playerConfig,
+    };
+  }
+  private syncControl(acknowledgement?: LiveControlUpdate["acknowledgement"]) {
+    const sessionId = this.controlSession,
+      abort = this.controlAbort,
+      episodeId = this.episode?.id;
+    if (!sessionId || !abort || abort.signal.aborted || !episodeId) return;
+    this.controlLastSync = this.clock.now();
+    const update = {
+      sessionId,
+      player: this.livePlayerState(),
+      acknowledgement,
+    };
+    this.controlUpdates = this.controlUpdates
+      .then(async () => {
+        if (abort.signal.aborted) return;
+        await this.backend.updateControl!(
+          episodeId,
+          update,
+          AbortSignal.any([abort.signal, AbortSignal.timeout(5000)]),
+        );
+      })
+      .catch((error) => {
+        if (!abort.signal.aborted) this.controlFailed(String(error));
+      });
+  }
+  private controlFailed(message: string) {
+    this.controlStatus = "failed";
+    this.log(`Server voice control: ${message}`);
+    this.cancelWork();
+    this.closeVoice();
+    this.controlStatus = "failed";
+    this.setError(withKeepListeningHint(message));
+  }
+  private async openControl(
+    episodeId: string,
+    sessionId: string,
+    generation: number,
+  ) {
+    this.controlAbort?.abort();
+    const abort = (this.controlAbort = new AbortController());
+    this.controlSession = sessionId;
+    this.controlStatus = "connecting";
+    this.seenDecisions.clear();
+    let ready = false;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(Error("Voice control connection timed out"));
+        abort.abort();
+      }, 10000);
+      let stalled: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        clearTimeout(timer);
+        clearTimeout(stalled);
+      };
+      abort.signal.addEventListener(
+        "abort",
+        () => {
+          finish();
+          if (!ready) reject(Error("Voice control connection cancelled"));
+        },
+        { once: true },
+      );
+      void this.backend.control!(
+        episodeId,
+        sessionId,
+        abort.signal,
+        (event) => {
+          if (abort.signal.aborted || generation !== this.voiceGeneration)
+            return;
+          clearTimeout(stalled);
+          stalled = setTimeout(
+            () =>
+              this.controlFailed(
+                "Voice control heartbeat stopped. Please reconnect the microphone.",
+              ),
+            35000,
+          );
+          if (event.type === "ready") {
+            if (event.sessionId !== sessionId)
+              throw Error("Voice control session mismatch");
+            ready = true;
+            clearTimeout(timer);
+            this.controlStatus = "connected";
+            this.log("Server voice control NDJSON connected");
+            resolve();
+            this.syncControl();
+          } else this.receiveControl(event);
+        },
+      )
+        .then(() => {
+          if (!abort.signal.aborted && generation === this.voiceGeneration) {
+            const error = Error(
+              "Voice control session ended. Please reconnect the microphone.",
+            );
+            finish();
+            reject(error);
+            this.controlFailed(error.message);
+          }
+        })
+        .catch((error) => {
+          finish();
+          reject(error);
+          if (!abort.signal.aborted && generation === this.voiceGeneration)
+            this.controlFailed(String(error));
+        });
+    });
+  }
+  private receiveControl(event: LiveControlEvent) {
+    if (event.type === "observing" || event.type === "classifying") {
+      if (event.version !== this.controlVersion) return;
+      this.conversation.liveInputPending(true);
+      if (this.debugRecognition && event.text !== undefined) {
+        if (event.type === "observing") this.serverInput = event.text;
+        else this.serverClassifying = event.text;
+      }
+      this.controlStatus = event.type;
+      this.log(
+        event.type === "observing"
+          ? "Backend sideband transcript received"
+          : "Backend intent classification started",
+      );
+      return;
+    }
+    if (event.type !== "decision" || this.seenDecisions.has(event.decisionId))
+      return;
+    this.seenDecisions.add(event.decisionId);
+    this.controlStatus = `decision: ${event.result.action}`;
+    const current =
+      event.version === this.controlVersion &&
+      event.result.revision === this.playback.revision;
+    this.log(
+      `Backend intent: ${event.result.action}${current ? "" : " (stale, skipped)"}`,
+    );
+    if (!current) {
+      this.syncControl({ decisionId: event.decisionId, applied: false });
+      return;
+    }
+    this.conversation.liveInputPending(event.result.action === "wait");
+    if (event.result.action === "ignore" || event.result.action === "wait")
+      return;
+    this.input = event.player;
+    try {
+      this.conversation.receiveLive(event.result, event.text);
+      this.syncControl({ decisionId: event.decisionId, applied: true });
+      this.log(`Backend decision applied: ${event.result.action}`);
+    } catch (error) {
+      this.syncControl({ decisionId: event.decisionId, applied: false });
+      throw error;
+    }
+  }
   private async connect() {
     if (this.voice?.isEnabled) return this.voice;
     if (
@@ -682,6 +919,7 @@ export class ListeningSession {
     )
       return;
     this.status = "connecting";
+    this.resetRecognitionDiagnostics();
     this.setError("");
     const generation = ++this.voiceGeneration,
       episodeId = this.episode.id;
@@ -714,11 +952,26 @@ export class ListeningSession {
       this.microphone,
       this.lifecycle,
       {
+        onInputTranscript: (text) => {
+          if (!valid() || !this.debugRecognition) return;
+          this.liveInputText = (this.liveInputText + text).slice(-4000);
+          this.liveInputDeltas = [
+            ...this.liveInputDeltas,
+            {
+              atMs: this.clock.now(),
+              text: text.slice(-500),
+            },
+          ].slice(-30);
+          this.lastInputDisposition = "Received from Live; awaiting input gate";
+        },
         onStatus: (status) => {
           if (valid()) {
             this.status = status;
-            this.publish();
+            this.log(`Voice status: ${status}`);
           }
+        },
+        onDiagnostic: (message) => {
+          if (valid()) this.log(message);
         },
         onFirstQuestion: (text) => {
           if (acceptsInput()) {
@@ -737,12 +990,19 @@ export class ListeningSession {
           if (!valid()) return;
           this.inputSpeaking = active;
           this.log(active ? "Local speech started" : "Local speech ended");
+          if (this.serverVoice && voice.isWarm && !voice.isCold) {
+            // VAD is UI telemetry only. The sideband owns turn segmentation.
+            if (active && this.playback.interruption)
+              this.conversation.liveInputPending(true);
+            if (!active && this.playback.interruption) {
+              this.dispatch({ type: "user_end" });
+              this.conversation.scheduleFollowup();
+            }
+            return;
+          }
           if (active) {
             this.connectionKind = voice.isWarm ? "warm" : "cold";
-            if (
-              this.mode === "auto" &&
-              (this.liveInputBeforeVad || this.conversation.pendingPause)
-            ) {
+            if (this.mode === "auto" && this.liveInputBeforeVad) {
               this.liveInputBeforeVad = false;
               return;
             }
@@ -790,20 +1050,36 @@ export class ListeningSession {
           }
         },
         onTranscript: (role, text) => {
-          if (role === "user" && !text.trim()) return;
+          if (this.serverVoice && role === "user") {
+            if (valid() && this.debugRecognition)
+              this.lastInputDisposition =
+                "Live captions only; backend receives transcripts directly over sideband";
+            return;
+          }
+          if (role === "user" && !text.trim() && !this.input) {
+            if (valid() && this.debugRecognition)
+              this.lastInputDisposition = "Whitespace before any input skipped";
+            return;
+          }
           if (role === "user" && text.trim() && valid())
             this.log(
               `Live input transcript received (${text.length} characters)`,
             );
-          if (
+          const accepted =
             (role === "user" ? acceptLiveInput() : acceptsInput()) &&
-            (role === "user" || !!this.playback.interruption)
-          )
-            this.conversation.transcript(role, text);
+            (role === "user" || !!this.playback.interruption);
+          if (role === "user" && valid() && this.debugRecognition)
+            this.lastInputDisposition = accepted
+              ? "Forwarded to conversation; see submittedText for backend dispatch"
+              : this.playback.resumeRequested
+                ? "Skipped while playback resumes"
+                : "Skipped: no active input";
+          if (accepted) this.conversation.transcript(role, text);
         },
         onDelegation: (id) => {
           if (valid()) this.log("Live delegation received");
-          if (acceptLiveInput()) this.conversation.delegate(id);
+          if (!this.serverVoice && acceptLiveInput())
+            this.conversation.delegate(id);
         },
         onError: (message) => {
           if (!valid()) return;
@@ -848,12 +1124,29 @@ export class ListeningSession {
         },
       },
       {
-        create: (sdp) =>
-          this.backend.live(episodeId, {
+        create: async (sdp) => {
+          const result = await this.backend.live(episodeId, {
             sdp,
             atMs: this.playback.interruption?.atMs ?? this.playback.positionMs,
             history: this.conversation.snapshot.history,
-          }),
+            ...(this.serverVoice
+              ? {
+                  control: {
+                    player: this.livePlayerState(),
+                    debug: this.debugRecognition,
+                  },
+                }
+              : {}),
+          });
+          if (this.serverVoice && valid()) {
+            if (!result.control)
+              throw Error(
+                "Server voice control is unavailable. Please refresh and reconnect.",
+              );
+            await this.openControl(episodeId, result.session.id, generation);
+          }
+          return result;
+        },
         transcribe: (audio, signal) =>
           this.backend.transcribe(episodeId, audio, signal),
       },

@@ -28,6 +28,7 @@ export function usePlayerController() {
     const audio = new BrowserPodcastAudio();
     const session = new ListeningSession(audio, playerBackend, {
       playerConfig: loadPlayerConfig(),
+      debugRecognition: new URLSearchParams(location.search).has("debug"),
     });
     return { audio, session };
   });
@@ -193,6 +194,7 @@ export function usePlayerController() {
     audio: audio.attach,
     audioLevels: (levels: Float32Array) => audio.levels(levels),
     voiceLevels: (levels: Float32Array) => session.voiceLevels(levels),
+    voiceDiagnostics: () => session.voiceDiagnostics(),
     metadataLoaded: () => session.metadataLoaded(),
     audioTick: () => session.audioTick(),
     configurePlayer: (config: Partial<PlayerConfig>) =>

@@ -4,7 +4,7 @@ import { readFile, readdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { build } from "esbuild";
 import {
   Miniflare,
@@ -16,6 +16,7 @@ import { CloudStore } from "../../cloudflare/src/store.ts";
 import { analyzeEpisode } from "../../cloudflare/src/pipeline.ts";
 import { admitAudio, mediaApp } from "../../backend/src/container/app.ts";
 import { rollupDailyStats } from "../../cloudflare/src/stats.ts";
+import { budget } from "../../cloudflare/src/trial.ts";
 let mf, db, bucket;
 let networkCalls = [];
 let acknowledgeClose = true;
@@ -31,8 +32,12 @@ let googleIdentity = {
   picture: "https://lh3.googleusercontent.com/a/test",
 };
 const controlEvents = [];
+const sidebands = new Map();
+let liveReply;
 const usedProofs = new Set();
 const origin = "https://aside.test";
+const testerIp = "192.0.2.10";
+const testerIpHash = createHmac("sha256", "local-test-secret-at-least-32-characters").update(testerIp).digest("hex");
 before(async () => {
   const shell = await readFile("frontend/index.html", "utf8");
   const bundle = await build({
@@ -76,6 +81,7 @@ before(async () => {
         TURNSTILE_SITE_KEY: "test-site",
         TURNSTILE_SECRET_KEY: "test-secret",
         SESSION_SECRET: "local-test-secret-at-least-32-characters",
+        TRIAL_TEST_IP_HASHES: testerIpHash,
         OPENAI_API_KEY: "test-placeholder",
         ALLOW_UPLOADS: "true",
         AUTH_EMAIL_FROM: "login@auth.asidefm.com",
@@ -119,6 +125,7 @@ before(async () => {
         if (request.url.endsWith("/attach")) {
           const pair = new WebSocketPair();
           pair[1].accept();
+          sidebands.set(new URL(request.url).pathname.split("/").at(-2), pair[1]);
           pair[1].addEventListener("message", (event) => {
             const data = JSON.parse(event.data);
             controlEvents.push(data);
@@ -127,6 +134,7 @@ before(async () => {
           });
           return new WorkerResponse(null, { status: 101, webSocket: pair[0] });
         }
+        if (request.url.endsWith("/responses") && liveReply) return liveReply(await request.json());
         if (request.url.endsWith("/responses"))
           return Response.json({
             id: "response-test",
@@ -588,6 +596,30 @@ test("real Worker + D1/R2 isolate private episodes, public checkpoints and byte 
     403,
   );
 });
+test("migrated checkpoint rows start at zero and reject unversioned overwrites", async () => {
+  const a = await visitor(), b = await visitor();
+  const id = `checkpoint-schema-${crypto.randomUUID()}`;
+  await seed(id, "curator", true);
+  // Explicit columns preserve compatibility with the applied mobile migration.
+  // Existing rows acquire its default version zero and can be upgraded once.
+  await db.prepare("INSERT INTO checkpoints(owner_id,episode_id,value) VALUES(?,?,?)")
+    .bind(a.id, id, JSON.stringify({ positionMs: 1000, history: [] })).run();
+  const path = `/api/episodes/${id}/checkpoint`;
+  const migrated = await (await a.request(path)).json();
+  assert.equal(migrated.positionMs, 1000);
+  assert.equal(migrated.version, 0);
+  const first = await a.request(path, "PUT", { positionMs: 2000, history: [] });
+  assert.equal(first.status, 200, await first.clone().text());
+  assert.equal((await first.json()).version, 1);
+  const stale = await a.request(path, "PUT", { positionMs: 3000, history: [] });
+  assert.equal(stale.status, 409);
+  assert.equal((await (await a.request(path)).json()).positionMs, 2000);
+  const current = await a.request(path, "PUT", { positionMs: 4000, history: [], version: 1 });
+  assert.equal(current.status, 200, await current.clone().text());
+  assert.equal((await current.json()).version, 2);
+  assert.equal(await (await b.request(path)).json(), null);
+});
+
 test("signed sessions cannot be forged; quota reservations are atomic under concurrency", async () => {
   const a = await visitor();
   await seed("secret", a.id);
@@ -1553,6 +1585,55 @@ test("signed-in accounts skip Turnstile but retain paid question quotas", async 
     verifications,
   );
 });
+test("allowlisted IP bypasses exhausted daily pools without consuming them", async () => {
+  const bindings = await mf.getBindings();
+  const a = await visitor();
+  const day = new Date().toISOString().slice(0, 10);
+  const snapshots = await db.prepare("SELECT bucket,used FROM budgets WHERE bucket LIKE 'trial:%'").all();
+  const request = new Request(origin, { headers: { "cf-connecting-ip": testerIp } });
+  try {
+    for (const kind of ["live", "question", "transcribe"]) {
+      for (const [scope, limit] of [[a.id, 5], [`ip:${testerIpHash}`, kind === "live" ? 10 : 20], ["global", kind === "live" ? 10 : 100]]) {
+        await db.prepare("INSERT INTO budgets VALUES(?,?) ON CONFLICT(bucket) DO UPDATE SET used=excluded.used").bind(`trial:${day}:${kind}:${scope}`, limit).run();
+      }
+    }
+    const before = (await db.prepare("SELECT bucket,used FROM budgets ORDER BY bucket").all()).results;
+    for (const kind of ["live", "question", "transcribe"]) {
+      await budget(bindings, a.id, kind, request);
+      await budget(bindings, a.id, kind, request);
+      await assert.rejects(budget(bindings, a.id, kind, new Request(origin, { headers: { "cf-connecting-ip": "192.0.2.11" } })), /今日体验额度已用完/);
+      await assert.rejects(budget(bindings, a.id, kind), /今日体验额度已用完/);
+    }
+    assert.deepEqual((await db.prepare("SELECT bucket,used FROM budgets ORDER BY bucket").all()).results, before);
+    assert.equal((await (await a.request("/api/trial", "GET", undefined, { "cf-connecting-ip": testerIp })).json()).dailyLimitExempt, true);
+    assert.equal((await (await a.request("/api/trial")).json()).dailyLimitExempt, false);
+
+    const headers = { "cf-connecting-ip": testerIp };
+    const payload = { atMs: 0, revision: 1, history: [{ role: "user", text: "Explain" }] };
+    // An exemption does not grant guest verification.
+    assert.equal((await a.request("/api/episodes/public/question", "POST", payload, headers)).status, 403);
+    const verified = await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, headers);
+    assert.equal(verified.status, 200);
+    for (let i = 0; i < 6; i++) {
+      const answer = await a.request("/api/episodes/public/question", "POST", payload, headers);
+      assert.equal(answer.status, 200, await answer.text());
+    }
+    await db.prepare("UPDATE trial_control SET enabled=0 WHERE id=1").run();
+    assert.equal((await a.request("/api/episodes/public/question", "POST", payload, headers)).status, 503);
+    await db.prepare("UPDATE trial_control SET enabled=1 WHERE id=1").run();
+    // Existing per-minute guard still applies to testers.
+    await db.prepare("INSERT INTO budgets VALUES(?,12) ON CONFLICT(bucket) DO UPDATE SET used=12").bind(`burst:${Math.floor(Date.now() / 60000)}:${a.id}`).run();
+    const limited = await a.request("/api/episodes/public/question", "POST", payload, headers);
+    assert.equal(limited.status, 429);
+    assert.match((await limited.json()).error, /一分钟/);
+  } finally {
+    await db.prepare("UPDATE trial_control SET enabled=1 WHERE id=1").run();
+    await db.prepare("DELETE FROM budgets WHERE bucket LIKE 'trial:%'").run();
+    for (const row of snapshots.results)
+      await db.prepare("INSERT INTO budgets VALUES(?,?)").bind(row.bucket, row.used).run();
+  }
+});
+
 test("five question reservations are enforced before providers; kill switch preserves playback", async () => {
   const a = await visitor();
   const payload = {
@@ -2312,4 +2393,71 @@ test("the worker serves indexable pages, a live sitemap and real 404s", async ()
   assert.match(chineseEpisodeHtml, /<html lang="zh-CN">/);
   assert.match(chineseEpisodeHtml, /"inLanguage":"zh-CN"/);
   assert.match(chineseEpisodeHtml, /<h1>阿Q正传<\/h1>/);
+});
+
+
+test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream without question requests", async () => {
+  const a = await visitor(), b = await visitor();
+  await seed("control-public", "seed", true);
+  await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, { "cf-connecting-ip": testerIp });
+  const { createPlayerConfig } = await import("../../engine/src/player.ts");
+  const player = { version: 0, sequence: 0, revision: 1, positionMs: 1000, wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig() };
+  const requests = [];
+  liveReply = async body => {
+    const context = JSON.parse(body.input[0].content); requests.push(context);
+    return Response.json({ id: crypto.randomUUID(), output_text: "", output: [{ type: "function_call", call_id: crypto.randomUUID(), name: "control_podcast", arguments: JSON.stringify({ commands: [{ type: "pause" }] }) }] });
+  };
+  let reader, sessionId;
+  try {
+    const created = await a.request("/api/episodes/control-public/live", "POST", { sdp: "offer", atMs: 1000, control: { player, debug: true } }, { "cf-connecting-ip": testerIp });
+    assert.equal(created.status, 200, await created.clone().text());
+    const live = await created.json(); sessionId = live.session.id;
+    assert.equal(live.control, true);
+    const path = `/api/episodes/control-public/live-control?sessionId=${sessionId}`;
+    assert.equal((await b.request(path)).status, 404, "another visitor cannot subscribe to this session");
+    const stream = await a.request(path);
+    assert.equal(stream.status, 200); assert.match(stream.headers.get("content-type"), /ndjson/);
+    reader = stream.body.getReader();
+    let buffered = "";
+    const next = async type => {
+      for (;;) {
+        while (buffered.includes("\n")) {
+          const at = buffered.indexOf("\n"), line = buffered.slice(0, at); buffered = buffered.slice(at + 1);
+          const event = JSON.parse(line);
+          assert.notEqual(event.type, "error", event.message);
+          if (event.type === type) return event;
+        }
+        const { value, done } = await reader.read(); assert.equal(done, false);
+        buffered += new TextDecoder().decode(value);
+      }
+    };
+    assert.equal((await next("ready")).sessionId, sessionId);
+    assert.equal((await a.request(path)).status, 409, "second subscriber cannot duplicate commands");
+    // A completed upgrade must outlive the five-second handshake timeout.
+    await new Promise(resolve => setTimeout(resolve, 5500));
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Could you lower that a bit?", start_ms: 0, end_ms: 200 }));
+    const first = await next("decision");
+    assert.equal(first.result.action, "player_control");
+    assert.equal(requests.length, 1, "sideband alone invokes the backend model");
+    assert.equal(first.player.positionMs, 1000);
+    const update = { sessionId, player: { ...player, sequence: 1, revision: 2, wasPlaying: false, audibleSource: "none" }, acknowledgement: { decisionId: first.decisionId, applied: true } };
+    assert.equal((await b.request(path, "PUT", update)).status, 404);
+    assert.equal((await a.request(path, "PUT", update)).status, 200);
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "duplicate", target: "client" } }));
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Pause again", start_ms: 2500, end_ms: 2800 }));
+    const second = await next("decision");
+    assert.notEqual(second.decisionId, first.decisionId);
+    assert.equal(second.result.revision, 2);
+    assert.equal(requests.length, 2);
+    const rows = await db.prepare("SELECT bucket FROM budgets WHERE bucket=?").bind(`trial:${new Date().toISOString().slice(0, 10)}:question:${a.id}`).all();
+    assert.equal(rows.results.length, 0, "allowlisted control sessions do not consume public quota per fragment");
+    assert.equal(networkCalls.some(p => p.includes("live-control")), false);
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.closed" }));
+    sidebands.get(sessionId).close(1000, "session ended");
+    assert.equal((await next("closed")).type, "closed", "normal supplier closure is not a transport error");
+  } finally {
+    liveReply = undefined;
+    await reader?.cancel();
+    if (sessionId) await a.request("/api/episodes/control-public/usage", "POST", { sessionId, seconds: 1, finalized: true });
+  }
 });
