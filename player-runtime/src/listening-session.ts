@@ -1197,6 +1197,10 @@ export class ListeningSession {
                 }
               : {}),
           });
+          // A start that outlived its connection still holds the listener's
+          // only voice slot. Its own close can take half a minute to reach the
+          // server, so ask now; otherwise the replacement is refused as busy.
+          if (!valid()) usage(0, result.session.id, false, true);
           if (this.serverVoice && valid()) {
             if (!result.control)
               throw Error(

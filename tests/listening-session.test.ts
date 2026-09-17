@@ -147,6 +147,8 @@ function setup(
   let receive!: (event: LiveControlEvent) => void;
   let createLive: (() => Promise<unknown>) | undefined;
   const updates: LiveControlUpdate[] = [];
+  const usages: Parameters<PlayerBackend["usage"]>[1][] = [];
+  let liveGate: Promise<void> | undefined;
   const backend: PlayerBackend = {
     question(_id, data, signal, progress, preview) {
       return new Promise((resolve) =>
@@ -155,6 +157,7 @@ function setup(
     },
     async live(_id, request) {
       if (!server) throw Error("Unexpected live negotiation");
+      await liveGate;
       serverState = request.control!.player;
       return {
         session: { id: "test-session" },
@@ -185,7 +188,9 @@ function setup(
     async transcribe() {
       throw Error("Unexpected transcription");
     },
-    async usage() {},
+    async usage(_id, data) {
+      usages.push(data);
+    },
   };
   const voice: VoicePort = {
     get isEnabled() {
@@ -300,6 +305,13 @@ function setup(
         } as QuestionResult,
       };
       return event;
+    },
+    usages,
+    /** Keeps the next session start pending until the returned release runs. */
+    holdLive() {
+      let release!: () => void;
+      liveGate = new Promise<void>((resolve) => (release = resolve));
+      return release;
     },
     get serverState() {
       return serverState;
@@ -1492,3 +1504,25 @@ test("a server pause decision fades out instead of cutting the podcast", async (
   assert.equal(s.session.getSnapshot().listeningActive, true);
   s.session.dispose();
 });
+
+test("a session start that outlives its connection is closed at once so its replacement is not refused", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  const release = s.holdLive();
+  s.session.start();
+  await flush();
+  // The listener stops while the server is still creating the session.
+  s.session.stop();
+  release();
+  await flush();
+  assert.deepEqual(s.usages, [
+    { sessionId: "test-session", seconds: 0, finalized: false, closed: true },
+  ]);
+});
+
+test("a session start that is still wanted is not closed", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  assert.deepEqual(s.usages, []);
+});
+

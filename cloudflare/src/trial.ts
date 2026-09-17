@@ -112,7 +112,13 @@ export async function acquire(env: Env, owner: string, kind: string) {
     .bind(owner, kind, token, now + 90000, kind, now, now)
     .first();
   if (!result)
-    throw new HttpError(429, "已有请求正在进行，或试用繁忙，请稍后再试");
+    // A slot held by an abandoned request frees within seconds; the code lets
+    // clients tell this apart from an exhausted quota and retry briefly.
+    throw new HttpError(
+      429,
+      "已有请求正在进行，或试用繁忙，请稍后再试",
+      "trial_busy",
+    );
   return token;
 }
 export async function release(

@@ -1786,6 +1786,43 @@ test("voice deadline sends server-side session.close without browser cooperation
     1,
   );
 });
+test("an abandoned voice start is refused as busy until the browser closes it, then the replacement succeeds", async () => {
+  const a = await visitor();
+  const start = () =>
+    a.request("/api/episodes/public/live", "POST", { sdp: "offer", atMs: 0 });
+  const first = await start();
+  assert.equal(first.status, 200, await first.clone().text());
+  const session = (await first.json()).session.id;
+  const refused = await start();
+  assert.equal(refused.status, 429);
+  // The code tells the browser this is a held slot, not an exhausted quota.
+  assert.equal((await refused.json()).code, "trial_busy");
+  const closed = await a.request("/api/episodes/public/usage", "POST", {
+    sessionId: session,
+    seconds: 0,
+    finalized: false,
+    closed: true,
+  });
+  assert.equal(closed.status, 200, await closed.clone().text());
+  await eventually(
+    async () =>
+      !(await db
+        .prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'")
+        .bind(a.id)
+        .first()),
+  );
+  const replacement = await start();
+  assert.equal(replacement.status, 200, await replacement.clone().text());
+  const bindings = await mf.getBindings();
+  await bindings.LIVE.get(bindings.LIVE.idFromName(a.id)).expire();
+  await eventually(
+    async () =>
+      !(await db
+        .prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'")
+        .bind(a.id)
+        .first()),
+  );
+});
 test("unconfirmed voice close retains lease and trips breaker despite browser finalization", async () => {
   const a = await visitor();
   const response = await a.request("/api/episodes/public/live", "POST", {

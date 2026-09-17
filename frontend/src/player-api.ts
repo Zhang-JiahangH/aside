@@ -86,12 +86,31 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 409 && path.endsWith("/checkpoint"))
     throw new CheckpointConflict();
   if (!response.ok) {
-    const error = errorSchema.safeParse(
-      await response.json().catch(() => null),
+    const body = await response.json().catch(() => null);
+    const error = errorSchema.safeParse(body);
+    throw Object.assign(
+      Error(error.success ? error.data.error : response.statusText),
+      { code: typeof body?.code === "string" ? body.code : undefined },
     );
-    throw Error(error.success ? error.data.error : response.statusText);
   }
   return response.json();
+}
+/**
+ * The server admits one voice session and one operation per listener. A slot
+ * still held by a request this page already abandoned (a slow session start,
+ * an aborted transcription) frees within seconds, so wait for it instead of
+ * surfacing a failure the listener did nothing to cause.
+ */
+async function whenFree<T>(run: () => Promise<T>, signal?: AbortSignal) {
+  for (let attempt = 0; ; attempt++)
+    try {
+      return await run();
+    } catch (error) {
+      if ((error as { code?: string }).code !== "trial_busy" || attempt >= 5)
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      signal?.throwIfAborted();
+    }
 }
 export const playerBackend: PlayerBackend = {
   async question(id, request, signal, progress) {
@@ -109,7 +128,8 @@ export const playerBackend: PlayerBackend = {
     );
     return result;
   },
-  live: (id, request) => api(`/episodes/${id}/live`, json(request)),
+  live: (id, request) =>
+    whenFree(() => api(`/episodes/${id}/live`, json(request))),
   async control(id, sessionId, signal, receive) {
     await readLiveControl(
       await fetch(
@@ -133,11 +153,15 @@ export const playerBackend: PlayerBackend = {
     const body = new FormData();
     body.append("audio", audio, "question.wav");
     return (
-      await api<{ text: string }>(`/episodes/${id}/transcribe-question`, {
-        method: "POST",
-        body,
+      await whenFree(
+        () =>
+          api<{ text: string }>(`/episodes/${id}/transcribe-question`, {
+            method: "POST",
+            body,
+            signal,
+          }),
         signal,
-      })
+      )
     ).text;
   },
   async usage(id, data) {
