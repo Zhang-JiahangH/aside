@@ -368,3 +368,16 @@ node scripts/admin-usage.mjs --days 30 --json
 未验证：仍未用真实麦克风走完一次语音会话（需要 Turnstile 与真机），因此「访客能正常开语音」只由 `enabled:true`、熔断与租约清零推断。
 
 至此 `trial_breakers` 的三条写入路径都有界：供应商 404（`74e9045`）、attach 无法确认（`dd2ce2c`，deadline 后 15 分钟）、创建结果不明（`488b6c8`，同样 15 分钟且保留租约作为痕迹）。三条都会 `console.error` 记录原因。
+
+
+## 播客让位（软让位与淡出暂停）：发布与线上验收（2026-09-16）
+
+发布内容：`60ea278`，基于合并后的 `0e51046`（含移动端共用运行时与服务端语音控制）。后端开始判断一段话（服务端控制流 `classifying`，旧路径为 Live 委派）时播客在 150ms 内降到用户音量的 60%，`ignore`、只改配置的指令、手动操作或 2.5 秒无新决定后 300ms 回升；确认为提问、文字提问、按住说话和语音 `pause` 指令改为 250ms 淡出再暂停，打断位置仍取开口时刻。浏览器端让位倍率走 MediaElementSource 与分析器之间的 GainNode，波形随之缩小；移动端 `NativePodcastAudio` 分步调音量，只做了类型检查。细节见 [player-controls.md](player-controls.md#让位软让位与硬让位)。
+
+生产 Worker `1c0560e9-b3e2-4bca-be2d-b05fdd4ea654`，`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container），上传 3 个新文件；`npm run test:mobile-service` 4 项通过。生产 D1 无待应用迁移（`0006_mobile` 已在线上）。`main` 已同步 origin。
+
+发布前：`npm run check`（含移动端类型检查）通过；224 项单元测试、43 项 Cloudflare 集成测试通过；浏览器套件 player-config、voice-remote（18 项）、player、listening-controls、mobile-panels 通过。`vad.spec` 的两条纯音误触发用例在合并前后都失败，与本次无关。
+
+线上验收（curl 与无头 Chrome，正式域名）：`/` 引用 `index-DHwuzSb6.js`、`index-MG_NYjXQ.css`，JS 为 200 且 `text/javascript`，bundle 含让位日志字符串；`/api/health` 200、`liveConfigured=true`；`/api/trial`、`/robots.txt` 200。访客只听模式打开 `chronoscope-byrd` 并播放：音频经 GainNode 链路正常出声、进度前进、波形逐帧变化、暂停后停止，控制台无错误。
+
+未验证：没有在生产用真实麦克风走一次语音打断（需要 Turnstile 与真机），软让位的降音深度和淡出听感需戴耳机实听；移动端适配器没有运行验证。倍速调整会取消续播倒计时的问题（见 IMPLEMENTATION.md 2026-09-16）本次未修。
