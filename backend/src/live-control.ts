@@ -49,11 +49,21 @@ export class LiveControl {
     if (this.sink && !this.closed) this.intent.receive(event);
   }
   update(data: LiveControlUpdate) {
-    if (this.closed || data.sessionId !== this.sessionId) return false;
+    if (this.closed || data.sessionId !== this.sessionId) {
+      console.warn("Aside voice control update refused", {
+        closed: this.closed,
+        acknowledgement: !!data.acknowledgement,
+      });
+      return false;
+    }
     this.intent.update(data.player, data.acknowledgement);
     return true;
   }
   subscribe(): Response {
+    console.log("Aside voice control stream requested", {
+      closed: this.closed,
+      connected: this.connected,
+    });
     if (this.closed || this.connected)
       return Response.json(
         {
@@ -73,6 +83,7 @@ export class LiveControl {
         );
       },
       cancel: () => {
+        console.warn("Aside voice control stream cancelled by the browser");
         this.sink = undefined;
         this.close();
       },

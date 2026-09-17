@@ -35,6 +35,7 @@ export class LiveIntent {
   private closed = false;
   private calls = 0;
   private epoch = 0;
+  private decidedAt = 0;
   constructor(
     private player: LivePlayerState,
     history: Turn[],
@@ -95,14 +96,38 @@ export class LiveIntent {
       this.closed ||
       player.sequence <= this.player.sequence ||
       player.version < this.player.version
-    )
+    ) {
+      if (ack)
+        console.warn("Aside voice acknowledgement discarded with its update", {
+          closed: this.closed,
+          sequence: player.sequence,
+          lastSequence: this.player.sequence,
+          version: player.version,
+          lastVersion: this.player.version,
+        });
       return;
+    }
     if (player.version !== this.player.version) this.resetTurn();
     this.player = player;
+    if (ack && ack.decisionId !== this.waiting?.decisionId)
+      console.warn("Aside voice acknowledgement matched no pending decision", {
+        applied: ack.applied,
+        pending: !!this.waiting,
+      });
     if (ack && ack.decisionId === this.waiting?.decisionId) {
       const decision = this.waiting;
       this.waiting = undefined;
       this.acknowledgementTimer?.();
+      console.log("Aside voice decision acknowledged", {
+        action: decision.result.action,
+        applied: ack.applied,
+        afterMs: this.ports.now() - this.decidedAt,
+        // A refusal is normally staleness: compare what was decided on with now.
+        decidedRevision: decision.result.revision,
+        revision: player.revision,
+        decidedVersion: decision.version,
+        version: player.version,
+      });
       if (ack.applied) {
         this.handled = decision.text;
         this.history = [
@@ -137,6 +162,13 @@ export class LiveIntent {
     }
   }
   private resetTurn() {
+    // A decision the browser never answered is the trace of a broken round trip.
+    if (this.waiting)
+      console.warn("Aside voice decision dropped before acknowledgement", {
+        action: this.waiting.result.action,
+        afterMs: this.ports.now() - this.decidedAt,
+        version: this.player.version,
+      });
     this.epoch++;
     this.pending?.abort();
     // Keep the occupied slot until its promise settles, even if a provider
@@ -168,6 +200,7 @@ export class LiveIntent {
   }
   private fail(error: string) {
     if (this.closed) return;
+    console.error("Aside voice control ended", { error, call: this.calls });
     this.ports.emit({ type: "error", error });
     this.close();
   }
@@ -223,6 +256,20 @@ export class LiveIntent {
         text,
         result,
       };
+      this.decidedAt = this.ports.now();
+      // The listener's words stay out of the log; shape and timing are enough.
+      console.log("Aside voice decision", {
+        action: result.action,
+        commands:
+          result.action === "player_control"
+            ? result.commands.map((command) => command.type)
+            : undefined,
+        characters: text.length,
+        call: this.calls,
+        version,
+        revision: result.revision,
+        wasPlaying: player.wasPlaying,
+      });
       if (result.action !== "ignore" && result.action !== "wait") {
         this.waiting = decision;
         this.acknowledgementTimer = this.ports.after(10000, () =>
