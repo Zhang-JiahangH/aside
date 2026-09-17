@@ -1,0 +1,44 @@
+# Authenticated fixture account; run server.mjs with QUESTION_DELAY_MS=15000.
+# Start with an empty checkpoint for mobile-sample.
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: dismiss-error
+    optional: true
+- tapOn:
+    id: public-library
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: episode-mobile-sample
+    waitToSettleTimeoutMs: 1000
+- assertNotVisible: "^You$"
+- longPressOn:
+    id: hold-to-talk
+    waitToSettleTimeoutMs: 100
+- extendedWaitUntil:
+    visible: "^You$"
+    timeout: 15000
+- assertVisible: "^Question$"
+- assertNotVisible: A little room to talk
+- assertNotVisible: A short answer
+- takeScreenshot: recognized-question-before-answer
+- pressKey: Home
+- launchApp:
+    stopApp: false
+- assertVisible: Question
+- assertVisible: "^You$"
+- assertNotVisible: A short answer
+- assertVisible: Play
+- stopApp
+- launchApp
+- tapOn:
+    id: public-library
+- tapOn:
+    id: episode-mobile-sample
+- tapOn:
+    id: show-conversation
+- assertVisible: Question
+- assertVisible: "^You$"
+- assertNotVisible: A short answer
+- takeScreenshot: recognized-question-restored

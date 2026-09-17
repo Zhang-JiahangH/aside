@@ -7,7 +7,7 @@ import {
 } from "../frontend/src/listening-session.js";
 import { attention } from "@aside/player-runtime/listening-session";
 import type { RuntimeClock } from "../frontend/src/runtime-clock.js";
-import type { VoiceCallbacks } from "../frontend/src/on-demand-voice.js";
+import type { VoiceCallbacks } from "@aside/player-runtime/ports";
 import type { PlayerBackend } from "../frontend/src/player-api.js";
 import type {
   QuestionRequest,
@@ -616,7 +616,134 @@ test("a late failure from an old play promise cannot stop a newer manual recordi
   s.session.dispose();
 });
 
-test("background keeps native podcast playback but cancels an unfinished question", async () => {
+test("recognized manual speech is visible and saved before Live or the answer is ready", async () => {
+  const s = setup("manual");
+  s.session.start();
+  await s.session.beginManual();
+  s.session.endManual();
+  const saved: string[][] = [];
+  s.session.subscribe(() =>
+    saved.push(s.session.checkpoint().history.map((t) => t.text)),
+  );
+  s.callbacks.onQuestionRecognized?.("Why did the speaker say that?");
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    ["Why did the speaker say that?"],
+  );
+  assert.deepEqual(saved.at(-1), ["Why did the speaker say that?"]);
+  assert.equal(
+    s.requests.length,
+    0,
+    "recognition must not submit before Live is ready",
+  );
+  s.callbacks.onFirstQuestion("Why did the speaker say that?");
+  assert.equal(s.requests.length, 1);
+  assert.equal(
+    s.session.getSnapshot().history.length,
+    1,
+    "ready callback must not duplicate the question",
+  );
+  assert.equal(s.session.getSnapshot().busy, true);
+  s.session.background();
+  assert.equal(s.requests[0].signal.aborted, true);
+  const checkpoint = s.session.checkpoint();
+  s.session.load(episode, checkpoint);
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    ["Why did the speaker say that?"],
+  );
+  s.session.dispose();
+});
+
+test("a failed Live connection keeps already recognized speech without submitting another question", async () => {
+  const s = setup("manual");
+  await s.session.beginManual();
+  s.session.endManual();
+  s.callbacks.onQuestionRecognized?.("Please explain this part");
+  s.callbacks.onError("Connection timed out");
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    ["Please explain this part"],
+  );
+  assert.deepEqual(
+    s.session.checkpoint().history,
+    s.session.getSnapshot().history,
+  );
+  assert.equal(s.requests.length, 0);
+  s.session.dispose();
+});
+
+test("resuming during a spoken answer preserves the submitted question but discards incomplete assistant output", async () => {
+  const s = setup("manual");
+  s.session.start();
+  await s.session.beginManual();
+  s.session.endManual();
+  s.callbacks.onFirstQuestion("Explain the interview");
+  s.answer(0);
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "An unfinished answer");
+  s.session.start();
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    ["Explain the interview"],
+  );
+  assert.deepEqual(
+    s.session.checkpoint().history,
+    s.session.getSnapshot().history,
+  );
+  s.session.dispose();
+});
+
+test("a manual follow-up keeps the previous question while cancelling its pending answer", async () => {
+  const s = setup("manual");
+  await s.session.beginManual();
+  s.session.endManual();
+  s.callbacks.onFirstQuestion("First spoken question");
+  await s.session.beginManual();
+  s.session.endManual();
+  s.callbacks.onFirstQuestion("Follow-up question");
+  assert.equal(s.requests[0].signal.aborted, true);
+  assert.deepEqual(
+    s.requests[1].data.history.map((t) => t.text),
+    ["First spoken question", "Follow-up question"],
+  );
+  s.answer(0, "Stale answer");
+  await flush();
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    ["First spoken question", "Follow-up question"],
+  );
+  s.session.dispose();
+});
+
+test("classification cannot erase an explicitly submitted manual message", async () => {
+  for (const action of ["ignore", "wait"] as const) {
+    const s = setup("manual");
+    await s.session.beginManual();
+    s.session.endManual();
+    s.callbacks.onFirstQuestion("An explicitly submitted thought");
+    s.requests[0].resolve({
+      action,
+      revision: s.requests[0].data.revision,
+      answer: "",
+      sources: [],
+      tools: [],
+    });
+    await flush();
+    assert.deepEqual(
+      s.session.getSnapshot().history.map((t) => t.text),
+      ["An explicitly submitted thought"],
+    );
+    assert.deepEqual(
+      s.session.checkpoint().history,
+      s.session.getSnapshot().history,
+    );
+    s.session.dispose();
+  }
+});
+
+test("background keeps native podcast playback and the submitted question while cancelling its answer", async () => {
   const s = setup("manual");
   s.session.start();
   await flush();
@@ -627,7 +754,10 @@ test("background keeps native podcast playback but cancels an unfinished questio
   s.session.background();
   assert.equal(s.audio.playing, false);
   assert.equal(s.requests[0].signal.aborted, true);
-  assert.deepEqual(s.session.checkpoint().history, []);
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    ["An unfinished question"],
+  );
   assert.equal(s.session.checkpoint().resumeMs, 20000);
   s.clock.advance(60000);
   await flush();
@@ -1378,7 +1508,10 @@ test("stream previews stay out of checkpoints and late cancelled chunks cannot c
   s.session.submitQuestion("First");
   s.requests[0].preview!("Partial answer");
   assert.equal(s.session.getSnapshot().answerPreview, "Partial answer");
-  assert.deepEqual(s.session.checkpoint().history, []);
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    ["First"],
+  );
   s.session.submitQuestion("Second");
   s.requests[0].preview!("Late stale answer");
   assert.equal(s.session.getSnapshot().answerPreview, "");
@@ -1389,6 +1522,10 @@ test("stream previews stay out of checkpoints and late cancelled chunks cannot c
   assert.equal(s.session.getSnapshot().answerPreview, "");
   assert.equal(s.session.getSnapshot().question, "Next draft");
   assert.equal(s.session.checkpoint().history.at(-1)?.text, "Complete answer");
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    ["First", "Second", "Complete answer"],
+  );
   s.session.dispose();
 });
 
@@ -1505,8 +1642,9 @@ test("a server pause decision fades out instead of cutting the podcast", async (
   s.session.dispose();
 });
 
-test("a session start that outlives its connection is closed at once so its replacement is not refused", async () => {
+test("a session start that outlives its connection is closed at once so its replacement is not refused", async (t) => {
   const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
   const release = s.holdLive();
   s.session.start();
   await flush();
@@ -1519,8 +1657,9 @@ test("a session start that outlives its connection is closed at once so its repl
   ]);
 });
 
-test("a session start that is still wanted is not closed", async () => {
+test("a session start that is still wanted is not closed", async (t) => {
   const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
   s.session.start();
   await flush();
   assert.deepEqual(s.usages, []);
@@ -1559,8 +1698,7 @@ test("under server voice control only a backend answer is heard or recorded", as
   await flush();
   s.push(s.decision("player_control"));
   await flush();
-  const lastMute = () =>
-    s.commands.filter((x) => x.startsWith("mute:")).at(-1);
+  const lastMute = () => s.commands.filter((x) => x.startsWith("mute:")).at(-1);
   // The voice acknowledges the pause on its own initiative.
   s.commands.length = 0;
   s.callbacks.onOutput(true);
@@ -1589,4 +1727,3 @@ test("under server voice control only a backend answer is heard or recorded", as
   assert.equal(s.session.getSnapshot().history.at(-1)?.text, "An answer");
   s.session.dispose();
 });
-

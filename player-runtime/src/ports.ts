@@ -74,6 +74,8 @@ export interface VoiceCallbacks {
   onDelegation(id: string): void;
   onError(message: string): void;
   onSpeech(active: boolean): void;
+  /** Submitted manual ASR text; may arrive before the answer connection is ready. */
+  onQuestionRecognized?(text: string): void;
   onFirstQuestion(text: string): void;
   onStatus(status: VoiceStatus): void;
   onUsage?(seconds: number, sessionId: string): void;
