@@ -254,19 +254,30 @@ async function route(
     }
   }
   if (action === "live-control" && ["GET", "PUT"].includes(method)) {
-    const data = method === "PUT" ? liveControlUpdateSchema.parse(await readJson(request)) : undefined;
+    const data =
+      method === "PUT"
+        ? liveControlUpdateSchema.parse(await readJson(request))
+        : undefined;
     const sessionId = data?.sessionId ?? url.searchParams.get("sessionId");
-    if (!sessionId || sessionId.length > 200) throw new HttpError(400, "Invalid voice session");
+    if (!sessionId || sessionId.length > 200)
+      throw new HttpError(400, "Invalid voice session");
     const target = new URL("https://live/control");
     target.searchParams.set("sessionId", sessionId);
     target.searchParams.set("episode", id);
     // This is an existing authenticated Live lease, not a billable request per
     // fragment. Updates carry playback state and execution acknowledgements,
     // never browser-selected speech or intent decisions.
-    return env.LIVE.get(env.LIVE.idFromName(owner)).fetch(new Request(target, {
-      method,
-      ...(data ? { body: JSON.stringify(data), headers: { "Content-Type": "application/json" } } : {}),
-    }));
+    return env.LIVE.get(env.LIVE.idFromName(owner)).fetch(
+      new Request(target, {
+        method,
+        ...(data
+          ? {
+              body: JSON.stringify(data),
+              headers: { "Content-Type": "application/json" },
+            }
+          : {}),
+      }),
+    );
   }
   if (
     method !== "POST" ||
@@ -442,7 +453,17 @@ async function route(
               ),
             );
             emit({ type: "result", result });
-          } catch {
+          } catch (error) {
+            // The cause stays in the Worker log; the listener sees a safe message.
+            console.error("Aside question failed", {
+              episode: id,
+              reason: error instanceof Error ? error.message : String(error),
+              aborted: signal.aborted,
+              timedOut:
+                signal.aborted &&
+                !request.signal.aborted &&
+                !abort.signal.aborted,
+            });
             if (!signal.aborted)
               emit({ type: "error", error: "回答失败，请重试" });
           } finally {

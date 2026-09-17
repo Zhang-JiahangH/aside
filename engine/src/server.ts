@@ -65,10 +65,24 @@ export function makeAnalysis(
     source: "provider",
   };
 }
+/**
+ * The model sees a passage's declared fields only. Stored passages may carry
+ * word timings and other bulk that the transcript UI wants but a prompt must
+ * not pay for: with them, two minutes of a long recording already exceeded
+ * the trial request limit and every question failed.
+ */
+export const modelPassage = ({
+  id,
+  startMs,
+  endMs,
+  text,
+  speaker,
+}: Passage): Passage => ({ id, startMs, endMs, text, speaker });
 export function getPassage(a: Analysis, atMs: number, heardUntilMs: number) {
   return a.passages
     .filter((p) => p.endMs >= atMs - 30000 && p.startMs <= atMs + 15000)
-    .filter((p) => p.endMs <= heardUntilMs);
+    .filter((p) => p.endMs <= heardUntilMs)
+    .map(modelPassage);
 }
 const terms = (s: string) => {
   const t = s.toLowerCase();
@@ -90,7 +104,7 @@ export function searchPodcast(
   return a.passages
     .filter((p) => p.endMs <= heardUntilMs)
     .map((p) => ({
-      ...p,
+      ...modelPassage(p),
       score: ts.reduce(
         (n, t) => n + (p.text.toLowerCase().includes(t) ? 1 : 0),
         0,
@@ -100,25 +114,43 @@ export function searchPodcast(
     .sort((a, b) => b.score - a.score)
     .slice(0, 6);
 }
-export function buildContext(a: Analysis, atMs: number, history: Turn[]) {
-  return {
+/** Upper bound on the serialized context; the provider rejects trial requests above 32000 bytes. */
+export const CONTEXT_BYTES = 24000;
+export function buildContext(
+  a: Analysis,
+  atMs: number,
+  history: Turn[],
+  maxBytes = CONTEXT_BYTES,
+) {
+  const current = a.passages.find((p) => p.startMs <= atMs && p.endMs > atMs);
+  const context = {
     playheadMs: atMs,
-    currentPassage: a.passages.find((p) => p.startMs <= atMs && p.endMs > atMs)
-      ? {
-          ...a.passages.find((p) => p.startMs <= atMs && p.endMs > atMs)!,
-          partiallyHeard: true,
-        }
+    currentPassage: current
+      ? { ...modelPassage(current), partiallyHeard: true }
       : null,
-    recentTranscript: a.passages.filter(
-      (p) => p.startMs >= atMs - 120000 && p.endMs <= atMs,
-    ),
+    recentTranscript: a.passages
+      .filter((p) => p.startMs >= atMs - 120000 && p.endMs <= atMs)
+      .map(modelPassage),
     earlierExcerpts: a.passages
       .filter((p) => p.endMs <= atMs - 120000)
       .filter((_, i, all) => i % Math.max(1, Math.ceil(all.length / 12)) === 0)
-      .slice(-12),
+      .slice(-12)
+      .map(modelPassage),
     hostStyle: a.hostStyle,
     history: history.slice(-20),
   };
+  // Shed the least valuable material first: old turns, then early excerpts,
+  // then the oldest recent transcript. The current passage always stays.
+  const size = () => new TextEncoder().encode(JSON.stringify(context)).length;
+  while (size() > maxBytes) {
+    if (context.history.length > 4) context.history = context.history.slice(1);
+    else if (context.earlierExcerpts.length)
+      context.earlierExcerpts = context.earlierExcerpts.slice(1);
+    else if (context.recentTranscript.length)
+      context.recentTranscript = context.recentTranscript.slice(1);
+    else break;
+  }
+  return context;
 }
 
 /** Byte budget is a conservative upper bound on tokenizer tokens for startup history. */

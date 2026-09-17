@@ -66,3 +66,55 @@ test("new Live session keeps recent roles and bounds multilingual history", asyn
   assert.ok(selected.at(-1)?.text.startsWith("19"));
   assert.ok(!selected.some((t) => t.text.startsWith("0 ")));
 });
+
+test("the model never sees stored passage bulk such as word timings", () => {
+  const bulky = makeAnalysis(
+    ps.map((p) => ({
+      ...p,
+      words: Array.from({ length: 40 }, (_, i) => ({
+        text: `w${i}`,
+        startMs: p.startMs + i * 50,
+        endMs: p.startMs + i * 50 + 40,
+      })),
+    })),
+    { summary: "", hostStyle: "plain", speakers: [], groups: [] },
+  );
+  const c = buildContext(bulky, 4000, []);
+  for (const value of [
+    c,
+    getPassage(bulky, 3000, 4000),
+    searchPodcast(bulky, "散步", 4000),
+  ])
+    assert.equal(JSON.stringify(value).includes("words"), false);
+  assert.deepEqual(Object.keys(c.recentTranscript[0]).sort(), [
+    "endMs",
+    "id",
+    "speaker",
+    "startMs",
+    "text",
+  ]);
+});
+
+test("a long recording with a long conversation still fits the request budget", () => {
+  const long = makeAnalysis(
+    Array.from({ length: 3000 }, (_, i) => ({
+      id: `p${i}`,
+      startMs: i * 4000,
+      endMs: i * 4000 + 4000,
+      text: `第${i}段，主持人在这里讲了一个不短的句子，用来撑起上下文体积。`,
+      speaker: "host",
+    })),
+    { summary: "", hostStyle: "x".repeat(3000), speakers: [], groups: [] },
+  );
+  const history = Array.from({ length: 20 }, (_, i) => ({
+    role: i % 2 ? ("assistant" as const) : ("user" as const),
+    text: `${i} `.padEnd(1500, "回答"),
+  }));
+  const c = buildContext(long, 2400 * 4000, history);
+  assert.ok(new TextEncoder().encode(JSON.stringify(c)).length <= 24000);
+  assert.equal(c.currentPassage?.id, "p2400");
+  // The newest turns and the passages just before the playhead survive.
+  assert.ok(c.history.length >= 4);
+  assert.ok(c.history.at(-1)?.text.startsWith("19"));
+  assert.equal(c.recentTranscript.at(-1)?.id, "p2399");
+});
