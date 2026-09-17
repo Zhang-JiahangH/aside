@@ -136,17 +136,21 @@ export async function budget(
   // Test traffic must not consume the public pool or be blocked by its exhaustion.
   // authorize() and acquire() still enforce verification, rate limits and safety.
   if (request && await isTrialTester(request, env)) return;
+  // With the daily limits switched off the counters still advance, so daily_stats
+  // keeps reporting trial usage; only the refusal is lifted.
+  const unlimited = env.TRIAL_DAILY_LIMITS === "false",
+    limit = (n: number) => (unlimited ? Number.MAX_SAFE_INTEGER : n);
   const store = new CloudStore(env.DB, env.AUDIO),
     day = new Date().toISOString().slice(0, 10);
-  await store.reserve(`trial:${day}:${kind}:${owner}`, 5);
+  await store.reserve(`trial:${day}:${kind}:${owner}`, limit(5));
   if (request)
     await store.reserve(
       `trial:${day}:${kind}:ip:${await ipKey(request, env)}`,
-      kind === "live" ? 10 : 20,
+      limit(kind === "live" ? 10 : 20),
     );
   await store.reserve(
     `trial:${day}:${kind}:global`,
-    kind === "live" ? 10 : 100,
+    limit(kind === "live" ? 10 : 100),
   );
 }
 export function boundedHistory(history: { text: string }[]) {

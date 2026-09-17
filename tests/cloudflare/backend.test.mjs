@@ -1621,6 +1621,28 @@ test("signed-in accounts skip Turnstile but retain paid question quotas", async 
     verifications,
   );
 });
+test("daily trial limits switched off still count usage but never refuse", async () => {
+  const bindings = { ...(await mf.getBindings()), TRIAL_DAILY_LIMITS: "false" };
+  const a = await visitor();
+  const day = new Date().toISOString().slice(0, 10);
+  const snapshots = await db.prepare("SELECT bucket,used FROM budgets WHERE bucket LIKE 'trial:%'").all();
+  const request = new Request(origin, { headers: { "cf-connecting-ip": "192.0.2.12" } });
+  try {
+    for (const kind of ["live", "question", "transcribe"]) {
+      await db.prepare("INSERT INTO budgets VALUES(?,?) ON CONFLICT(bucket) DO UPDATE SET used=excluded.used").bind(`trial:${day}:${kind}:global`, kind === "live" ? 10 : 100).run();
+      for (let i = 0; i < 6; i++) await budget(bindings, a.id, kind, request);
+      const used = async (scope) => (await db.prepare("SELECT used FROM budgets WHERE bucket=?").bind(`trial:${day}:${kind}:${scope}`).first()).used;
+      assert.equal(await used(a.id), 6);
+      assert.equal(await used("global"), (kind === "live" ? 10 : 100) + 6);
+    }
+    // The same exhausted pools still refuse once the switch is back on.
+    await assert.rejects(budget({ ...bindings, TRIAL_DAILY_LIMITS: undefined }, a.id, "question", request), /今日体验额度已用完/);
+  } finally {
+    await db.prepare("DELETE FROM budgets WHERE bucket LIKE 'trial:%'").run();
+    for (const row of snapshots.results)
+      await db.prepare("INSERT INTO budgets VALUES(?,?)").bind(row.bucket, row.used).run();
+  }
+});
 test("allowlisted IP bypasses exhausted daily pools without consuming them", async () => {
   const bindings = await mf.getBindings();
   const a = await visitor();

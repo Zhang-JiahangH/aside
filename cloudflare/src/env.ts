@@ -16,6 +16,8 @@ export interface Env {
   SESSION_SECRET: string;
   /** Comma-separated HMAC IP keys exempt from daily voice/question trial quotas. */
   TRIAL_TEST_IP_HASHES?: string;
+  /** "false" lifts the per-visitor, per-IP and site-wide daily trial limits; usage is still counted. */
+  TRIAL_DAILY_LIMITS?: string;
   EMAIL?: SendEmail;
   AUTH_EMAIL_FROM?: string;
   GOOGLE_CLIENT_ID?: string;
