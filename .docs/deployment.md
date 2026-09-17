@@ -381,3 +381,17 @@ node scripts/admin-usage.mjs --days 30 --json
 线上验收（curl 与无头 Chrome，正式域名）：`/` 引用 `index-DHwuzSb6.js`、`index-MG_NYjXQ.css`，JS 为 200 且 `text/javascript`，bundle 含让位日志字符串；`/api/health` 200、`liveConfigured=true`；`/api/trial`、`/robots.txt` 200。访客只听模式打开 `chronoscope-byrd` 并播放：音频经 GainNode 链路正常出声、进度前进、波形逐帧变化、暂停后停止，控制台无错误。
 
 未验证：没有在生产用真实麦克风走一次语音打断（需要 Turnstile 与真机），软让位的降音深度和淡出听感需戴耳机实听；移动端适配器没有运行验证。倍速调整会取消续播倒计时的问题（见 IMPLEMENTATION.md 2026-09-16）本次未修。
+
+
+## 长节目提问与语音判断全部失败：排查与修复（2026-09-17）
+
+现象：用户在一集 248 分钟的私有节目上开麦说话，先报「Voice intent classification failed. Please reconnect the microphone.」且麦克风显示 off；随后再试报「Couldn't answer. Please try again.」，麦克风保持 on。
+
+排查：两条报错分别来自 `backend/src/live-intent.ts` 的判断 catch 和 `cloudflare/src/api.ts` 的流式问答 catch，原先都把异常吞掉、不记原因。`wrangler tail` 显示 `/question` 在 969ms 内返回 200，排除 60 秒超时；本地用同一 key 提问正常，排除模型服务。`question_usage` 最近成功记录都在 4 分钟的公开样本上。把该节目的分析（D1 `artifacts` 49 片、3.09MB、3316 段）拉下来用 `buildContext` 实测：从第 3–5 分钟起几乎所有位置的上下文都是 31–45KB，超过试用 provider 32000 字节的硬限制，模型调用前即被拒绝。体积来自每段 passage 附带、但 `Passage` 类型未声明的 `words` 逐词时间戳（一段 549 字节对 59 字节正文）；`buildContext`、`getPassage`、`searchPodcast` 都把整段对象展开给模型。问答和语音判断共用同一构造器，所以是同一根因，且早于当天的让位发布。
+
+修复与发布：
+
+- `fb5eced`（Worker `7d0974bf-c6a0-40c9-8bfc-695e1fcfc7e3`）：判断失败原因写入服务端日志（`Aside voice intent classification failed`，含 reason、是否超时、第几次判断），前端区分「会话已结束」「判断超时」「其它失败」三种文案。
+- `d63d03c`（Worker `17685380-2f8d-4f14-8d79-60e51183e2fa`）：模型只看到 passage 声明的五个字段；`buildContext` 加 24000 字节预算，依次丢旧对话、早期摘录、最旧的近期文字稿，当前段永不丢；流式问答失败同样记录原因（`Aside question failed`）。同一节目实测上下文降到 7–11KB。两次都用 `--containers-rollout=none` 保留现有 Container，`/api/health` 200。
+
+验证：`npm run check`、227 项单元测试（新增 passage 投影、字节预算、会话结束文案三条）、43 项 Cloudflare 集成测试通过。未验证：尚未由用户在该节目上重新开麦实测；`words` 仍保存在分析记录并原样返回给前端，本次只改模型上下文。
