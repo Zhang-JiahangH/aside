@@ -49,7 +49,7 @@ const { playerConfig, state } = session.getSnapshot();
 | 命令 | 行为 |
 | --- | --- |
 | `play` | 播放；已有问答打断点时沿用自然续播规则 |
-| `pause` | 暂停原音频，取消旧问答与续播倒计时，保留已开启的本地监听及精确位置 |
+| `pause` | 暂停原音频，取消旧问答与续播倒计时，保留已开启的本地监听及精确位置；语音指令触发时先淡出再停，见“让位” |
 | `stop` | 结束收听，关闭麦克风与语音会话；保留节目位置 |
 | `set_rate` / `adjust_rate` | 指定倍速 / 按配置步长相对调速，不自动开始播放 |
 | `set_volume` / `set_muted` | 调整原音频音量 / 静音 |
@@ -63,6 +63,22 @@ const { playerConfig, state } = session.getSnapshot();
 
 定位、重播和遥控暂停会撤销旧转录/问答、静音旧语音输出、清除旧续播锚点并递增播放 revision。迟到回答不能改变新位置。前端手动操作会取消尚未完成的远程判断，避免旧指令覆盖用户的新选择。语音音量与速度调整可在播放中完成。播放器配置在媒体 metadata 加载时重新应用，避免换源后 DOM 默认速度覆盖配置。
 
+## 让位：软让位与硬让位
+
+真人被打断时不会硬生生停住，而是先收一收，确定对方是在跟自己说话再停下。播放器把这个过程拆成两段，参数在 `player-runtime/src/listening-session.ts` 的 `attention` 常量里：
+
+| 阶段 | 触发 | 动作 |
+| --- | --- | --- |
+| 软让位 | 服务端控制流推送 `classifying`（后端开始判断）；旧的客户端委派路径在收到 Live 委派时 | 150ms 内把播客降到用户音量的 60%，波形同步缩小 |
+| 释放 | 决定为 `ignore`；只改配置的遥控批次执行完；手动操作或取消工作；2.5 秒内没有新的判断或决定 | 300ms 内回到原音量 |
+| 硬让位 | 决定为提问（`answer`）、文字提问、按住说话、语音 `pause` 指令 | 250ms 淡出到静音再暂停 |
+
+`observing`（只是收到片段）和本地起声都不触发让位：它们只说明有人在说话，`classifying` 才说明后端认为这段话值得花一次模型判断。`wait` 保持软让位，由保持超时回升。打断位置仍取开口时刻的 `input.positionMs`，淡出多播的几百毫秒不计入续播锚点；语音 `pause` 在淡出结束后把位置退回指令时刻。
+
+浏览器的 `BrowserPodcastAudio` 在 MediaElementSource 和分析器之间插入一个 GainNode 承载让位倍率，用 `linearRampToValueAtTime` 平滑；用户音量继续走 `element.volume`，两者独立。AudioContext 尚未接入时退化为分步调整 `element.volume`，接入后把当前倍率交给 GainNode。移动端的 `NativePodcastAudio` 用分步调整 `player.volume` 实现同一接口。`play()`、`pause()`、换元素或新的 `settle()` 都会作废未完成的淡出；淡出期间忽略新的软让位。手动按钮的暂停和进度条定位仍然立即切断。
+
+软让位以外没有别的提前动作：不减速、不出声。减速和确认后的短回应留作后续实验。
+
 ## 验证
 
 先写行为测试，再实现命令：`tests/player-config.test.ts` 覆盖校验、上下限、相对调速和重播选择；`tests/listening-session.test.ts` 覆盖设备、问答取消和倒计时的组合；适配器与偏好有独立测试。
@@ -72,6 +88,8 @@ npm test
 npm run build
 npm run test:player-coverage
 ```
+
+让位的单元测试在 `tests/listening-session.test.ts`（委派和服务端 `classifying` 降音、忽略回升、保持超时、配置指令释放、确认后淡出、语音暂停）和 `tests/podcast-audio.test.ts`（未接入 Web Audio 时的分步淡出、淡出被播放/暂停/换元素作废、GainNode 接线）。GainNode 曲线和听感需要在真实浏览器里戴耳机验证；移动端适配器只有类型检查。
 
 浏览器验证只需启动前端 `npm run dev -w @aside/frontend`，运行 `npx playwright test tests/browser/player-config.spec.ts`。这组测试用模拟 API 和本地 WAV 验证真实音频元素、倍速菜单、换集与刷新，不需要后端、演示数据或模型 API key。
 

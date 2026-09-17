@@ -34,7 +34,7 @@ sequenceDiagram
 
 - `ready`：会话通道就绪，之后才启用 Live 麦克风输入。
 - `observing`、`classifying`：后端已收到片段、已开始判断；仅 `debug:true` 带诊断原文。
-- `decision`：`decisionId`、`version`、输入时的 `player` 快照、被接受的 `text` 和原有 `QuestionResult`。`ignore`、`wait` 不携带原文，不影响播放或音量。
+- `decision`：`decisionId`、`version`、输入时的 `player` 快照、被接受的 `text` 和原有 `QuestionResult`。`ignore`、`wait` 不携带原文，不暂停播放；`classifying` 起播客轻微降音（软让位），`ignore` 后回升，`wait` 由保持超时回升，见[播放器让位](player-controls.md#让位软让位与硬让位)。
 - `heartbeat`：15 秒一次。
 - `error`、`closed`：明确终止通道，前端关闭语音并提示重新连接，保留播放器可用。
 

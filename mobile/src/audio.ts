@@ -34,6 +34,12 @@ export class NativePodcastAudio implements PodcastAudio {
   private target: number | undefined;
   private playRevision = 0;
   private cancelLoading?: () => void;
+  private config?: PlayerConfig;
+  /** Attention multiplier on top of the configured volume. */
+  private level = 1;
+  private fade?: () => void;
+  private settling = false;
+  private settleGeneration = 0;
   constructor(readonly coordinator: AudioCoordinator) {}
   get positionMs() {
     return this.target ?? this.player.currentTime * 1000;
@@ -60,6 +66,9 @@ export class NativePodcastAudio implements PodcastAudio {
   }
   async play() {
     const revision = ++this.playRevision;
+    this.settleGeneration++;
+    this.settling = false;
+    this.ramp(1, 0);
     this.events.requestedPlay();
     this.cancelLoading?.();
     if (!this.player.isLoaded) {
@@ -98,15 +107,60 @@ export class NativePodcastAudio implements PodcastAudio {
   pause() {
     this.events.requestedPause();
     this.playRevision++;
+    this.settleGeneration++;
+    this.settling = false;
     this.cancelLoading?.();
     this.player.pause();
+    this.ramp(1, 0);
     void this.coordinator.pausePodcast().catch(() => {});
   }
   configure(config: PlayerConfig) {
+    this.config = config;
     this.player.shouldCorrectPitch = config.preservesPitch;
-    this.player.volume = config.volume;
+    this.applyVolume();
     this.player.muted = config.muted;
     this.player.setPlaybackRate(config.playbackRate);
+  }
+  duck(level: number, durationMs: number) {
+    if (this.settling) return;
+    this.ramp(Math.max(0, Math.min(1, level)), durationMs);
+  }
+  async settle(durationMs: number) {
+    if (!this.player.playing) {
+      this.pause();
+      return;
+    }
+    const generation = ++this.settleGeneration;
+    this.settling = true;
+    this.ramp(0, durationMs);
+    await new Promise((resolve) => setTimeout(resolve, durationMs));
+    if (generation !== this.settleGeneration) return;
+    this.pause();
+  }
+  private applyVolume() {
+    this.player.volume = (this.config?.volume ?? 1) * this.level;
+  }
+  /** Steps the attention multiplier; expo-audio exposes no scheduled volume ramps. */
+  private ramp(target: number, durationMs: number) {
+    this.fade?.();
+    this.fade = undefined;
+    const from = this.level;
+    this.level = target;
+    if (durationMs <= 0) {
+      this.applyVolume();
+      return;
+    }
+    const startedAt = Date.now();
+    let timer: ReturnType<typeof setTimeout>;
+    const step = () => {
+      const progress = Math.min(1, (Date.now() - startedAt) / durationMs);
+      this.level = from + (target - from) * progress;
+      this.applyVolume();
+      if (progress < 1) timer = setTimeout(step, 16);
+      else this.fade = undefined;
+    };
+    timer = setTimeout(step, 16);
+    this.fade = () => clearTimeout(timer);
   }
   clear() {
     this.pause();

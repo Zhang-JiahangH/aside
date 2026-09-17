@@ -19,6 +19,13 @@ export interface PodcastAudio {
   pause(): void;
   configure(config: PlayerConfig): void;
   seek?(atMs: number): Promise<void>;
+  /**
+   * Reversible attention cue: scale the podcast toward `level` (a fraction of
+   * the configured volume) over `durationMs`. Ignored while settling.
+   */
+  duck(level: number, durationMs: number): void;
+  /** Fade to silence over `durationMs`, then pause. A newer play, pause or settle supersedes it. */
+  settle(durationMs: number): Promise<void>;
 }
 export interface PlayerBackend {
   question(
