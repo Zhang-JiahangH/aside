@@ -5,6 +5,7 @@ import {
   type ListeningMode,
   type VoicePort,
 } from "../frontend/src/listening-session.js";
+import { attention } from "@aside/player-runtime/listening-session";
 import type { RuntimeClock } from "../frontend/src/runtime-clock.js";
 import type { VoiceCallbacks } from "../frontend/src/on-demand-voice.js";
 import type { PlayerBackend } from "../frontend/src/player-api.js";
@@ -109,6 +110,18 @@ function setup(
       this.plays++;
     },
     pause() {
+      this.playing = false;
+    },
+    level: 1,
+    ducks: [] as number[],
+    settles: 0,
+    duck(level: number) {
+      this.level = level;
+      this.ducks.push(level);
+    },
+    async settle() {
+      this.settles++;
+      this.level = 1;
       this.playing = false;
     },
     config: createPlayerConfig(),
@@ -1364,5 +1377,118 @@ test("stream previews stay out of checkpoints and late cancelled chunks cannot c
   assert.equal(s.session.getSnapshot().answerPreview, "");
   assert.equal(s.session.getSnapshot().question, "Next draft");
   assert.equal(s.session.checkpoint().history.at(-1)?.text, "Complete answer");
+  s.session.dispose();
+});
+
+test("a Live delegation ducks the playing podcast and an ignore decision restores it without pausing", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Honey, what should we have for dinner?");
+  assert.deepEqual(s.audio.ducks, [attention.level]);
+  assert.equal(s.audio.playing, true);
+  s.requests[0].resolve({
+    revision: s.requests[0].data.revision,
+    action: "ignore",
+    answer: "",
+    sources: [],
+    tools: [],
+  });
+  await flush();
+  assert.deepEqual(s.audio.ducks, [attention.level, 1]);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, 31000);
+  assert.equal(s.audio.settles, 0);
+  s.clock.advance(attention.holdMs);
+  assert.deepEqual(s.audio.ducks, [attention.level, 1]);
+  s.session.dispose();
+});
+
+test("a soft yield without a decision releases after the hold window", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Hmm");
+  s.requests[0].resolve({
+    revision: s.requests[0].data.revision,
+    action: "wait",
+    answer: "",
+    sources: [],
+    tools: [],
+  });
+  await flush();
+  assert.deepEqual(s.audio.ducks, [attention.level]);
+  s.clock.advance(attention.holdMs - 1);
+  assert.deepEqual(s.audio.ducks, [attention.level]);
+  s.clock.advance(1);
+  assert.deepEqual(s.audio.ducks, [attention.level, 1]);
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("an accepted answer settles the podcast instead of cutting it and keeps the speaking origin", async () => {
+  const s = setup("auto");
+  await liveInput(s, "Why did he say that?");
+  s.audio.positionMs = 35000;
+  s.callbacks.onSpeech(false);
+  s.answer(0);
+  await flush();
+  assert.equal(s.audio.settles, 1);
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.audio.level, 1);
+  assert.equal(s.session.getSnapshot().state.interruption?.atMs, 31000);
+  s.clock.advance(attention.holdMs);
+  assert.deepEqual(s.audio.ducks, [attention.level]);
+  s.session.dispose();
+});
+
+test("a delegated speed change releases the soft yield once applied", async () => {
+  const s = setup("auto");
+  await liveInput(s, "a bit slower please");
+  remoteResult(s, 0, [{ type: "adjust_rate", direction: "slower" }]);
+  await flush();
+  assert.deepEqual(s.audio.ducks, [attention.level, 1]);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.config.playbackRate, 0.9);
+  assert.equal(s.audio.settles, 0);
+  s.session.dispose();
+});
+
+test("a spoken pause fades out, then stops at the requested position while listening stays on", async () => {
+  const s = setup("auto");
+  await liveInput(s, "wait wait");
+  remoteResult(s, 0, [{ type: "pause" }]);
+  await flush();
+  assert.equal(s.audio.settles, 1);
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.audio.positionMs, 31000);
+  assert.equal(s.session.getSnapshot().state.mode, "paused");
+  assert.equal(s.session.getSnapshot().listeningActive, true);
+  s.session.dispose();
+});
+
+test("server classifying ducks the podcast; observing alone and an ignore decision leave it at full volume", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push({ type: "observing", version: s.serverState.version, text: "Hmm" });
+  assert.deepEqual(s.audio.ducks, []);
+  s.push({ type: "classifying", version: s.serverState.version, text: "Hmm" });
+  assert.deepEqual(s.audio.ducks, [attention.level]);
+  s.push(s.decision("ignore"));
+  await flush();
+  assert.deepEqual(s.audio.ducks, [attention.level, 1]);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.settles, 0);
+  s.session.dispose();
+});
+
+test("a server pause decision fades out instead of cutting the podcast", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push({ type: "classifying", version: s.serverState.version, text: "wait" });
+  s.push(s.decision("player_control"));
+  await flush();
+  assert.equal(s.audio.settles, 1);
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.audio.level, 1);
+  assert.equal(s.session.getSnapshot().listeningActive, true);
   s.session.dispose();
 });

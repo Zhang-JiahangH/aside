@@ -46,6 +46,20 @@ export interface SessionOptions {
   voiceFactory: VoiceFactory;
 }
 /** Owns complete listening actions. React and DOM code never coordinate device order. */
+/**
+ * How the podcast yields to the listener. A soft yield is a reversible cue
+ * that the app is listening; the hard yield fades out before pausing.
+ */
+export const attention = {
+  /** Fraction of the configured volume while an utterance is being classified. */
+  level: 0.6,
+  duckMs: 150,
+  releaseMs: 300,
+  /** Longest soft yield without a fresh classification or decision. */
+  holdMs: 2500,
+  /** Fade before a confirmed interruption or spoken pause request stops the audio. */
+  settleMs: 250,
+} as const;
 export class ListeningSession {
   private controlAbort?: AbortController;
   private controlSession = "";
@@ -83,6 +97,8 @@ export class ListeningSession {
   private lastInputDisposition = "No input received";
   private contextAt = -1;
   private resumeTimer?: () => void;
+  private attentionTimer?: () => void;
+  private attending = false;
   private heartbeat?: () => void;
   private connectionKind: "cold" | "warm" = "cold";
   private clock: RuntimeClock;
@@ -116,6 +132,7 @@ export class ListeningSession {
         playerInput: () =>
           this.input ? { ...this.input, config: this.playerConfig } : undefined,
         engage: () => this.engageInput(),
+        attend: (active) => (active ? this.attend() : this.release()),
         followup: (text, speak) => this.submitQuestion(text, speak),
         control: (result, text) => this.applyRemoteControl(result, text),
         textAnswered: () => this.answerEnded(),
@@ -369,6 +386,7 @@ export class ListeningSession {
             this.episode?.durationMs ?? 0,
           ),
           false,
+          true,
         );
         break;
       case "stop":
@@ -413,6 +431,7 @@ export class ListeningSession {
         command,
         command.type === "repeat" ? input?.positionMs : undefined,
       );
+    this.release();
     // A typed/manual input may already have paused playback. Restore its exact
     // position after configuration, without rewinding to a conversation anchor.
     if (configurationOnly && input?.wasPlaying && this.playback.interruption)
@@ -441,7 +460,7 @@ export class ListeningSession {
   private engageInput() {
     if (!this.episode?.analysis) return;
     const atMs = this.input?.positionMs ?? this.audio.positionMs;
-    this.audio.pause();
+    void this.settle();
     // Do not begin a new Conversation turn: this is the accepted result of the
     // input already in flight. Keep its delegation and cancellation identity.
     if (!this.playback.interruption || this.playback.mode !== "listening") {
@@ -456,15 +475,22 @@ export class ListeningSession {
     this.startHeartbeat();
     this.sendContext(true);
   }
-  private movePlayback(atMs: number, play: boolean) {
+  /** `gentle` fades the audio out before stopping at `atMs`; seeks and manual stops cut immediately. */
+  private movePlayback(atMs: number, play: boolean, gentle = false) {
     this.cancelWork();
     this.cancelManual();
     this.voice?.interrupt();
     this.voice?.playbackResumed();
-    this.audio.pause();
+    const soft = gentle && !play;
+    if (!soft) this.audio.pause();
     this.voice?.mute(true);
     this.dispatch({ type: "seek", atMs });
-    this.positioning = this.positionAudio(atMs);
+    if (soft) {
+      const revision = this.playback.revision;
+      this.positioning = this.settle().then(async () => {
+        if (this.playback.revision === revision) await this.positionAudio(atMs);
+      });
+    } else this.positioning = this.positionAudio(atMs);
     void this.positioning?.catch((error) => this.setError(String(error)));
     this.conversation.continued();
     this.startHeartbeat();
@@ -485,15 +511,43 @@ export class ListeningSession {
   private cancelWork() {
     this.resumeTimer?.();
     this.resumeTimer = undefined;
+    this.release();
     this.conversation.cancel();
+  }
+  /** Soft yield: the podcast ducks while an utterance is classified, and comes back on its own. */
+  private attend() {
+    if (this.playback.mode !== "playing") return;
+    this.attentionTimer?.();
+    this.attentionTimer = this.clock.after(attention.holdMs, () =>
+      this.release(),
+    );
+    if (this.attending) return;
+    this.attending = true;
+    this.audio.duck(attention.level, attention.duckMs);
+    this.log("Podcast yielding");
+  }
+  private release() {
+    this.attentionTimer?.();
+    this.attentionTimer = undefined;
+    if (!this.attending) return;
+    this.attending = false;
+    this.audio.duck(1, attention.releaseMs);
+    this.log("Podcast resumed full volume");
+  }
+  /** Hard yield: fade out, then pause. The interruption position was captured when the listener began speaking. */
+  private settle() {
+    this.attentionTimer?.();
+    this.attentionTimer = undefined;
+    this.attending = false;
+    return this.audio.settle(attention.settleMs);
   }
   private interrupt() {
     if (!this.episode?.analysis) return;
     this.resumeTimer?.();
     this.conversation.beginTurn(!this.playback.interruption);
-    this.audio.pause();
-    this.voice?.interrupt();
     const atMs = this.audio.positionMs;
+    void this.settle();
+    this.voice?.interrupt();
     this.dispatch({
       type: "interrupt",
       atMs,
@@ -870,6 +924,7 @@ export class ListeningSession {
     if (event.type === "observing" || event.type === "classifying") {
       if (event.version !== this.controlVersion) return;
       this.conversation.liveInputPending(true);
+      if (event.type === "classifying") this.attend();
       if (this.debugRecognition && event.text !== undefined) {
         if (event.type === "observing") this.serverInput = event.text;
         else this.serverClassifying = event.text;
@@ -897,6 +952,7 @@ export class ListeningSession {
       return;
     }
     this.conversation.liveInputPending(event.result.action === "wait");
+    if (event.result.action === "ignore") this.release();
     if (event.result.action === "ignore" || event.result.action === "wait")
       return;
     this.input = event.player;
@@ -1079,8 +1135,10 @@ export class ListeningSession {
         },
         onDelegation: (id) => {
           if (valid()) this.log("Live delegation received");
-          if (!this.serverVoice && acceptLiveInput())
+          if (!this.serverVoice && acceptLiveInput()) {
+            this.attend();
             this.conversation.delegate(id);
+          }
         },
         onError: (message) => {
           if (!valid()) return;

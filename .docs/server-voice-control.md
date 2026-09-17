@@ -34,9 +34,9 @@ sequenceDiagram
 
 - `ready`：会话通道就绪，之后才启用 Live 麦克风输入。
 - `observing`、`classifying`：后端已收到片段、已开始判断；仅 `debug:true` 带诊断原文。
-- `decision`：`decisionId`、`version`、输入时的 `player` 快照、被接受的 `text` 和原有 `QuestionResult`。`ignore`、`wait` 不携带原文，不影响播放或音量。
+- `decision`：`decisionId`、`version`、输入时的 `player` 快照、被接受的 `text` 和原有 `QuestionResult`。`ignore`、`wait` 不携带原文，不暂停播放；`classifying` 起播客轻微降音（软让位），`ignore` 后回升，`wait` 由保持超时回升，见[播放器让位](player-controls.md#让位软让位与硬让位)。
 - `heartbeat`：15 秒一次。
-- `error`、`closed`：明确终止通道，前端关闭语音并提示重新连接，保留播放器可用。
+- `error`、`closed`：明确终止通道，前端关闭语音并提示重新连接，保留播放器可用。判断调用失败时，原因只写入服务端日志（`wrangler tail` 中的 `Aside voice intent classification failed`，含 reason、是否超时、第几次判断），前端只区分三种安全文案：试用会话已结束（120 秒上限或 AI 关闭）、判断超时（15 秒）、其它失败。
 
 执行完决定后，`PUT /live-control` 上报 `{sessionId, player, acknowledgement:{decisionId, applied}}`。同一个 `decisionId` 只执行一次。`applied:false` 表示版本过期或执行被拒绝。位置播放中每秒同步，手动操作立即同步；这不是意图请求。播放回报不证明用户已听到媒体。
 

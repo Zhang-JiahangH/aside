@@ -29,6 +29,8 @@ interface ConversationHost {
   resume(delayMs: number): void;
   playerInput(): PlayerInput | undefined;
   engage(): void;
+  /** Soft yield while a delegated utterance is classified; false once it is disregarded. */
+  attend(active: boolean): void;
   followup(text: string, speak: boolean): void;
   control(
     result: Extract<QuestionResult, { action: "player_control" }>,
@@ -355,6 +357,7 @@ export class Conversation {
     }
     this.settled = true;
     if (result.action === "ignore") {
+      this.host.attend(false);
       this.history(
         this.turns.filter((turn) => turn.id !== this.streamIds.user),
       );
@@ -456,6 +459,7 @@ export class Conversation {
       once: true,
     });
     this.host.voice()?.setWorking(true);
+    if (delegationId) this.host.attend(true);
     this.host.log("Backend intent request started");
     this.host.changed();
     try {

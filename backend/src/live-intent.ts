@@ -188,6 +188,10 @@ export class LiveIntent {
       ...(this.handled ? { handledText: this.handled } : {}),
     };
     const controller = (this.pending = new AbortController());
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(15000),
+    ]);
     this.evaluated = text;
     this.ports.emit({
       type: "classifying",
@@ -202,7 +206,7 @@ export class LiveIntent {
           history: [...this.history, { role: "user", text }],
           player,
         },
-        AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+        signal,
       );
       if (
         this.closed ||
@@ -232,11 +236,25 @@ export class LiveIntent {
         text:
           result.action === "ignore" || result.action === "wait" ? "" : text,
       });
-    } catch {
-      if (!controller.signal.aborted && !this.closed && epoch === this.epoch)
-        this.fail(
-          "Voice intent classification failed. Please reconnect the microphone.",
-        );
+    } catch (error) {
+      if (controller.signal.aborted || this.closed || epoch !== this.epoch)
+        return;
+      const reason = error instanceof Error ? error.message : String(error);
+      const timedOut = signal.aborted;
+      // The cause stays in the server log; the listener only sees a safe message.
+      console.error("Aside voice intent classification failed", {
+        reason,
+        timedOut,
+        call: this.calls,
+        version,
+      });
+      this.fail(
+        reason === "Trial stopped"
+          ? "Voice session ended. Please reconnect the microphone."
+          : timedOut
+            ? "Voice intent classification timed out. Please reconnect the microphone."
+            : "Voice intent classification failed. Please reconnect the microphone.",
+      );
     } finally {
       if (this.pending === controller) this.pending = undefined;
       this.schedule();

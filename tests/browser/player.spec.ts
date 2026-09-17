@@ -186,9 +186,12 @@ test("real demo playback, interruption, sentence rewind and responsive layout", 
   await expect(page.locator(".conversation-origin")).toHaveText(
     /从 \d+:\d{2} 开始聊/,
   );
-  expect(
-    await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
-  ).toBe(true);
+  // The podcast fades out before pausing.
+  await expect
+    .poll(() =>
+      page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
+    )
+    .toBe(true);
   await page.screenshot({
     path: "test-results/player-interrupted.png",
     fullPage: true,
