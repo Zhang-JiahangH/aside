@@ -45,6 +45,7 @@ interface ConversationHost {
 export class Conversation {
   private turns: Turn[] = [];
   private committed: Turn[] = [];
+  /** Submitted user messages and completed replies; an unanswered user tail is valid. */
   completedHistory() {
     return this.committed;
   }
@@ -62,6 +63,7 @@ export class Conversation {
   private delegation?: string;
   private settled = false;
   private acceptedInput = true;
+  private explicitInput = false;
   private submittedText = "";
   private seenDelegations = new Set<string>();
   private streamIds: Partial<Record<Turn["role"], string>> = {};
@@ -157,6 +159,7 @@ export class Conversation {
   }
   beginTurn(firstInterruption: boolean) {
     this.acceptedInput = false;
+    this.explicitInput = false;
     this.cancel(true);
     if (firstInterruption) {
       this.held = false;
@@ -205,14 +208,31 @@ export class Conversation {
       { id: this.streamIds.user, role: "user", text },
     ]);
   }
-  submitText(text: string) {
+  /** A submitted message is complete even while its assistant reply is pending. */
+  recognizeQuestion(text: string) {
     this.acceptedInput = true;
-    this.addUser(text);
+    this.explicitInput = true;
+    const id = (this.streamIds.user ??= crypto.randomUUID());
+    this.provisionalTurns.delete(id);
+    // Native ASR publishes before Live is ready. The later ready callback
+    // refers to this same message, so it must not append or save it twice.
+    if (this.committed.some((turn) => turn.id === id && turn.text === text))
+      return;
+    const user: Turn = { id, role: "user", text };
+    this.committed = [
+      ...this.committed.filter((turn) => turn.id !== id),
+      user,
+    ].slice(-100);
+    this.history([...this.turns.filter((turn) => turn.id !== id), user]);
+  }
+  submitText(text: string) {
+    this.recognizeQuestion(text);
     this.setDraft("");
     void this.answer();
   }
-  firstQuestion(text: string) {
-    this.addUser(text);
+  firstQuestion(text: string, explicit = false) {
+    if (explicit) this.recognizeQuestion(text);
+    else this.addUser(text);
     void this.answer(undefined, true);
   }
   speechEnded(connection: "cold" | "warm", coldCapture: boolean) {
@@ -358,9 +378,10 @@ export class Conversation {
     this.settled = true;
     if (result.action === "ignore") {
       this.host.attend(false);
-      this.history(
-        this.turns.filter((turn) => turn.id !== this.streamIds.user),
-      );
+      if (!this.explicitInput)
+        this.history(
+          this.turns.filter((turn) => turn.id !== this.streamIds.user),
+        );
       this.host
         .voice()
         ?.append(

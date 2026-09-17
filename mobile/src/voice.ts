@@ -146,6 +146,7 @@ export class NativeVoice implements VoicePort {
                   throw Error(
                     "没有识别到语音，请再按住说一次 / No speech was recognized. Hold to try again",
                   );
+                this.cb.onQuestionRecognized?.(question);
                 if (!this.ready) this.cb.onStatus("connecting");
                 return question;
               }),

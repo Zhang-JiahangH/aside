@@ -508,13 +508,14 @@ export class ListeningSession {
     if (play) this.start();
   }
   submitQuestion(text: string, speak = false) {
-    if (!text.trim() || !this.episode?.analysis || !this.configured) return false;
+    if (!text.trim() || !this.episode?.analysis || !this.configured)
+      return false;
     this.controlVersion++;
     this.cancelManual();
     this.beginInput("text");
     this.interrupt();
     this.dispatch({ type: "user_end" });
-    if (speak) this.conversation.firstQuestion(text.trim());
+    if (speak) this.conversation.firstQuestion(text.trim(), true);
     else this.conversation.submitText(text.trim());
     return true;
   }
@@ -1053,10 +1054,14 @@ export class ListeningSession {
         onDiagnostic: (message) => {
           if (valid()) this.log(message);
         },
+        onQuestionRecognized: (text) => {
+          if (acceptsInput() && this.mode === "manual")
+            this.conversation.recognizeQuestion(text);
+        },
         onFirstQuestion: (text) => {
           if (acceptsInput()) {
             this.dispatch({ type: "user_end" });
-            this.conversation.firstQuestion(text);
+            this.conversation.firstQuestion(text, this.mode === "manual");
           }
         },
         onReady: () => {

@@ -120,6 +120,7 @@ async function fixture(t: TestContext, stalledConnection = false) {
   delete globals[key];
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
   const statuses: string[] = [],
+    recognized: string[] = [],
     questions: string[] = [],
     errors: string[] = [],
     outputs: boolean[] = [];
@@ -137,6 +138,9 @@ async function fixture(t: TestContext, stalledConnection = false) {
     },
     onFirstQuestion: (text) => {
       questions.push(text);
+    },
+    onQuestionRecognized: (text) => {
+      recognized.push(text);
     },
     onError: (error) => {
       errors.push(error);
@@ -174,6 +178,7 @@ async function fixture(t: TestContext, stalledConnection = false) {
   return {
     voice,
     statuses,
+    recognized,
     questions,
     errors,
     transcription,
@@ -190,6 +195,7 @@ test("native voice keeps transcription progress visible when Live connects first
   s.transcription.resolve("  What did the speaker mean?  ");
   await flush();
   assert.deepEqual(s.questions, ["What did the speaker mean?"]);
+  assert.deepEqual(s.recognized, s.questions);
   assert.equal(s.statuses.at(-1), "on");
 });
 
@@ -198,6 +204,7 @@ test("native voice reports an empty transcription instead of submitting an invis
   s.transcription.resolve("  \n ");
   await flush();
   assert.deepEqual(s.questions, []);
+  assert.deepEqual(s.recognized, []);
   assert.match(s.errors[0] ?? "", /没有识别|speech/i);
 });
 
@@ -206,6 +213,12 @@ test("native voice connection timeout includes the pending HTTP negotiation", as
   s.transcription.resolve("What did the speaker mean?");
   await flush();
   assert.equal(s.statuses.at(-1), "connecting");
+  assert.deepEqual(s.recognized, ["What did the speaker mean?"]);
+  assert.deepEqual(
+    s.questions,
+    [],
+    "the paid question must still wait for Live",
+  );
   t.mock.timers.tick(30001);
   await flush();
   assert.match(s.errors[0] ?? "", /timed out/i);
@@ -221,6 +234,7 @@ test("a cancelled native capture cannot publish a late transcription", async (t)
   await flush();
   assert.deepEqual(s.statuses, statuses);
   assert.deepEqual(s.questions, []);
+  assert.deepEqual(s.recognized, []);
   assert.deepEqual(s.errors, []);
 });
 

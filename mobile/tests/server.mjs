@@ -133,6 +133,13 @@ mf = new Miniflare(
       }
       if (
         request.url.endsWith("/responses") &&
+        Number(process.env.QUESTION_DELAY_MS ?? 0) > 0
+      )
+        await new Promise((resolve) =>
+          setTimeout(resolve, Number(process.env.QUESTION_DELAY_MS)),
+        );
+      if (
+        request.url.endsWith("/responses") &&
         JSON.parse(payload.toString()).stream
       )
         return streamedResponse(
