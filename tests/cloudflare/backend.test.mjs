@@ -17,6 +17,8 @@ import { analyzeEpisode } from "../../cloudflare/src/pipeline.ts";
 import { admitAudio, mediaApp } from "../../backend/src/container/app.ts";
 import { rollupDailyStats } from "../../cloudflare/src/stats.ts";
 import { budget } from "../../cloudflare/src/trial.ts";
+import { createPlayerConfig } from "@aside/engine/player";
+import { streamedResponse } from "../fixtures/streamed-response.ts";
 let mf, db, bucket;
 let networkCalls = [];
 let acknowledgeClose = true;
@@ -935,6 +937,40 @@ test("question stream, Live ownership and server-reserved quotas use network-onl
     429,
   );
   assert.equal(networkCalls.length, before);
+});
+test("opted-in text clients receive answer chunks before the final result", async () => {
+  const a = await visitor();
+  let requestedStream = false;
+  liveReply = async (body) => {
+    requestedStream = body.stream;
+    return streamedResponse("A short answer", 250);
+  };
+  try {
+    const response = await a.request("/api/episodes/public/question", "POST", {
+      atMs: 0, revision: 7, history: [{ role: "user", text: "Explain this" }],
+      player: { turnId: "text-stream", source: "text", positionMs: 0,
+        wasPlaying: false, audibleSource: "none", config: createPlayerConfig() },
+    }, { accept: "application/x-ndjson", "X-Aside-Answer-Stream": "1" });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "", sawPartialBeforeResult = false;
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+      if (text.includes('"text":"A short"') && !text.includes('"type":"result"'))
+        sawPartialBeforeResult = true;
+    }
+    assert.equal(requestedStream, true);
+    assert.equal(sawPartialBeforeResult, true);
+    const events = text.trim().split("\n").map(JSON.parse);
+    assert.deepEqual(events.filter(e => e.type === "answer").map(e => e.text), ["", "A short", "A short answer"]);
+    assert.equal(events.at(-1).result.answer, "A short answer");
+    assert.equal(events.at(-1).result.revision, 7);
+  } finally {
+    liveReply = undefined;
+  }
 });
 test("analysis retries reuse durable transcript/audio, survive temporary media loss and persist evidence", async () => {
   const id = crypto.randomUUID();

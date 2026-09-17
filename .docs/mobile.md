@@ -6,7 +6,7 @@ React Native / Expo SDK 54, iOS 15.1+ and Android 7+. Web and mobile share `@asi
 
 Use Node 24 (`package.json` pins Volta), npm, Xcode 16.2+, Java 17, Android SDK and FFmpeg/ffprobe. Run `npm ci`. For iOS install the pinned CocoaPods/JSON gems using `bundle install` inside `mobile`, then use `bundle exec pod install` inside the generated `mobile/ios` directory. UTF-8 locale (`LANG=en_US.UTF-8`) is required by CocoaPods.
 
-The root postinstall applies the one-line upstream [expo-audio paused Now Playing fix](https://github.com/expo/expo/pull/44974) to the pinned SDK 54 dependency. The script is idempotent and requires review if the upstream implementation changes. Without it, iOS system metadata reports a playback rate of 1 while paused. The media Docker image installs only backend/engine workspaces and skips native installation scripts.
+The root postinstall applies the upstream [expo-audio paused Now Playing fix](https://github.com/expo/expo/pull/44974) and explicitly resets recording mode to `.default` when category options are present. The latter prevents a previous WebRTC `.voiceChat` mode from leaking into a recording session. These pinned SDK 54 patches are idempotent and require review when upgrading the dependency. The media Docker image installs only backend/engine workspaces and skips native installation scripts.
 
 - `npm run ios:device -w @aside/mobile`: local iPhone Release build/install. Sign with your Personal Team in Xcode and enable Developer Mode on the phone. Profile expiry requires re-signing, normally after seven days.
 - `npm run ios -w @aside/mobile`: select an iOS simulator for Release testing.
@@ -53,9 +53,13 @@ Uploads stream file ranges into the existing R2 multipart endpoints. They are fo
 
 ## Audio lifecycle
 
+On iOS, the config plugin includes `native/AsideAudioSession.m` in the application target. The audio coordinator stops WebRTC's audio unit before deactivating/reconfiguring the Expo audio session; only answer playback grants WebRTC permission to restart it. Muting a remote track alone does not release the underlying audio unit. Every generated native build must include this module. Default speaker routing still respects connected headsets.
+
 The global player survives navigation. `expo-audio` owns podcast media and manual M4A capture; WebRTC is receive-only and never sends the local microphone track. Native stats track received audio energy; automatic resumption is armed only after observed output activity ends. Missing stats leave the user in manual continuation. A production microphone/Bluetooth listening test remains necessary to assess actual playback latency and output-tail timing.
 
 On background entry, podcast playback continues using OS media services and lock-screen controls. Unfinished capture/questions/answers are cancelled, live transport closes, and the episode stays paused at its resume anchor until the user resumes. Permissions are requested only on the first hold; the next hold records. Late permission results cannot begin recording after the finger is released. A question is capped below 30 seconds to allow codec padding. Text questions do not create a Live connection.
+
+Text answers use native `expo/fetch` streaming and opt into NDJSON answer previews with `X-Aside-Answer-Stream: 1`. Old clients retain progress/result compatibility. Partial text stays separate from completed history; cancellation, stale revisions and tool rounds clear it. Only a completed result enters the synchronized checkpoint. The composer clears as soon as submission is accepted, while the answer is still pending.
 
 ## Verification
 

@@ -120,6 +120,7 @@ function setup(
     data: QuestionRequest;
     signal: AbortSignal;
     progress: (phase: QuestionPhase) => void;
+    preview?: (text: string) => void;
     resolve: (result: QuestionResult) => void;
   }[] = [];
   const commands: string[] = [];
@@ -134,9 +135,9 @@ function setup(
   let createLive: (() => Promise<unknown>) | undefined;
   const updates: LiveControlUpdate[] = [];
   const backend: PlayerBackend = {
-    question(_id, data, signal, progress) {
+    question(_id, data, signal, progress, preview) {
       return new Promise((resolve) =>
-        requests.push({ data, signal, progress, resolve }),
+        requests.push({ data, signal, progress, preview, resolve }),
       );
     },
     async live(_id, request) {
@@ -1316,15 +1317,52 @@ test("a pushed answer pauses only when accepted and mixed questions never submit
 
 test("an in-flight server interpretation holds the previous answer's auto-resume timer", async () => {
   const s = setup("auto", undefined, undefined, false, true);
-  s.session.start(); await flush();
-  s.push(s.decision("answer")); await flush();
-  s.callbacks.onOutput(true); s.callbacks.onOutput(false);
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onOutput(false);
   s.clock.advance(1000);
   s.push({ type: "classifying", version: s.serverState.version });
-  s.clock.advance(5000); await flush();
+  s.clock.advance(5000);
+  await flush();
   assert.equal(s.audio.playing, false);
   s.push(s.decision("ignore"));
-  s.clock.advance(3000); await flush();
+  s.clock.advance(3000);
+  await flush();
   assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("typing updates the composer immediately and accepted send clears it while pending", () => {
+  const s = setup();
+  s.session.setQuestion("A paused-player question");
+  assert.equal(s.session.getSnapshot().question, "A paused-player question");
+  s.session.submitQuestion(s.session.getSnapshot().question);
+  assert.equal(s.requests.length, 1);
+  assert.equal(s.session.getSnapshot().question, "");
+  assert.equal(s.session.getSnapshot().busy, true);
+  s.session.setQuestion("The next draft");
+  assert.equal(s.session.getSnapshot().question, "The next draft");
+  s.session.dispose();
+});
+
+test("stream previews stay out of checkpoints and late cancelled chunks cannot change the next turn", async () => {
+  const s = setup();
+  s.session.submitQuestion("First");
+  s.requests[0].preview!("Partial answer");
+  assert.equal(s.session.getSnapshot().answerPreview, "Partial answer");
+  assert.deepEqual(s.session.checkpoint().history, []);
+  s.session.submitQuestion("Second");
+  s.requests[0].preview!("Late stale answer");
+  assert.equal(s.session.getSnapshot().answerPreview, "");
+  s.requests[1].preview!("Current answer");
+  s.session.setQuestion("Next draft");
+  s.answer(1, "Complete answer");
+  await flush();
+  assert.equal(s.session.getSnapshot().answerPreview, "");
+  assert.equal(s.session.getSnapshot().question, "Next draft");
+  assert.equal(s.session.checkpoint().history.at(-1)?.text, "Complete answer");
   s.session.dispose();
 });

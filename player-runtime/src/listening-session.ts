@@ -472,7 +472,7 @@ export class ListeningSession {
     if (play) this.start();
   }
   submitQuestion(text: string, speak = false) {
-    if (!text.trim() || !this.episode?.analysis || !this.configured) return;
+    if (!text.trim() || !this.episode?.analysis || !this.configured) return false;
     this.controlVersion++;
     this.cancelManual();
     this.beginInput("text");
@@ -480,6 +480,7 @@ export class ListeningSession {
     this.dispatch({ type: "user_end" });
     if (speak) this.conversation.firstQuestion(text.trim());
     else this.conversation.submitText(text.trim());
+    return true;
   }
   private cancelWork() {
     this.resumeTimer?.();

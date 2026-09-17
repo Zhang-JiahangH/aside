@@ -15,10 +15,12 @@ Aside uses the existing cream and forest-green identity. The interface follows t
 - Episode title and content replace the marketing header in the player. The playback control is centered; skip and speed have less visual weight.
 - Use system text for UI/content and the existing serif identity only for the small wordmark. No downloaded Apple fonts on Android.
 - Transcript and completed conversations share the reading area. A subtle active passage keeps the text readable.
-- One fixed question area provides text and deliberate hold-to-record entry. Empty/pending text submission is disabled. Recording shows preparation, elapsed time and cancel guidance. Leaving the actual button bounds cancels capture.
+- One fixed question area provides text and deliberate hold-to-record entry. Empty/pending text submission is disabled. Recording shows preparation, elapsed time and cancel guidance. A 64-point movement from the initial touch cancels capture; small finger movements stay within the gesture. The reading pane changes after release, preserving the touch target during recording.
 - Resume actions appear only during a question interruption. Leaving the player retains a mini player and the native audio session.
 - Upload shows filename, numeric progress, a progress bar and cancellation. Retry reuses the selected local copy.
 - Light/dark palettes use semantic surface, text, muted, accent and separator colors. Focus, selected and pressed states have visible feedback.
+- Navigation and the playback dock have their own surfaces and separators against the quieter reading background. Incoming answers use a separate bubble, with partial text displayed while it arrives; reading older messages suspends automatic scrolling.
+- Error notices overlay the reading area without pushing controls under a held finger. English recovery messages preserve the specific cause rather than replacing native audio errors with a generic failure.
 
 ## Required visual and interaction review
 

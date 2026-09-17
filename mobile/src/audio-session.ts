@@ -1,6 +1,7 @@
 export interface NativeAudioSession {
   configure(recording: boolean): Promise<void>;
   activate(active: boolean): Promise<void>;
+  enableAnswer?(enabled: boolean): Promise<void>;
 }
 /** One native session; ownership prevents late cleanup from stopping a newer source. */
 export class AudioSessionCoordinator {
@@ -15,9 +16,16 @@ export class AudioSessionCoordinator {
       .catch(() => {})
       .then(async () => {
         if (revision !== this.revision) return;
+        // Muting a remote track leaves WebRTC's audio unit running. Stop it
+        // before Expo changes AVAudioSession or prepares the next recording.
+        await this.native.enableAnswer?.(false);
+        if (revision !== this.revision) return;
         await this.native.configure(recording);
         if (revision !== this.revision) return;
         await this.native.activate(owner !== null);
+        if (revision !== this.revision) return;
+        if (typeof owner === "symbol" && !recording)
+          await this.native.enableAnswer?.(true);
       });
     this.queue = operation;
     return operation;

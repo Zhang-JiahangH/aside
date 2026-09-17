@@ -10,6 +10,7 @@ export async function readQuestion(
   response: Response,
   progress: (phase: QuestionPhase) => void,
   expectedRevision?: number,
+  onAnswer?: (text: string) => void,
 ): Promise<QuestionResult> {
   if (!response.ok) throw Error(errorSchema.parse(await response.json()).error);
   const checkRevision = (revision: number) => {
@@ -35,6 +36,10 @@ export async function readQuestion(
       for (const line of lines) {
         if (!line.trim()) continue;
         const event = questionEventSchema.parse(JSON.parse(line));
+        if (event.type === "answer") {
+          checkRevision(event.revision);
+          onAnswer?.(event.text);
+        }
         if (event.type === "progress") {
           checkRevision(event.revision);
           progress(event.phase);

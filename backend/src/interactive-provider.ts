@@ -58,22 +58,29 @@ export class InteractiveProvider implements QuestionModel {
       new TextEncoder().encode(JSON.stringify(input)).length > 32000
     )
       throw Error("Trial context too large");
-    const response = await this.client.responses.create(
-      {
-        model: this.model,
-        instructions: request.instructions,
-        input,
-        previous_response_id: request.previousId,
-        tools: this.trial
-          ? request.tools.filter((tool) => tool.type !== "web_search")
-          : request.tools,
-        max_output_tokens: this.trial ? TRIAL_OUTPUT_TOKENS : OUTPUT_TOKENS,
-        reasoning: { effort: REASONING_EFFORT },
-        service_tier: SERVICE_TIER,
-        parallel_tool_calls: false,
-      },
-      { signal: request.signal },
-    );
+    const parameters = {
+      model: this.model,
+      instructions: request.instructions,
+      input,
+      previous_response_id: request.previousId,
+      tools: this.trial
+        ? request.tools.filter((tool) => tool.type !== "web_search")
+        : request.tools,
+      max_output_tokens: this.trial ? TRIAL_OUTPUT_TOKENS : OUTPUT_TOKENS,
+      reasoning: { effort: REASONING_EFFORT },
+      service_tier: SERVICE_TIER,
+      parallel_tool_calls: false,
+    } satisfies OpenAI.Responses.ResponseCreateParamsNonStreaming;
+    const response = request.onText
+      ? await this.client.responses
+          .stream(parameters, { signal: request.signal })
+          .on("response.output_text.delta", (event) =>
+            request.onText?.(event.delta),
+          )
+          .finalResponse()
+      : await this.client.responses.create(parameters, {
+          signal: request.signal,
+        });
     // Reasoning shares the output budget, so an exhausted turn can carry neither
     // an answer nor a tool call. Failing here reaches the caller's error path
     // instead of resolving to an empty answer that nothing ever speaks.
@@ -111,7 +118,8 @@ export class InteractiveProvider implements QuestionModel {
         ? {
             usage: {
               inputTokens: response.usage.input_tokens,
-              cachedInputTokens: response.usage.input_tokens_details.cached_tokens,
+              cachedInputTokens:
+                response.usage.input_tokens_details.cached_tokens,
               outputTokens: response.usage.output_tokens,
               reasoningTokens:
                 response.usage.output_tokens_details.reasoning_tokens,

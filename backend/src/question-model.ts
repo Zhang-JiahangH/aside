@@ -45,5 +45,6 @@ export interface QuestionModel {
     instructions: string;
     tools: QuestionTool[];
     signal?: AbortSignal;
+    onText?: (delta: string) => void;
   }): Promise<ModelReply>;
 }

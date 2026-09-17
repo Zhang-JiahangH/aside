@@ -254,19 +254,30 @@ async function route(
     }
   }
   if (action === "live-control" && ["GET", "PUT"].includes(method)) {
-    const data = method === "PUT" ? liveControlUpdateSchema.parse(await readJson(request)) : undefined;
+    const data =
+      method === "PUT"
+        ? liveControlUpdateSchema.parse(await readJson(request))
+        : undefined;
     const sessionId = data?.sessionId ?? url.searchParams.get("sessionId");
-    if (!sessionId || sessionId.length > 200) throw new HttpError(400, "Invalid voice session");
+    if (!sessionId || sessionId.length > 200)
+      throw new HttpError(400, "Invalid voice session");
     const target = new URL("https://live/control");
     target.searchParams.set("sessionId", sessionId);
     target.searchParams.set("episode", id);
     // This is an existing authenticated Live lease, not a billable request per
     // fragment. Updates carry playback state and execution acknowledgements,
     // never browser-selected speech or intent decisions.
-    return env.LIVE.get(env.LIVE.idFromName(owner)).fetch(new Request(target, {
-      method,
-      ...(data ? { body: JSON.stringify(data), headers: { "Content-Type": "application/json" } } : {}),
-    }));
+    return env.LIVE.get(env.LIVE.idFromName(owner)).fetch(
+      new Request(target, {
+        method,
+        ...(data
+          ? {
+              body: JSON.stringify(data),
+              headers: { "Content-Type": "application/json" },
+            }
+          : {}),
+      }),
+    );
   }
   if (
     method !== "POST" ||
@@ -439,6 +450,10 @@ async function route(
                 (phase) =>
                   emit({ type: "progress", revision: data.revision, phase }),
                 cost,
+                request.headers.get("X-Aside-Answer-Stream") === "1"
+                  ? (text) =>
+                      emit({ type: "answer", revision: data.revision, text })
+                  : undefined,
               ),
             );
             emit({ type: "result", result });

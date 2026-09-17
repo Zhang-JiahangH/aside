@@ -88,6 +88,11 @@ export const questionPhaseSchema = z.enum([
 export const errorSchema = z.object({ error: z.string() });
 export const questionEventSchema = z.discriminatedUnion("type", [
   z.object({
+    type: z.literal("answer"),
+    revision: revisionSchema,
+    text: z.string().max(64000),
+  }),
+  z.object({
     type: z.literal("progress"),
     revision: revisionSchema,
     phase: questionPhaseSchema,
