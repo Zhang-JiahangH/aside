@@ -75,6 +75,14 @@ export class LiveIntent {
     if (end !== undefined) this.endMs = end;
     this.lastInputAt = this.ports.now();
     if (!this.input)
+      // Absence of this line after the listener spoke means the supplier never
+      // transcribed the utterance, so no classification could follow.
+      console.log("Aside voice input heard", {
+        characters: delta.length,
+        gapMs: Math.round(gap),
+        wasPlaying: this.player.wasPlaying,
+      });
+    if (!this.input)
       this.input = {
         turnId: crypto.randomUUID(),
         source: "voice",

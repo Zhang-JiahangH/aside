@@ -45,7 +45,17 @@ export class LiveControl {
       control.debug,
     );
   }
+  private eventTypes = new Set<string>();
   receive(event: Record<string, unknown>) {
+    // Event names only: which supplier signals accompany an utterance that
+    // produced no transcript (speech detected, or nothing at all).
+    const type = typeof event.type === "string" ? event.type : "unknown";
+    if (!type.endsWith(".delta") || !this.eventTypes.has(type))
+      console.log("Aside voice sideband event", {
+        type,
+        subscribed: !!this.sink,
+      });
+    this.eventTypes.add(type);
     if (this.sink && !this.closed) this.intent.receive(event);
   }
   update(data: LiveControlUpdate) {
