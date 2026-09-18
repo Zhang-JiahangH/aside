@@ -498,3 +498,6 @@ node scripts/admin-usage.mjs --days 30 --json
 未验证：这是否就是线上那次不续播的原因。若仍不续播，打开 `?debug` 的语音诊断，读 `autoResume.blockedBy`。外放时回答的回声触发 #33 的插话打断会得到 `held after barge-in`，那是另一条路径，本次未改。
 
 后续调整（同日）：等待判断的过期时间由 5 秒改为 2 秒（`pendingDecisionMs`）。过期后仍要再过续播等待才恢复节目，真实提问合计有 4 秒完成接管；探针实测接管在说完后 1.2 到 2.7 秒。若接管晚于 4 秒，节目会先恢复再被正式打断。343 项单元测试与 23 项语音浏览器用例通过。
+
+发布记录与一次部署冲突：上述 2 秒调整快进到 main（`169893b`），生产 Worker `6c57ab56-114b-4bb8-9b19-ba30b1ae7755`（`--containers-rollout=none`），首页引用 `index-ByL8DSq6.js`，`/api/health` 200，`npm run test:mobile-service` 4 项通过。部署时间线（UTC）：07:34:05 本机部署 `b123b79e`；07:34:50 另一位队友从草稿 PR #29（`codex/continuous-mobile-voice`，基于 `4d8003f`，不含"等待判断过期"修复）部署了 `11ef1749`，覆盖了前者；07:37:53 本次部署又覆盖了它。发布前只核对了 origin/main 无新提交和线上版本号，没有核对该版本的作者，因此没有发现线上已是队友的分支构建。结果：PR #29 中未合并的后端改动（`backend/src/live-delegation.ts`、`live-control.ts`、`cloudflare/src/live-supervisor.ts` 等）目前不在线上，他的移动端联调会受影响；需要他变基到 main 后重新部署，或先合并。以后发布前必须同时核对最新部署的作者与版本。
+
