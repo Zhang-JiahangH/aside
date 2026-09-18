@@ -501,3 +501,24 @@ node scripts/admin-usage.mjs --days 30 --json
 
 发布记录与一次部署冲突：上述 2 秒调整快进到 main（`169893b`），生产 Worker `6c57ab56-114b-4bb8-9b19-ba30b1ae7755`（`--containers-rollout=none`），首页引用 `index-ByL8DSq6.js`，`/api/health` 200，`npm run test:mobile-service` 4 项通过。部署时间线（UTC）：07:34:05 本机部署 `b123b79e`；07:34:50 另一位队友从草稿 PR #29（`codex/continuous-mobile-voice`，基于 `4d8003f`，不含"等待判断过期"修复）部署了 `11ef1749`，覆盖了前者；07:37:53 本次部署又覆盖了它。发布前只核对了 origin/main 无新提交和线上版本号，没有核对该版本的作者，因此没有发现线上已是队友的分支构建。结果：PR #29 中未合并的后端改动（`backend/src/live-delegation.ts`、`live-control.ts`、`cloudflare/src/live-supervisor.ts` 等）目前不在线上，他的移动端联调会受影响；需要他变基到 main 后重新部署，或先合并。以后发布前必须同时核对最新部署的作者与版本。
 
+
+## Jev 影子评测上线（2026-09-18）
+
+背景：每句听到的话由后端模型判断"忽略 / 等待 / 暂停 / 继续 / 调整播放 / 提问"，真实会话里第一个判断要 0.94 到 1.54 秒；人声立即暂停之后，这段时间就是旁人说话造成的空白。Jev（TypeSafe 的结构化决策模型，2026-09-17 发布）不生成文字，只在给定选项中选择并给出校准置信度。它通过 OpenRouter 可用：`POST https://openrouter.ai/api/alpha/decisions`，模型 `typesafe/jev-1.13`，输入 $0.042/百万 token，输出免费。
+
+离线评测（`npm run eval:jev`，78 句中英文自拟语料，其中约 15 句与提示词示例重合，结果偏乐观）：总体 74/78，英文 37/38，中文 37/40，中文短控制词全对；4 个错判置信度都在 0.39 到 0.52；只采用置信度 ≥ 0.6 的判断时保留 66/78 且全对。本机保持连接的延迟 p50 131ms、p95 215ms、最大 776ms；20 个并发全部成功但最慢 1018ms。每次约 813 输入 token。
+
+可用性风险：接口在 `/api/alpha/` 路径下、标注 beta，可能移动；只有 TypeSafe 一个 provider，没有故障切换；官方文档列有 `529 Overloaded`；没有 SLA、速率限制与数据保留说明；`jev-latest` 会自动换版本，因此固定 `jev-1.13`。
+
+本次上线的只是影子模式，不改变任何行为：`backend/src/jev-shadow.ts` 在后端模型开始处理一句话时同时问 Jev（3 秒放弃），把 Jev 的选择、置信度、耗时与后端的第一个判断写成 `jev_shadow` 表的一行（迁移 `0008`，保留 90 天）。不存用户说的话，只存字符数和是否含汉字。失败（`timeout`、`http_<code>`、`invalid`、`network`）只是被计数的结果。未配置 `OPEN_ROUTER_API_KEY` 时整个功能关闭。
+
+发布与核对：`npm run check`、348 项单元测试（新增影子模块 4 项、协调器 1 项）、Cloudflare 集成 50 项通过。迁移 `0008_jev_shadow.sql` 已应用到生产 D1；`OPEN_ROUTER_API_KEY` 已用 `wrangler secret put` 配置（该命令自身产生了 08:04Z 的一个版本）。发布前线上是另一位队友 07:48Z 从草稿 PR #29 部署的 `3cc34209`（已变基到 main，外加其未合并的移动端后端改动）；经产品负责人确认后仍部署 main（`e4128ae`），生产 Worker `99cfb905-8c75-41f5-ae4c-5866777f657a`（`--containers-rollout=none`）。PR #29 的未合并改动因此再次不在线上。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过，`jev_shadow` 表存在且为空。
+
+未验证：生产上尚无语音会话经过影子路径，第一行数据出现前，Worker 到 OpenRouter 的实际调用未经线上证实。查看方式：
+
+```
+npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --command \
+  "SELECT status, COUNT(*) n, ROUND(AVG(jev_ms)) avg_ms, SUM(agree) agree, SUM(agree IS NOT NULL) compared FROM jev_shadow GROUP BY status"
+```
+
+采用门槛（建议）：数百句真实数据上，置信度 ≥ 0.6 的一致率 ≥ 98%，`jev_ms` p95 < 400ms，非 `ok` 比例 < 1%；达标后也只让它接管"忽略"与播放控制，并始终保留后端模型兜底。
