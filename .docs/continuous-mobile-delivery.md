@@ -6,6 +6,11 @@ The compatibility PR #28 is a baseline, not completion of this goal.
 User scope correction: do not change Web behavior. Shared runtime extensions must
 be opt-in for mobile and preserve the existing Web policy and tests.
 
+Current requirement-by-requirement evidence and open gates:
+[mobile acceptance index](mobile-current-acceptance.md). It distinguishes current
+regressions, older native evidence, production observations and outstanding device
+or product decisions; the historical records below remain dated evidence.
+
 ## Current backend — 2026-09-18, stale tool follow-up correction
 
 Source `f559178` closes a separate application-owned race: a pending playback
