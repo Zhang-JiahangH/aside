@@ -50,34 +50,128 @@ need their own evidence. Paid calls are reserved for the final bounded smoke.
 
 ## Implementation and current evidence — 2026-09-17
 
-Branch: `codex/continuous-mobile-voice`, based on compatibility PR #28.
+Feature branch: `codex/continuous-mobile-voice`. PR: https://github.com/qiz029/aside/pull/29.
 No Web source files changed. Shared spoken continuation is opt-in (`verified`);
-Web retains its existing explicit policy.
+Web retains its explicit policy. The branch includes compatibility PR #28.
 
-Implemented native continuous microphone capture, local VAD/volume ducking,
-authenticated NDJSON control/acknowledgements, PCM admission queues, paced captions,
-completion-verified 3/8/manual continuation, follow-up anchors, connected typed
+### Native conversation
+
+Implemented continuous microphone capture, local speech activity and volume ducking,
+authenticated NDJSON control/acknowledgements, bounded PCM admission queues, paced
+captions, verified 3/8/manual continuation, follow-up anchors, connected typed
 answers, interruption cleanup, account-bound orphan-session recovery, input meters,
 conversation reset and playback-options UI. Manual AAC capture remains available.
+Background closes conversation capture and resets microphone consent; subsequent
+Play can resume the episode without opening the microphone. Sign-out removes this
+account's recovery credential.
 
-The native queue has matching C and Java sample-trace tests. Actual simulator runs
-on both platforms observed incoming RTP and rendered output, verified a drained
-queue before a three-second wait, and resumed from the semantic anchor while Live
-remained connected. No podcast/answer overlap occurred. iOS resumed at 80.080s from
-an 80.000s anchor; Android resumed at 0.115s from a 0.000s anchor. These are fixture
-transport results, not claims about physical microphone or production-model quality.
+The C and Java native queues pass identical sample-trace tests. Extended simulator
+runs on both platforms observed actual incoming RTP and rendered output, verified a
+drained queue before the continuation timer, ignored irrelevant speech, and retained
+one anchor across follow-ups. There was no podcast/answer overlap. Long answers
+waited 8.166 seconds on iOS and 8.248 seconds on Android. iOS recovered its own
+force-quit session in 2.231 seconds without creating another Live session.
+See `mobile-evidence/continuous-native.json`.
 
-Standard-size UI flows passed on both platforms: keyboard keeps Send visible,
-settings fit, 3/8/manual choices work, and Chinese/English render correctly.
-Screenshots are under `mobile-screenshots/continuous-*`. Later long-history testing
-caught automatic scrolling being mistaken for manual scrolling; the fix is in the
-current candidate and is being rechecked.
+These are native transport/coordination results with deterministic external model
+responses. They do not measure physical microphone quality, acoustic echo,
+Bluetooth routing or production-model accuracy.
 
-Current acceptance work includes multi-turn/long-answer native runs, manual-mode
-regression, small-screen/accessibility review, background playback, one bounded
-production smoke, installable release artifacts, and PR/CI. The checklist above
-remains deliberately incomplete until this evidence is recorded.
+### Interaction and visual review
 
-No paid model or real email calls have been made during this feature work so far.
-Local test builds use an explicit loopback flag and must never be distributed.
-Production candidates are rebuilt against `https://asidefm.com` with that flag off.
+Light/dark, Chinese/English and keyboard/settings flows passed on both platforms.
+iPhone SE at the extra-extra-extra-large text setting was inspected for clipping;
+its player, composer and settings remained operable. Screenshots are in
+`mobile-screenshots/continuous-*`.
+
+Long-history review caught two distinct issues: programmatic iOS scrolling could
+turn off following, and FlatList's estimated end position could hide the newest
+variable-height reply. The conversation now renders newest-first in an inverted
+list, so the latest message is at exact offset zero. User scrolling can still stop
+following. A unique-question flow checks the partial stream, empty composer and
+completion of that request; actual screenshots are also inspected because native
+accessibility alone can expose text outside the visible viewport.
+
+On the final iOS fixture, manual AAC recording/transcription and native answer
+playback passed; manual continuation remained paused beyond ten seconds and
+resumed only on Continue. Denied permission showed the Settings recovery action.
+Backgrounding continuous mode closed it, and subsequent Play kept the microphone
+off. Slide cancellation and Android final interaction checks are recorded below
+when complete.
+
+### Verification
+
+- 360 unit/application tests passed, including native C/Java queues, late events,
+  cancellation, account isolation, request deadlines and checkpoint versions.
+- TypeScript and module-boundary checks passed.
+- Web regression: one complete run passed all 66 scenarios (3.3 minutes). Earlier
+  startup timing flakes passed when rerun; no Web fix was introduced.
+- Cloudflare service regression passed in CI. Read-only production checks passed
+  for mobile authentication routing, Bearer validation and website Origin checks.
+- Final release and duration evidence is still being completed below.
+
+Local acceptance binaries require an explicit loopback test flag and must never be
+distributed. Release candidates use `https://asidefm.com`, test flag off, embedded
+JS and no OTA updates. Android retains the existing release signing key.
+Ad Hoc/TestFlight configuration remains available but paid Apple signing acceptance
+is pending the user's account approval.
+
+### Remaining acceptance evidence
+
+- Diagnose and resolve the physical continuous-question failure, then verify one
+  bounded real end-to-end conversation and record its usage.
+- Install a normal iPhone release without diagnostics and publish the corresponding
+  Android candidate after that fix; keep PR #29 in draft until then.
+- Physical headset/call handling and the visible iOS lock-screen card need device
+  confirmation. The current simulator's system commands work (see below).
+
+### Physical continuous-voice acceptance blocker
+
+iPhone build 27 (source `8bc7f96`, production API) was installed. A short Chinese
+definition question lowers programme volume but does not pause or answer. The
+production sideband observes input transcript fragments but no Responses
+delegation or backend question execution for that attempt. The logged character
+count describes only the first fragment, not the complete utterance.
+
+Diagnostic build 28 is signed and installed on the same physical iPhone, using
+`https://asidefm.com` with the test flag off. Awaiting one bounded user reproduction.
+Temporary device-local instrumentation records transcript events,
+control events and native/RTC counters; no login credential is recorded. This
+diagnostic source is retained only in `/tmp` and removed from the repository
+after bundling. The cause and final physical acceptance remain unverified. Do not
+mark continuous voice ready or distribute build 28.
+
+### Additional fixture evidence
+
+Both platforms completed 30 actual minutes of background native playback: iOS
+1,802.17 seconds elapsed with native position 1,805,762.79 ms; Android 1,802.30
+seconds elapsed with native position 1,808,758 ms. These duration runs used build
+18, with unchanged native programme playback. Android's system media control
+subsequently paused playback. On final iOS fixture build 26, operating-system
+media commands also paused, played and paused the native AVPlayer; Now Playing
+metadata reported rate 0, 1 and 0 with the correct episode. After the play event
+settled, the app reported `playing` and its microphone remained off. These are
+actual system-command results, not app-button simulations. The simulator does
+not render the visible lock-screen card; the earlier independent plain AVPlayer
+probe had the same limitation. Card appearance remains a physical-device check.
+
+After merging upstream spoken-answer history ownership, iOS and Android build 26
+passed the local native continuous-conversation flow. Android EAS build 14 has
+been downloaded, its fixed production certificate verified, and it installed
+over the previous production package while retaining app data. Physical voice
+acceptance above remains the release blocker.
+
+Android build 26 also passed the unique-question streaming flow: partial text,
+cleared composer and complete latest reply. The screenshot was visually checked
+to confirm both this question and this answer were inside the viewport.
+
+Android build 26 manual AAC capture, transcription, native answer playback and
+manual continuation also passed: playback remained paused beyond ten seconds and
+resumed on Continue. These checks use the local fixture.
+
+EAS build 14 passed read-only production UI checks: actual public catalogue and
+transcript loaded, no fixture episode appeared, and Account opened without the
+test-environment marker. No email or paid model request was made by this check.
+
+Condensed artifact hashes, signing certificate, native duration measurements and
+system-command traces: [release evidence](mobile-evidence/continuous-release-2026-09-17.json).
