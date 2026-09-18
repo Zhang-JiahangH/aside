@@ -1,3 +1,4 @@
+import { pendingDecisionMs } from "../player-runtime/src/conversation";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -2829,6 +2830,36 @@ test("a barge-in holds the podcast only until the listener's next answered quest
   s.callbacks.onTranscript("assistant", "The second answer.");
   s.callbacks.onOutput(false);
   assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.clock.advance(3000);
+  await flush();
+  assert.equal(s.audio.playing, true);
+});
+
+test("a noise after the answer that never reaches a decision cannot strand the podcast", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const decisionId = engaged(s);
+  await flush();
+  s.push({ type: "answered", decisionId, answer: "A biography is a life story.", sources: [] });
+  s.callbacks.onOutput(true);
+  s.callbacks.onOutput(false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  // A cough: detected locally, never transcribed, so the backend decides nothing.
+  s.callbacks.onSpeech(true);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+  assert.deepEqual((await s.session.voiceDiagnostics()).autoResume.blockedBy, [
+    "speech detected",
+    "input awaiting a decision",
+  ]);
+  s.callbacks.onSpeech(false);
+  s.clock.advance(pendingDecisionMs - 1);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.clock.advance(1);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3, "the window reopens");
+  assert.deepEqual((await s.session.voiceDiagnostics()).autoResume.blockedBy, []);
   s.clock.advance(3000);
   await flush();
   assert.equal(s.audio.playing, true);

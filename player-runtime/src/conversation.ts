@@ -28,6 +28,8 @@ interface ConversationHost {
   voice(): ConversationVoice | undefined;
   resume(delayMs: number): void;
   playerInput(): PlayerInput | undefined;
+  /** Someone is audibly speaking right now, by local detection. */
+  speaking(): boolean;
   engage(): void;
   /** Soft yield while a delegated utterance is classified; false once it is disregarded. */
   attend(active: boolean): void;
@@ -41,6 +43,8 @@ interface ConversationHost {
   changed(): void;
   log(message: string): void;
 }
+/** Longest wait for the backend to decide on heard input before silence counts again. */
+export const pendingDecisionMs = 5000;
 /** Owns a question turn from input through cancellation, answer and follow-up. */
 export class Conversation {
   private turns: Turn[] = [];
@@ -73,6 +77,7 @@ export class Conversation {
   private answerQueued = false;
   private outputIsAnswer = false;
   private livePending = false;
+  private pendingExpiry?: () => void;
   /** The delegated backend has engaged but not yet reported its finished answer. */
   private liveOpen = false;
   private liveAnswerId?: string;
@@ -164,6 +169,8 @@ export class Conversation {
     this.answerQueued = false;
     this.outputIsAnswer = false;
     this.livePending = false;
+    this.pendingExpiry?.();
+    this.pendingExpiry = undefined;
     this.liveOpen = false;
     this.liveAnswerId = undefined;
     this.liveReplyOwner = undefined;
@@ -341,6 +348,26 @@ export class Conversation {
       this.scheduleFollowup();
     }
   }
+  /** Why the follow-up window may not resume the podcast right now; empty when it may. */
+  followupBlockers() {
+    const state = this.host.playback();
+    return [
+      state.mode !== "awaiting_followup" && `mode ${state.mode}`,
+      !state.interruption && "no interruption",
+      this.waitMs <= 0 && "manual resume",
+      state.userSpeaking && "listener speaking",
+      this.host.speaking() && "speech detected",
+      state.assistantSpeaking && "assistant speaking",
+      this.pending && "question in flight",
+      this.livePending && "input awaiting a decision",
+      this.liveOpen && "backend still answering",
+      this.delegation && "delegation in flight",
+      this.answerQueued && "answer not yet spoken",
+      this.draft.trim() && "draft in composer",
+      this.held && "held by listener",
+      this.bargedIn && "held after barge-in",
+    ].filter((reason): reason is string => !!reason);
+  }
   scheduleFollowup() {
     const epoch = this.epoch,
       revision = this.host.playback().revision;
@@ -349,34 +376,41 @@ export class Conversation {
       this.waitMs > 0 && this.longAnswer && !this.outputIsAnswer
         ? Math.max(this.waitMs, 8000)
         : this.waitMs;
-    this.followup.arm(
-      delay,
-      () => {
-        const state = this.host.playback();
-        return (
-          epoch === this.epoch &&
-          revision === state.revision &&
-          state.mode === "awaiting_followup" &&
-          !!state.interruption &&
-          !state.userSpeaking &&
-          !state.assistantSpeaking &&
-          !this.pending &&
-          !this.livePending &&
-          !this.liveOpen &&
-          !this.delegation &&
-          !this.answerQueued &&
-          !this.draft.trim() &&
-          !this.held &&
-          !this.bargedIn
-        );
-      },
-      () => this.host.resume(0),
-    );
+    const eligible = () =>
+      epoch === this.epoch &&
+      revision === this.host.playback().revision &&
+      !this.followupBlockers().length;
+    this.followup.arm(delay, eligible, () => this.host.resume(0));
+    if (this.host.playback().mode === "awaiting_followup")
+      this.host.log(
+        eligible()
+          ? `Auto-resume in ${delay}ms`
+          : `Auto-resume waiting: ${this.followupBlockers().join(", ") || "stale turn"}`,
+      );
   }
+  /**
+   * Heard input is waiting for the backend's decision. Detection alone can
+   * raise this (a cough, an echo) and never produce a transcript to decide on,
+   * so the wait expires once nobody is speaking: silence must not strand the
+   * podcast behind a decision that will never come.
+   */
   liveInputPending(value: boolean) {
     this.livePending = value;
-    if (value) this.followup.cancel();
-    else this.scheduleFollowup();
+    this.pendingExpiry?.();
+    this.pendingExpiry = undefined;
+    if (!value) return this.scheduleFollowup();
+    this.followup.cancel();
+    const expire = () => {
+      if (this.host.speaking()) {
+        this.pendingExpiry = this.clock.after(pendingDecisionMs, expire);
+        return;
+      }
+      this.pendingExpiry = undefined;
+      this.livePending = false;
+      this.host.log("No decision for heard input; follow-up window reopened");
+      this.scheduleFollowup();
+    };
+    this.pendingExpiry = this.clock.after(pendingDecisionMs, expire);
   }
   /**
    * The delegated backend is answering and the voice model speaks the result

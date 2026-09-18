@@ -158,6 +158,7 @@ export class ListeningSession {
         playerInput: () =>
           this.input ? { ...this.input, config: this.playerConfig } : undefined,
         engage: () => this.engageInput(),
+        speaking: () => this.inputSpeaking,
         attend: (active) => (active ? this.attend() : this.release()),
         followup: (text, speak) => this.submitQuestion(text, speak),
         control: (result, text) => this.applyRemoteControl(result, text),
@@ -302,6 +303,11 @@ export class ListeningSession {
       control: {
         owner: this.serverVoice ? "server" : "manual",
         status: this.controlStatus,
+      },
+      // What, if anything, keeps the follow-up window from resuming the podcast.
+      autoResume: {
+        waitMs: this.conversation.snapshot.followupMs,
+        blockedBy: this.conversation.followupBlockers(),
       },
       ...(this.debugRecognition
         ? {
