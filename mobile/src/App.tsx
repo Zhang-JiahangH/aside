@@ -1124,39 +1124,44 @@ function Main() {
                 ) : (
                   <FlatList
                     ref={chatRef}
+                    inverted
                     onContentSizeChange={() =>
                       followConversation.current &&
-                      chatRef.current?.scrollToEnd({ animated: false })
+                      chatRef.current?.scrollToOffset({
+                        offset: 0,
+                        animated: false,
+                      })
                     }
                     onLayout={() => {
                       if (followConversation.current)
-                        chatRef.current?.scrollToEnd({ animated: false });
+                        chatRef.current?.scrollToOffset({
+                          offset: 0,
+                          animated: false,
+                        });
                     }}
                     onScrollBeginDrag={() => {
                       followConversation.current = false;
                     }}
                     onScrollEndDrag={({ nativeEvent }) => {
                       followConversation.current =
-                        nativeEvent.contentSize.height -
-                          nativeEvent.layoutMeasurement.height -
-                          nativeEvent.contentOffset.y <
-                        80;
+                        nativeEvent.contentOffset.y < 80;
                     }}
                     onMomentumScrollEnd={({ nativeEvent }) => {
-                      // iOS also emits this after a nonanimated scrollToEnd.
+                      // iOS also emits this after a nonanimated scrollToOffset.
                       // Only a user drag may turn following off. Momentum may
                       // restore following after the user reaches the bottom.
                       if (followConversation.current) return;
                       followConversation.current =
-                        nativeEvent.contentSize.height -
-                          nativeEvent.layoutMeasurement.height -
-                          nativeEvent.contentOffset.y <
-                        80;
+                        nativeEvent.contentOffset.y < 80;
                     }}
                     scrollEventThrottle={100}
                     testID="conversation"
-                    data={snapshot.history}
-                    keyExtractor={(_, i) => String(i)}
+                    // The newest variable-height item is always at offset 0;
+                    // scrolling to an estimated unmeasured end can hide replies.
+                    data={[...snapshot.history].reverse()}
+                    keyExtractor={(turn, i) =>
+                      turn.id ?? String(snapshot.history.length - i - 1)
+                    }
                     contentContainerStyle={styles.content}
                     ListEmptyComponent={
                       <View style={styles.emptyConversation}>
@@ -1182,7 +1187,7 @@ function Main() {
                         </Text>
                       </View>
                     }
-                    ListFooterComponent={
+                    ListHeaderComponent={
                       snapshot.busy ? (
                         <View
                           testID="answer-stream"

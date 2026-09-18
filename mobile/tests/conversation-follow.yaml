@@ -18,9 +18,12 @@ appId: com.asidefm.app.dev
     timeout: 15000
 - assertVisible: ${QUESTION}
 - assertVisible: "Ask about what you heard…"
+# Old complete answers are still in history; wait for this request's stream.
 - extendedWaitUntil:
-    visible: "^A short answer$"
+    notVisible:
+      id: answer-stream
     timeout: 45000
+- assertVisible: "^A short answer$"
 - assertVisible: ${QUESTION}
 - assertVisible: "Ask about what you heard…"
 - takeScreenshot: long-history-latest-answer
