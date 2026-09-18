@@ -1509,6 +1509,36 @@ test("a control-only delegation discards buffered voice output unless a reply wi
   s.session.dispose();
 });
 
+test("under server control the voice is never handed the podcast text, which it would answer from by itself", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.audio.positionMs = 45000;
+  s.session.audioTick();
+  await flush();
+  assert.deepEqual(
+    s.commands.filter((c) => c.startsWith("thinking:")),
+    [],
+    "the backend's instructions carry what was heard",
+  );
+  s.session.dispose();
+
+  const client = setup("auto");
+  client.session.start();
+  await flush();
+  client.audio.positionMs = 45000;
+  client.session.audioTick();
+  await flush();
+  const context = client.commands.filter((c) => c.startsWith("thinking:"));
+  assert.ok(context.length > 0, "a voice that answers itself still needs it");
+  assert.equal(
+    context.some((c) => /[\u4e00-\u9fff]/.test(JSON.parse(c.slice(9)).note)),
+    false,
+    "and no Chinese note pulls its speech towards Chinese",
+  );
+  client.session.dispose();
+});
+
 test("an early ignore that the backend overrules still becomes an answered question", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();
