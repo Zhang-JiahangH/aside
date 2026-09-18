@@ -4,6 +4,14 @@ Run from the repository root with Node 24 and FFmpeg/ffprobe on PATH. Start `nod
 
 Build Release apps with `EXPO_PUBLIC_API_URL=http://127.0.0.1:4311` and `ASIDE_TEST_API=1`. On Android run `adb reverse tcp:4311 tcp:4311`. Use a fresh `example.com` test account for `voice.yaml`, so a restored answer cannot satisfy its assertion. Run one Maestro flow at a time per device. iOS system dialogs may expose a combined label (including the timestamp), so select the whole accessible control.
 
+When building an iOS simulator directly with `xcodebuild`, keep Xcode's simulator
+signing enabled (`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`, with the same
+development team as previous installed test builds). An unsigned app can launch
+but lack the application/keychain entitlements required by SecureStore, causing
+account restoration to fail before voice is exercised. Use Xcode's signing step
+instead of signing only the outer app afterwards. This does not require paid
+Apple distribution signing.
+
 ```sh
 maestro --device DEVICE test -e EMAIL=fresh@example.com mobile/tests/smoke.yaml
 maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice.yaml

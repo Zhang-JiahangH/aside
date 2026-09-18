@@ -118,10 +118,12 @@ is pending the user's account approval.
 
 ### Remaining acceptance evidence
 
-- Diagnose and resolve the physical continuous-question failure, then verify one
-  bounded real end-to-end conversation and record its usage.
-- Install a normal iPhone release without diagnostics and publish the corresponding
-  Android candidate after that fix; keep PR #29 in draft until then.
+- Physical speaker input/answering was confirmed by the user on build 30.
+  Remaining quality cases: natural continuation intent and duplicate backend
+  answer events for one input; see the comparison notes below.
+- Normal iPhone build 31 is signed, installed and launched with diagnostic code
+  removed. Android build 15 is built and its fixed signature/upgrade installation verified; keep the remaining quality cases
+  visible in PR #29.
 - Physical headset/call handling and the visible iOS lock-screen card need device
   confirmation. The current simulator's system commands work (see below).
 
@@ -219,3 +221,15 @@ test-environment marker. No email or paid model request was made by this check.
 
 Condensed artifact hashes, signing certificate, native duration measurements and
 system-command traces: [release evidence](mobile-evidence/continuous-release-2026-09-17.json).
+
+Both updated native fixture builds now pass the continuous RTC playback flow:
+iOS build 30 and Android build 31. The normal iPhone build 31 was installed and
+launched, its signature and production API configuration verified, and its JS
+bundle contains no temporary diagnostic helper. The device-local diagnostic file
+was cleared after retaining the local investigation evidence.
+
+Android EAS build 15 uses source `9d7acb1`, the existing release signing
+certificate and `https://asidefm.com`, with fixture mode and diagnostic code off.
+It successfully upgrades the production package on the Android emulator.
+Build: https://expo.dev/accounts/jiahangzhang/projects/aside/builds/2a22f81b-56ad-4cf4-91e2-b3a9aa77f3d8.
+Updated verification and hashes: `mobile-evidence/continuous-context-2026-09-17.json`.
