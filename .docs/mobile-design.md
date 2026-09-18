@@ -70,3 +70,30 @@ npx skills@latest add expo/skills --skill expo-native-ui --skill expo-design-sys
 ```
 
 No skill or plugin was installed during this review.
+
+## Compact question tools and accessibility correction — 2026-09-18
+
+The follow-up implementation replaces the idle status heading, permanently open
+text field and full-width recording row with one question toolbar. Hands-free
+conversation is primary; a labeled hold control and a text-entry icon remain
+directly reachable. The composer opens on demand and retains an unsent draft when
+closed. Active microphone status and Stop remain visible while typing. Recording
+guidance appears above a fixed-size hold target, preserving its position as capture
+starts. Continuation status and actions share one adaptive row. Completed messages
+have less padding, leaving more of the conversation visible.
+
+The maximum iOS accessibility text size revealed additional problems. The library's
+fixed heading and filters left too little list space to reach a complete episode
+card. They now scroll with the library. The player eyebrow and transport timestamps
+use bounded scaling as navigation metadata. Reading text retains system scaling.
+The options sheet has a bounded height, a persistent title/Done row, and scrollable
+content so the last option can be reached without losing the close action.
+
+Build 40 exercised continuous activation, native RTC, continuation and completed-answer
+replay suppression on both platforms. Build 42 includes the subsequent library/large-text corrections:
+Android normal-size and iPhone SE maximum-size UI flows pass, including actual
+setting selection, draft restoration, keyboard access and both languages. iOS's
+unique typed submission, real manual capture, ten-second hold and explicit resume
+also pass. Package delivery and remaining verification are tracked in the delivery
+record; these local fixtures are not distributed production builds. The review's
+remaining live-audio boundary and physical-device gates remain open.

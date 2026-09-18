@@ -85,6 +85,8 @@ function Main() {
   const [startupFailed, setStartupFailed] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [playerOptions, setPlayerOptions] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  useEffect(() => setComposerOpen(false), [episode?.id]);
   useEffect(() => {
     const show = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
@@ -204,6 +206,11 @@ function Main() {
           setTab("library");
           return true;
         }
+        if (composerOpen) {
+          Keyboard.dismiss();
+          setComposerOpen(false);
+          return true;
+        }
         if (episode) {
           setEpisode(null);
           return true;
@@ -212,7 +219,7 @@ function Main() {
       },
     );
     return () => subscription.remove();
-  }, [tab, episode]);
+  }, [tab, episode, composerOpen]);
   const lastUpload = useRef<AudioFile | null>(null);
   const current = useRef<Episode | null>(null),
     uploadAbort = useRef<AbortController | null>(null),
@@ -516,12 +523,39 @@ function Main() {
       setUpload(null);
     }
   }
+  const toggleConversation = () => {
+    if (snapshot.listeningMode === "auto" && snapshot.liveStatus !== "off") {
+      session.setListeningMode("manual");
+      return;
+    }
+    if (!user) {
+      setTab("account");
+      return;
+    }
+    void (async () => {
+      if (!(await microphonePermission())) {
+        setError(
+          tr(
+            "允许麦克风后，点「开启随时聊」",
+            "After allowing microphone access, tap Talk hands-free",
+          ),
+        );
+        return;
+      }
+      await session.enableContinuous();
+    })().catch(failure);
+  };
   const button = (
     label: string,
     action: () => void,
     testID?: string,
     secondary = false,
+    unavailable = false,
   ) => {
+    const disabled =
+      unavailable ||
+      (testID === "send-question" &&
+        (!snapshot.question.trim() || snapshot.busy));
     const segmented = [
       "show-transcript",
       "show-conversation",
@@ -533,6 +567,8 @@ function Main() {
         "back-library": "chevron-back",
         "player-options": "ellipsis-horizontal",
         "send-question": "arrow-up",
+        question: "create-outline",
+        "close-question": "close",
         "seek-back": "play-back",
         "seek-forward": "play-forward",
         "play-toggle": snapshot.state.mode === "playing" ? "pause" : "play",
@@ -544,6 +580,8 @@ function Main() {
       "speed",
       "back-library",
       "player-options",
+      "question",
+      "close-question",
     ].includes(testID ?? "");
     const foreground =
       secondary || segmented || transport ? colors.text : colors.onAccent;
@@ -556,15 +594,10 @@ function Main() {
           segmented || testID?.startsWith("followup-")
             ? { selected: !secondary }
             : {
-                disabled:
-                  testID === "send-question" &&
-                  (!snapshot.question.trim() || snapshot.busy),
+                disabled,
               }
         }
-        disabled={
-          testID === "send-question" &&
-          (!snapshot.question.trim() || snapshot.busy)
-        }
+        disabled={disabled}
         onPress={action}
         style={({ pressed }) => [
           styles.button,
@@ -587,13 +620,7 @@ function Main() {
               secondary && !segmented && !transport
                 ? colors.line
                 : "transparent",
-            opacity:
-              testID === "send-question" &&
-              (!snapshot.question.trim() || snapshot.busy)
-                ? 0.35
-                : pressed
-                  ? 0.65
-                  : 1,
+            opacity: disabled ? 0.35 : pressed ? 0.65 : 1,
             transform: [{ scale: pressed ? 0.97 : 1 }],
           },
         ]}
@@ -1007,6 +1034,8 @@ function Main() {
               )}
               <View style={{ flex: 1, gap: 3 }}>
                 <Text
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={1.35}
                   style={{
                     color: colors.muted,
                     fontSize: 10,
@@ -1282,6 +1311,7 @@ function Main() {
                     <View style={styles.timeRow}>
                       <Text
                         testID="playback-position"
+                        maxFontSizeMultiplier={1.5}
                         style={{
                           color: colors.muted,
                           fontSize: 11,
@@ -1291,6 +1321,7 @@ function Main() {
                         {formatTime(snapshot.state.positionMs)}
                       </Text>
                       <Text
+                        maxFontSizeMultiplier={1.5}
                         style={{
                           color: colors.muted,
                           fontSize: 11,
@@ -1353,34 +1384,41 @@ function Main() {
                         )}
                       </View>
                     </View>
-                    {snapshot.resumeSeconds !== null ? (
-                      <Text style={{ color: colors.muted }}>
-                        {tr(
-                          `${snapshot.resumeSeconds} 秒后继续`,
-                          `Resuming in ${snapshot.resumeSeconds}s`,
-                        )}
-                      </Text>
-                    ) : null}
-                    {snapshot.state.interruption &&
-                      (snapshot.resumeHeld ||
-                        snapshot.resumeNeedsConfirmation) &&
-                      snapshot.resumeSeconds === null && (
+                    {snapshot.state.interruption && (
+                      <View style={styles.resumeBar}>
                         <Text
-                          testID="manual-resume-hint"
-                          style={{ color: colors.muted }}
+                          testID={
+                            snapshot.resumeSeconds === null &&
+                            (snapshot.resumeHeld ||
+                              snapshot.resumeNeedsConfirmation)
+                              ? "manual-resume-hint"
+                              : undefined
+                          }
+                          style={{
+                            color: colors.muted,
+                            fontSize: 12,
+                            flexGrow: 1,
+                            flexBasis: 95,
+                          }}
                         >
-                          {tr(
-                            "节目已暂停，可继续追问或点「继续听」",
-                            "Podcast paused. Ask another question or tap Continue.",
-                          )}
+                          {snapshot.resumeSeconds !== null
+                            ? tr(
+                                `${snapshot.resumeSeconds} 秒后继续`,
+                                `Resuming in ${snapshot.resumeSeconds}s`,
+                              )
+                            : snapshot.resumeHeld ||
+                                snapshot.resumeNeedsConfirmation
+                              ? tr(
+                                  "已暂停 · 随时继续听",
+                                  "Paused · continue when ready",
+                                )
+                              : tr("节目已暂停", "Podcast paused")}
                         </Text>
-                      )}
-                    {snapshot.state.interruption ? (
-                      <View style={styles.row}>
                         {button(
                           tr("继续听", "Continue"),
                           () => session.start(),
                           "resume",
+                          true,
                         )}
                         {!snapshot.resumeHeld &&
                           button(
@@ -1390,252 +1428,19 @@ function Main() {
                             true,
                           )}
                       </View>
-                    ) : null}
-                    <View
-                      style={{
-                        gap: 10,
-                        paddingTop: 10,
-                        borderTopWidth: StyleSheet.hairlineWidth,
-                        borderTopColor: colors.line,
-                      }}
-                    >
-                      <View
-                        style={[
-                          styles.row,
-                          { justifyContent: "space-between" },
-                        ]}
-                      >
-                        <View style={{ flex: 1, gap: 3 }}>
-                          <Text
-                            style={{
-                              color: colors.text,
-                              fontSize: 15,
-                              fontWeight: "600",
-                            }}
-                          >
-                            {snapshot.listeningMode === "auto"
-                              ? tr("随时聊", "Conversation")
-                              : tr("聊聊刚才", "Talk about it")}
-                          </Text>
-                          <Text
-                            testID="voice-connection-status"
-                            style={{ color: colors.muted, fontSize: 12 }}
-                          >
-                            {snapshot.listeningMode === "auto"
-                              ? snapshot.liveStatus === "on"
-                                ? tr(
-                                    "正在聆听 · 直接开口就好",
-                                    "Listening · just speak",
-                                  )
-                                : snapshot.liveStatus === "connecting"
-                                  ? tr("正在连接…", "Connecting…")
-                                  : tr("麦克风已关闭", "Microphone is off")
-                              : tr(
-                                  "开启随时聊，或按住提问",
-                                  "Open a conversation, or hold to ask",
-                                )}
-                          </Text>
-                        </View>
-                        {snapshot.listeningMode === "auto" &&
-                          snapshot.liveStatus === "on" && (
-                            <View
-                              testID="microphone-level"
-                              accessibilityLabel={tr(
-                                "麦克风音量",
-                                "Microphone activity",
-                              )}
-                              style={{
-                                flexDirection: "row",
-                                height: 22,
-                                alignItems: "center",
-                                gap: 3,
-                              }}
-                            >
-                              {[0.65, 1, 0.8, 0.5].map((scale, i) => (
-                                <View
-                                  key={i}
-                                  style={{
-                                    width: 3,
-                                    borderRadius: 2,
-                                    height: Math.max(
-                                      4,
-                                      Math.min(22, inputLevel * 160 * scale),
-                                    ),
-                                    backgroundColor: colors.accent,
-                                  }}
-                                />
-                              ))}
-                            </View>
-                          )}
-                        {button(
-                          snapshot.listeningMode === "auto" &&
-                            snapshot.liveStatus !== "off"
-                            ? tr("关闭", "Stop")
-                            : tr("开启", "Start"),
-                          () => {
-                            if (
-                              snapshot.listeningMode === "auto" &&
-                              snapshot.liveStatus !== "off"
-                            ) {
-                              session.setListeningMode("manual");
-                              return;
-                            }
-                            if (!user) {
-                              setTab("account");
-                              return;
-                            }
-                            void (async () => {
-                              if (!(await microphonePermission())) {
-                                setError(
-                                  tr(
-                                    "允许麦克风后，点「开启随时聊」",
-                                    "After allowing microphone access, tap Talk hands-free",
-                                  ),
-                                );
-                                return;
-                              }
-                              await session.enableContinuous();
-                            })().catch(failure);
-                          },
-                          "toggle-conversation",
-                          true,
-                        )}
-                      </View>
-                    </View>
-                  </View>
-                  <View style={styles.row}>
-                    <TextInput
-                      ref={questionInput}
-                      maxFontSizeMultiplier={1.5}
-                      testID="question"
-                      accessibilityLabel="Question"
-                      value={snapshot.question}
-                      onChangeText={(text) => session.setQuestion(text)}
-                      placeholder={tr(
-                        "问问刚才的内容…",
-                        "Ask about what you heard…",
-                      )}
-                      placeholderTextColor={colors.muted}
-                      style={[
-                        styles.input,
-                        textStyle,
-                        {
-                          borderColor: colors.line,
-                          backgroundColor: colors.background,
-                          flex: 1,
-                        },
-                      ]}
-                    />
-                    {button(
-                      tr("发送", "Send"),
-                      () => {
-                        if (!user) {
-                          setTab("account");
-                          return;
-                        }
-                        // Read the current draft; a keyboard event can precede React's render.
-                        if (
-                          session.submitQuestion(
-                            session.getSnapshot().question,
-                            session.getSnapshot().liveStatus === "on",
-                          )
-                        ) {
-                          questionInput.current?.clear();
-                          followConversation.current = true;
-                          Keyboard.dismiss();
-                          setPane("conversation");
-                        }
-                      },
-                      "send-question",
                     )}
                   </View>
-                  {snapshot.listeningMode !== "auto" && !keyboardVisible && (
-                    <Pressable
-                      testID="hold-to-talk"
-                      accessibilityRole="button"
-                      accessibilityLabel={tr("按住说话", "Hold to talk")}
-                      pressRetentionOffset={{
-                        top: 80,
-                        bottom: 64,
-                        left: 64,
-                        right: 64,
-                      }}
-                      onPressIn={(event) => {
-                        captureStart.current = {
-                          x: event.nativeEvent.pageX,
-                          y: event.nativeEvent.pageY,
-                        };
-                        setCaptureCancelled(false);
-                        held.current = true;
-                        const pv = ++pressVersion.current;
-                        setError("");
-                        void (async () => {
-                          if (!user) {
-                            setTab("account");
-                            return;
-                          }
-                          if (!(await microphonePermission())) {
-                            setError(
-                              tr(
-                                "允许麦克风后，再次按住开始录音",
-                                "After allowing microphone access, hold again to record",
-                              ),
-                            );
-                            return;
-                          }
-                          if (!held.current || pv !== pressVersion.current)
-                            return;
-                          await session.beginManual();
-                        })().catch(failure);
-                      }}
-                      onPressOut={() => {
-                        const send = held.current;
-                        held.current = false;
-                        pressVersion.current++;
-                        if (send) {
-                          session.endManual();
-                          followConversation.current = true;
-                          setPane("conversation");
-                          Keyboard.dismiss();
-                        }
-                        setCaptureCancelled(false);
-                      }}
-                      onTouchMove={(event) => {
-                        const { pageX: x, pageY: y } = event.nativeEvent;
-                        if (
-                          held.current &&
-                          (Math.abs(x - captureStart.current.x) > 64 ||
-                            Math.abs(y - captureStart.current.y) > 64)
-                        ) {
-                          held.current = false;
-                          pressVersion.current++;
-                          setCaptureCancelled(true);
-                          session.cancelManualCapture();
-                        }
-                      }}
-                      style={[
-                        styles.button,
-                        {
-                          backgroundColor: snapshot.manualHeld
-                            ? "#943e3d"
-                            : colors.accent,
-                          minHeight: 52,
-                          flexDirection: "row",
-                          gap: 8,
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name={snapshot.manualHeld ? "radio" : "mic-outline"}
-                        size={19}
-                        color={snapshot.manualHeld ? "#fff" : colors.onAccent}
-                      />
+                  {!composerOpen &&
+                    snapshot.listeningMode !== "auto" &&
+                    (snapshot.manualHeld ||
+                      captureCancelled ||
+                      ["arming", "transcribing", "connecting"].includes(
+                        snapshot.liveStatus,
+                      )) && (
                       <Text
-                        style={{
-                          color: snapshot.manualHeld ? "#fff" : colors.onAccent,
-                          fontWeight: "600",
-                          fontSize: 13,
-                        }}
+                        testID="manual-capture-status"
+                        maxFontSizeMultiplier={1.6}
+                        style={{ color: colors.muted, fontSize: 12 }}
                       >
                         {captureCancelled
                           ? tr("已取消", "Recording cancelled")
@@ -1657,7 +1462,270 @@ function Main() {
                                     )
                                   : tr("按住说话", "Hold to talk")}
                       </Text>
-                    </Pressable>
+                    )}
+                  {(!composerOpen || snapshot.listeningMode === "auto") && (
+                    <View testID="question-toolbar" style={styles.voiceBar}>
+                      {snapshot.listeningMode === "auto" ? (
+                        <>
+                          <View
+                            style={{
+                              flex: 1,
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 8,
+                            }}
+                          >
+                            <Ionicons
+                              name={
+                                snapshot.liveStatus === "on"
+                                  ? "mic"
+                                  : "mic-off-outline"
+                              }
+                              size={18}
+                              color={colors.accent}
+                            />
+                            <Text
+                              testID="voice-connection-status"
+                              maxFontSizeMultiplier={1.6}
+                              style={{
+                                flex: 1,
+                                color: colors.text,
+                                fontSize: 13,
+                              }}
+                            >
+                              {snapshot.liveStatus === "on"
+                                ? tr(
+                                    "正在聆听 · 直接开口就好",
+                                    "Listening · just speak",
+                                  )
+                                : snapshot.liveStatus === "connecting"
+                                  ? tr("正在连接…", "Connecting…")
+                                  : tr("麦克风已关闭", "Microphone is off")}
+                            </Text>
+                            {snapshot.liveStatus === "on" && (
+                              <View
+                                testID="microphone-level"
+                                accessibilityLabel={tr(
+                                  "麦克风音量",
+                                  "Microphone activity",
+                                )}
+                                style={{
+                                  flexDirection: "row",
+                                  height: 22,
+                                  alignItems: "center",
+                                  gap: 3,
+                                }}
+                              >
+                                {[0.65, 1, 0.8, 0.5].map((scale, i) => (
+                                  <View
+                                    key={i}
+                                    style={{
+                                      width: 3,
+                                      borderRadius: 2,
+                                      height: Math.max(
+                                        4,
+                                        Math.min(22, inputLevel * 160 * scale),
+                                      ),
+                                      backgroundColor: colors.accent,
+                                    }}
+                                  />
+                                ))}
+                              </View>
+                            )}
+                          </View>
+                          {button(
+                            snapshot.liveStatus !== "off"
+                              ? tr("关闭", "Stop")
+                              : tr("开启", "Start"),
+                            toggleConversation,
+                            "toggle-conversation",
+                            true,
+                          )}
+                        </>
+                      ) : !composerOpen ? (
+                        <View style={{ flex: 1 }}>
+                          {button(
+                            tr("开启随时聊", "Talk hands-free"),
+                            toggleConversation,
+                            "toggle-conversation",
+                            false,
+                            snapshot.manualHeld,
+                          )}
+                        </View>
+                      ) : null}
+                      {!composerOpen && (
+                        <>
+                          {snapshot.listeningMode !== "auto" && (
+                            <Pressable
+                              testID="hold-to-talk"
+                              accessibilityRole="button"
+                              accessibilityLabel={tr(
+                                "按住说话",
+                                "Hold to talk",
+                              )}
+                              pressRetentionOffset={{
+                                top: 80,
+                                bottom: 64,
+                                left: 64,
+                                right: 64,
+                              }}
+                              onPressIn={(event) => {
+                                captureStart.current = {
+                                  x: event.nativeEvent.pageX,
+                                  y: event.nativeEvent.pageY,
+                                };
+                                setCaptureCancelled(false);
+                                held.current = true;
+                                const pv = ++pressVersion.current;
+                                setError("");
+                                void (async () => {
+                                  if (!user) {
+                                    setTab("account");
+                                    return;
+                                  }
+                                  if (!(await microphonePermission())) {
+                                    setError(
+                                      tr(
+                                        "允许麦克风后，再次按住开始录音",
+                                        "After allowing microphone access, hold again to record",
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  if (
+                                    !held.current ||
+                                    pv !== pressVersion.current
+                                  )
+                                    return;
+                                  await session.beginManual();
+                                })().catch(failure);
+                              }}
+                              onPressOut={() => {
+                                const send = held.current;
+                                held.current = false;
+                                pressVersion.current++;
+                                if (send) {
+                                  session.endManual();
+                                  followConversation.current = true;
+                                  setPane("conversation");
+                                  Keyboard.dismiss();
+                                }
+                                setCaptureCancelled(false);
+                              }}
+                              onTouchMove={(event) => {
+                                const { pageX: x, pageY: y } =
+                                  event.nativeEvent;
+                                if (
+                                  held.current &&
+                                  (Math.abs(x - captureStart.current.x) > 64 ||
+                                    Math.abs(y - captureStart.current.y) > 64)
+                                ) {
+                                  held.current = false;
+                                  pressVersion.current++;
+                                  setCaptureCancelled(true);
+                                  session.cancelManualCapture();
+                                }
+                              }}
+                              style={[
+                                styles.holdControl,
+                                {
+                                  backgroundColor: snapshot.manualHeld
+                                    ? "#943e3d"
+                                    : colors.highlight,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  snapshot.manualHeld ? "radio" : "mic-outline"
+                                }
+                                size={19}
+                                color={
+                                  snapshot.manualHeld ? "#fff" : colors.accent
+                                }
+                              />
+                              <Text
+                                maxFontSizeMultiplier={1.5}
+                                style={{
+                                  color: snapshot.manualHeld
+                                    ? "#fff"
+                                    : colors.accent,
+                                  fontWeight: "600",
+                                  fontSize: 11,
+                                }}
+                              >
+                                {tr("按住", "Hold")}
+                              </Text>
+                            </Pressable>
+                          )}
+                          {button(
+                            tr("打字提问", "Type a question"),
+                            () => setComposerOpen(true),
+                            "question",
+                            true,
+                            snapshot.manualHeld,
+                          )}
+                        </>
+                      )}
+                    </View>
+                  )}
+                  {composerOpen && (
+                    <View style={styles.composerRow}>
+                      <TextInput
+                        autoFocus
+                        ref={questionInput}
+                        maxFontSizeMultiplier={1.5}
+                        testID="question"
+                        accessibilityLabel="Question"
+                        value={snapshot.question}
+                        onChangeText={(text) => session.setQuestion(text)}
+                        placeholder={tr(
+                          "问问刚才的内容…",
+                          "Ask about what you heard…",
+                        )}
+                        placeholderTextColor={colors.muted}
+                        style={[
+                          styles.input,
+                          textStyle,
+                          {
+                            borderColor: colors.line,
+                            backgroundColor: colors.background,
+                            flex: 1,
+                          },
+                        ]}
+                      />
+                      {button(
+                        tr("发送", "Send"),
+                        () => {
+                          if (!user) {
+                            setTab("account");
+                            return;
+                          }
+                          // Read the current draft; a keyboard event can precede React's render.
+                          if (
+                            session.submitQuestion(
+                              session.getSnapshot().question,
+                              session.getSnapshot().liveStatus === "on",
+                            )
+                          ) {
+                            questionInput.current?.clear();
+                            followConversation.current = true;
+                            Keyboard.dismiss();
+                            setPane("conversation");
+                          }
+                        },
+                        "send-question",
+                      )}
+                      {button(
+                        tr("收起文字输入", "Close text input"),
+                        () => {
+                          Keyboard.dismiss();
+                          setComposerOpen(false);
+                        },
+                        "close-question",
+                        true,
+                      )}
+                    </View>
                   )}
                 </View>
               </>
@@ -1665,80 +1733,92 @@ function Main() {
           </>
         ) : (
           <>
-            <View
-              style={[
-                styles.libraryHeading,
-                { backgroundColor: colors.navigation },
-              ]}
-            >
-              <Text
-                maxFontSizeMultiplier={1.35}
-                style={[styles.title, textStyle]}
-              >
-                {tr("音频库", "Library")}
-              </Text>
-              <Text
-                style={{ color: colors.muted, fontSize: 14, lineHeight: 22 }}
-              >
-                {tr(
-                  "从一段声音，开始一场对话。",
-                  "Good listening starts a conversation.",
-                )}
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.row,
-                {
-                  justifyContent: "flex-start",
-                  paddingHorizontal: 24,
-                  paddingBottom: 16,
-                  backgroundColor: colors.navigation,
-                  borderBottomColor: colors.line,
-                  borderBottomWidth: StyleSheet.hairlineWidth,
-                },
-              ]}
-            >
-              {button(
-                tr("我的音频", "My audio"),
-                () => {
-                  if (!user) {
-                    setTab("account");
-                    return;
-                  }
-                  setCollection("private");
-                  run(() => refreshPrivate());
-                },
-                "private-library",
-                collection !== "private",
-              )}
-              {button(
-                tr("公开示例", "Samples"),
-                () => setCollection("public"),
-                "public-library",
-                collection !== "public",
-              )}
-            </View>
-            {lastId
-              ? button(
-                  tr("继续上次收听", "Continue listening"),
-                  () => run(() => load(lastId)),
-                  "continue-last",
-                  true,
-                )
-              : null}
-            {loading ? <ActivityIndicator /> : null}
             <FlatList
               testID="library"
               data={list}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.content}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingBottom: 20 }}
+              ListHeaderComponent={
+                <>
+                  <View
+                    style={[
+                      styles.libraryHeading,
+                      { backgroundColor: colors.navigation },
+                    ]}
+                  >
+                    <Text
+                      maxFontSizeMultiplier={1.35}
+                      style={[styles.title, textStyle]}
+                    >
+                      {tr("音频库", "Library")}
+                    </Text>
+                    <Text
+                      style={{
+                        color: colors.muted,
+                        fontSize: 14,
+                        lineHeight: 22,
+                      }}
+                    >
+                      {tr(
+                        "从一段声音，开始一场对话。",
+                        "Good listening starts a conversation.",
+                      )}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.row,
+                      {
+                        justifyContent: "flex-start",
+                        paddingHorizontal: 24,
+                        paddingBottom: 16,
+                        backgroundColor: colors.navigation,
+                        borderBottomColor: colors.line,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                      },
+                    ]}
+                  >
+                    {button(
+                      tr("我的音频", "My audio"),
+                      () => {
+                        if (!user) {
+                          setTab("account");
+                          return;
+                        }
+                        setCollection("private");
+                        run(() => refreshPrivate());
+                      },
+                      "private-library",
+                      collection !== "private",
+                    )}
+                    {button(
+                      tr("公开示例", "Samples"),
+                      () => setCollection("public"),
+                      "public-library",
+                      collection !== "public",
+                    )}
+                  </View>
+                  {lastId
+                    ? button(
+                        tr("继续上次收听", "Continue listening"),
+                        () => run(() => load(lastId)),
+                        "continue-last",
+                        true,
+                      )
+                    : null}
+                  {loading ? <ActivityIndicator /> : null}
+                  <View style={{ height: 20 }} />
+                </>
+              }
+              ItemSeparatorComponent={() => <View style={{ height: 16 }} />}
               ListEmptyComponent={
                 !loading ? (
                   <View
                     style={{
                       alignItems: "center",
                       paddingVertical: 42,
+                      paddingHorizontal: 20,
                       gap: 16,
                     }}
                   >
@@ -1793,6 +1873,7 @@ function Main() {
                     {
                       backgroundColor: colors.surface,
                       borderColor: colors.line,
+                      marginHorizontal: 20,
                     },
                   ]}
                 >
@@ -1960,6 +2041,7 @@ function Main() {
           <View
             accessibilityViewIsModal
             style={{
+              maxHeight: "90%",
               backgroundColor: colors.surface,
               borderTopLeftRadius: 24,
               borderTopRightRadius: 24,
@@ -1974,7 +2056,10 @@ function Main() {
                 { justifyContent: "space-between", padding: 0 },
               ]}
             >
-              <Text style={[styles.subtitle, textStyle]}>
+              <Text
+                maxFontSizeMultiplier={1.5}
+                style={[styles.subtitle, textStyle, { flex: 1 }]}
+              >
                 {tr("播放与对话", "Playback & conversation")}
               </Text>
               {button(
@@ -1984,78 +2069,84 @@ function Main() {
                 true,
               )}
             </View>
-            <View style={{ gap: 8 }}>
-              <Text style={[textStyle, { fontWeight: "600" }]}>
-                {tr("回答后继续听", "Resume after answers")}
-              </Text>
-              <Text
-                style={{ color: colors.muted, fontSize: 13, lineHeight: 19 }}
-              >
-                {tr(
-                  "长回答至少等 8 秒，留一点追问的时间。",
-                  "Long answers leave at least 8 seconds for a follow-up.",
-                )}
-              </Text>
-              <View
-                style={[
-                  styles.row,
-                  { justifyContent: "flex-start", paddingHorizontal: 0 },
-                ]}
-              >
-                {[3000, 8000, 0].map((wait) => (
-                  <React.Fragment key={wait}>
-                    {button(
-                      wait
-                        ? tr(`${wait / 1000} 秒`, `${wait / 1000} seconds`)
-                        : tr("手动", "Manual"),
-                      () => {
-                        session.setFollowupMs(wait);
-                        void AsyncStorage.setItem(
-                          "aside.followupMs",
-                          String(wait),
-                        ).catch(failure);
-                      },
-                      `followup-${wait}`,
-                      snapshot.followupMs !== wait,
-                    )}
-                  </React.Fragment>
-                ))}
+            <ScrollView
+              testID="player-options-content"
+              style={{ flexShrink: 1 }}
+              contentContainerStyle={{ gap: 16 }}
+            >
+              <View style={{ gap: 8 }}>
+                <Text style={[textStyle, { fontWeight: "600" }]}>
+                  {tr("回答后继续听", "Resume after answers")}
+                </Text>
+                <Text
+                  style={{ color: colors.muted, fontSize: 13, lineHeight: 19 }}
+                >
+                  {tr(
+                    "长回答至少等 8 秒，留一点追问的时间。",
+                    "Long answers leave at least 8 seconds for a follow-up.",
+                  )}
+                </Text>
+                <View
+                  style={[
+                    styles.row,
+                    { justifyContent: "flex-start", paddingHorizontal: 0 },
+                  ]}
+                >
+                  {[3000, 8000, 0].map((wait) => (
+                    <React.Fragment key={wait}>
+                      {button(
+                        wait
+                          ? tr(`${wait / 1000} 秒`, `${wait / 1000} seconds`)
+                          : tr("手动", "Manual"),
+                        () => {
+                          session.setFollowupMs(wait);
+                          void AsyncStorage.setItem(
+                            "aside.followupMs",
+                            String(wait),
+                          ).catch(failure);
+                        },
+                        `followup-${wait}`,
+                        snapshot.followupMs !== wait,
+                      )}
+                    </React.Fragment>
+                  ))}
+                </View>
               </View>
-            </View>
-            {snapshot.listeningMode === "auto" &&
-              button(
-                tr("切换为按住说话", "Switch to hold-to-talk"),
+              {snapshot.listeningMode === "auto" &&
+                button(
+                  tr("切换为按住说话", "Switch to hold-to-talk"),
+                  () => {
+                    session.setListeningMode("manual");
+                    setPlayerOptions(false);
+                  },
+                  "manual-mode",
+                  true,
+                )}
+              {button(
+                tr("开始新对话", "New conversation"),
                 () => {
-                  session.setListeningMode("manual");
-                  setPlayerOptions(false);
+                  Alert.alert(
+                    tr("开始新的对话？", "Start a new conversation?"),
+                    tr(
+                      "清空本篇的对话记录，保留收听位置。",
+                      "Clear this episode’s conversation and keep your place.",
+                    ),
+                    [
+                      { text: tr("取消", "Cancel"), style: "cancel" },
+                      {
+                        text: tr("新对话", "New conversation"),
+                        onPress: () => {
+                          setPlayerOptions(false);
+                          void session.newConversation().catch(failure);
+                        },
+                      },
+                    ],
+                  );
                 },
-                "manual-mode",
+                "new-conversation",
                 true,
               )}
-            {button(
-              tr("开始新对话", "New conversation"),
-              () => {
-                Alert.alert(
-                  tr("开始新的对话？", "Start a new conversation?"),
-                  tr(
-                    "清空本篇的对话记录，保留收听位置。",
-                    "Clear this episode’s conversation and keep your place.",
-                  ),
-                  [
-                    { text: tr("取消", "Cancel"), style: "cancel" },
-                    {
-                      text: tr("新对话", "New conversation"),
-                      onPress: () => {
-                        setPlayerOptions(false);
-                        void session.newConversation().catch(failure);
-                      },
-                    },
-                  ],
-                );
-              },
-              "new-conversation",
-              true,
-            )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -2246,7 +2337,34 @@ const styles = StyleSheet.create({
   },
   passage: { borderRadius: 10, padding: 14, gap: 8 },
   transcript: { fontSize: 17, lineHeight: 28 },
-  bubble: { borderRadius: 18, padding: 18, gap: 8, marginBottom: 4 },
+  bubble: { borderRadius: 16, padding: 14, gap: 6, marginBottom: 4 },
+  voiceBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingTop: 8,
+  },
+  composerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingTop: 8,
+  },
+  holdControl: {
+    width: 56,
+    minHeight: 52,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  resumeBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    paddingTop: 4,
+  },
   controls: {
     paddingHorizontal: 20,
     paddingTop: 10,
