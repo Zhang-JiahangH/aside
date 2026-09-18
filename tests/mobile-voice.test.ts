@@ -59,6 +59,9 @@ async function fixture(t: TestContext, stalledConnection = false) {
       close() {},
     };
     outgoing: unknown[] = [];
+    connectionState = "connected";
+    onconnectionstatechange = () => {};
+    closed = false;
     addTransceiver() {}
     addTrack(track: unknown) {
       this.outgoing.push(track);
@@ -76,7 +79,10 @@ async function fixture(t: TestContext, stalledConnection = false) {
     async getStats() {
       return new Map();
     }
-    close() {}
+    close() {
+      this.closed = true;
+      this.channel.readyState = "closed";
+    }
   }
   const key = `asideVoiceTest_${crypto.randomUUID()}`;
   const globals = globalThis as unknown as Record<string, unknown>;
@@ -123,16 +129,22 @@ async function fixture(t: TestContext, stalledConnection = false) {
     recognized: string[] = [],
     questions: string[] = [],
     errors: string[] = [],
-    outputs: boolean[] = [];
+    outputs: boolean[] = [],
+    closes: Parameters<VoiceCallbacks["onClose"]>[] = [],
+    transcripts: string[] = [];
   const cb: VoiceCallbacks = {
     onReady() {},
     onOutput(value) {
       outputs.push(value);
     },
-    onTranscript() {},
+    onTranscript(_role, text) {
+      transcripts.push(text);
+    },
     onDelegation() {},
     onSpeech() {},
-    onClose() {},
+    onClose(...event) {
+      closes.push(event);
+    },
     onStatus: (status) => {
       statuses.push(status);
     },
@@ -166,6 +178,7 @@ async function fixture(t: TestContext, stalledConnection = false) {
       answer: async () => {},
       finishQuestion: async () => {},
     },
+    { preRollMs: 750, graceMs: 5000, idleCloseMs: 2000 },
   );
   t.after(async () => {
     await voice.close();
@@ -185,8 +198,127 @@ async function fixture(t: TestContext, stalledConnection = false) {
     connection,
     peers,
     outputs,
+    closes,
+    transcripts,
   };
 }
+
+test("native manual waiting releases its idle Live session without resuming the podcast", async (t) => {
+  const s = await fixture(t);
+  s.transcription.resolve("Question");
+  await flush();
+  s.voice.activity();
+  t.mock.timers.tick(1999);
+  await flush();
+  assert.equal(s.voice.isEnabled, true);
+  t.mock.timers.tick(1);
+  await flush();
+  assert.equal(s.voice.isEnabled, false);
+  assert.equal(s.statuses.at(-1), "off");
+  assert.deepEqual(s.closes, [[true, 0, "fixture-session", true]]);
+  assert.deepEqual(
+    s.outputs,
+    [],
+    "closing idle Live must not request playback",
+  );
+});
+
+test("native idle expiry waits for transcription, backend work and renewed activity", async (t) => {
+  const s = await fixture(t);
+  s.voice.activity();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(s.voice.isEnabled, true, "ASR is still pending");
+  s.transcription.resolve("Question");
+  await flush();
+  s.voice.setWorking(true);
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(s.voice.isEnabled, true, "backend work is still pending");
+  s.voice.setWorking(false);
+  t.mock.timers.tick(1500);
+  s.peers[0].channel.onmessage({
+    data: JSON.stringify({
+      type: "session.output_transcript.delta",
+      delta: "Answer",
+    }),
+  });
+  t.mock.timers.tick(1500);
+  await flush();
+  assert.equal(
+    s.voice.isEnabled,
+    true,
+    "recent answer activity resets idle time",
+  );
+  t.mock.timers.tick(500);
+  await flush();
+  assert.equal(s.voice.isEnabled, false);
+});
+
+test("server session expiry releases native resources and ignores late answer captions", async (t) => {
+  const s = await fixture(t);
+  s.transcription.resolve("Question");
+  await flush();
+  s.peers[0].channel.onmessage({ data: '{"type":"session.closed"}' });
+  await flush();
+  assert.equal(
+    s.voice.isEnabled,
+    false,
+    "next hold must create a fresh voice instance",
+  );
+  assert.equal(s.voice.isWarm, false);
+  assert.equal(s.peers[0].closed, true);
+  assert.equal(s.statuses.at(-1), "off");
+  assert.deepEqual(s.closes, [[true, 0, "fixture-session", false]]);
+  s.peers[0].channel.onmessage({
+    data: '{"type":"session.output_transcript.delta","delta":"stale"}',
+  });
+  assert.deepEqual(s.transcripts, []);
+  assert.equal(s.voice.beginManual(), false);
+});
+
+test("active native answer audio and a new recording suppress idle closure", async (t) => {
+  const s = await fixture(t);
+  s.transcription.resolve("Question");
+  await flush();
+  let sample = 0;
+  s.peers[0].getStats = async () =>
+    new Map([
+      [
+        "audio",
+        {
+          type: "inbound-rtp",
+          kind: "audio",
+          totalAudioEnergy: ++sample * 0.02,
+          totalSamplesDuration: sample * 0.1,
+        },
+      ],
+    ]);
+  for (let i = 0; i < 30; i++) {
+    t.mock.timers.tick(100);
+    await flush();
+  }
+  assert.deepEqual(s.outputs, [true]);
+  assert.equal(s.voice.isEnabled, true, "ongoing audio must not expire");
+  s.voice.interrupt();
+  assert.equal(s.voice.beginManual(), true);
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(s.voice.isEnabled, true, "a held recording must not expire");
+});
+
+test("a failed warm native peer is released so the next hold can reconnect", async (t) => {
+  const s = await fixture(t);
+  s.transcription.resolve("Question");
+  await flush();
+  s.peers[0].connectionState = "failed";
+  s.peers[0].onconnectionstatechange();
+  await flush();
+  assert.match(s.errors[0], /Voice disconnected/);
+  assert.equal(s.voice.isEnabled, false);
+  assert.equal(s.peers[0].closed, true);
+});
 
 test("native voice keeps transcription progress visible when Live connects first", async (t) => {
   const s = await fixture(t);

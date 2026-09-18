@@ -38,6 +38,11 @@ export function errorMessage(raw: string, locale: string) {
       "The voice connection timed out. Check your connection, then ask again.",
     ],
     [
+      /Voice session time limit reached|语音连接已断开/i,
+      "语音会话已结束，按住即可重新提问，或继续听节目。",
+      "The voice session ended. Hold to ask again, or continue listening.",
+    ],
+    [
       /语音连接中断|Voice disconnected/i,
       "语音连接中断，请重新提问。收听进度已保留。",
       "The voice connection was interrupted. Ask again; your listening position is saved.",

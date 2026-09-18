@@ -1284,6 +1284,17 @@ function Main() {
                       )}
                     </Text>
                   ) : null}
+                  {snapshot.state.interruption && snapshot.resumeHeld && (
+                    <Text
+                      testID="manual-resume-hint"
+                      style={{ color: colors.muted }}
+                    >
+                      {tr(
+                        "节目已暂停，可继续追问或点「继续听」",
+                        "Podcast paused. Ask another question or tap Continue.",
+                      )}
+                    </Text>
+                  )}
                   {snapshot.state.interruption ? (
                     <View style={styles.row}>
                       {button(
@@ -1291,12 +1302,13 @@ function Main() {
                         () => session.start(),
                         "resume",
                       )}
-                      {button(
-                        tr("先别继续", "Wait"),
-                        () => session.holdResume(),
-                        "hold",
-                        true,
-                      )}
+                      {!snapshot.resumeHeld &&
+                        button(
+                          tr("先别继续", "Wait"),
+                          () => session.holdResume(),
+                          "hold",
+                          true,
+                        )}
                     </View>
                   ) : null}
                   <View style={styles.row}>

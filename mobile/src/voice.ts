@@ -2,6 +2,7 @@ import { AudioModule, RecordingPresets } from "expo-audio";
 import { NativeEventEmitter, NativeModules, Platform } from "react-native";
 import { RTCPeerConnection, type MediaStreamTrack } from "react-native-webrtc";
 import { File } from "expo-file-system";
+import type { VoiceLifecycleConfig } from "@aside/engine/core";
 import type {
   VoiceCallbacks,
   VoiceFactory,
@@ -42,6 +43,7 @@ export class NativeVoice implements VoicePort {
   private recording = Promise.resolve();
   private maxTimer?: ReturnType<typeof setTimeout>;
   private statsTimer?: ReturnType<typeof setInterval>;
+  private idleTimer?: ReturnType<typeof setTimeout>;
   private abort?: AbortController;
   private sessionId = "";
   private seconds = 0;
@@ -51,6 +53,7 @@ export class NativeVoice implements VoicePort {
   private lastEnergy = 0;
   private lastSamplesDuration = 0;
   private closeWait?: () => void;
+  private finalized = false;
   private working = false;
   private readonly audioOwner = Symbol("voice");
   private interruption?: { remove(): void };
@@ -58,6 +61,7 @@ export class NativeVoice implements VoicePort {
     private cb: VoiceCallbacks,
     private remote: Remote,
     private coordinator: AudioCoordinator,
+    private lifecycle: VoiceLifecycleConfig,
   ) {
     if (Platform.OS === "ios")
       this.interruption = new NativeEventEmitter(
@@ -77,6 +81,7 @@ export class NativeVoice implements VoicePort {
     if (!this.isEnabled || this.capturing) return false;
     this.cancelCapture();
     this.capturing = true;
+    this.activity();
     const generation = ++this.generation;
     this.cb.onSpeech(true);
     this.cb.onStatus("arming");
@@ -165,6 +170,8 @@ export class NativeVoice implements VoicePort {
           );
           this.cb.onFirstQuestion(text);
         } finally {
+          if (this.abort === abort) this.abort = undefined;
+          this.activity();
           if (file.exists) file.delete();
         }
       })
@@ -226,6 +233,7 @@ export class NativeVoice implements VoicePort {
     channel.onmessage = (event: { data: unknown }) => {
       try {
         const m = JSON.parse(String(event.data));
+        if (this.closed && m.type !== "session.closed") return;
         if (m.type === "session.started") {
           this.ready = true;
           // Capture owns progress until both transcription and Live are ready.
@@ -236,7 +244,8 @@ export class NativeVoice implements VoicePort {
         if (
           m.type === "session.output_transcript.delta" &&
           typeof m.delta === "string"
-        )
+        ) {
+          this.activity();
           this.cb.onTranscript(
             "assistant",
             m.delta,
@@ -249,6 +258,7 @@ export class NativeVoice implements VoicePort {
               ? { startMs: m.start_ms, endMs: m.end_ms }
               : undefined,
           );
+        }
         if (
           m.type === "session.delegation.created" &&
           m.delegation?.target === "client"
@@ -259,9 +269,14 @@ export class NativeVoice implements VoicePort {
           this.cb.onUsage?.(this.seconds, this.sessionId);
         }
         if (m.type === "session.closed") {
+          if (this.finalized) return;
+          this.finalized = true;
           this.ready = false;
           this.closeWait?.();
           this.cb.onClose(true, this.seconds, this.sessionId, this.closed);
+          // Expiry is terminal for this peer. The next hold creates a new
+          // native voice and negotiates a fresh server-owned session.
+          if (!this.closed) void this.close();
         }
         if (m.type === "error")
           this.cb.onError(m.error?.message ?? "Voice error");
@@ -273,6 +288,7 @@ export class NativeVoice implements VoicePort {
       if (peer.connectionState === "failed" && !this.closed) {
         reject(Error("Voice disconnected"));
         this.cb.onError("语音连接中断 / Voice disconnected");
+        void this.close();
       }
     };
     try {
@@ -303,6 +319,7 @@ export class NativeVoice implements VoicePort {
         void peer
           .getStats()
           .then((stats) => {
+            if (this.closed || !this.ready) return;
             let measured = false,
               energy = 0,
               duration = 0;
@@ -330,6 +347,7 @@ export class NativeVoice implements VoicePort {
               this.lastSound = Date.now();
               if (!this.output) {
                 this.output = true;
+                this.activity();
                 this.cb.onOutput(true);
               }
             }
@@ -337,6 +355,7 @@ export class NativeVoice implements VoicePort {
             this.lastSamplesDuration = duration;
             if (this.output && Date.now() - this.lastSound > 1200) {
               this.output = false;
+              this.activity();
               this.cb.onOutput(false);
             }
           })
@@ -359,6 +378,7 @@ export class NativeVoice implements VoicePort {
     id: string | null = null,
   ) {
     if (!this.ready || this.closed) return;
+    this.activity();
     for (const part of content.match(/[^]{1,220}/gu) ?? [])
       this.send({
         type: `session.${type}.append`,
@@ -386,6 +406,7 @@ export class NativeVoice implements VoicePort {
     this.capturing = false;
     clearTimeout(this.maxTimer);
     this.abort?.abort();
+    this.abort = undefined;
     this.recording = this.recording
       .catch(() => {})
       .then(async () => {
@@ -401,9 +422,25 @@ export class NativeVoice implements VoicePort {
         }
       });
   }
-  activity() {}
+  activity() {
+    clearTimeout(this.idleTimer);
+    // Spoken conversations now wait for explicit resume. Release an unused
+    // paid connection without resuming the podcast or discarding chat history.
+    if (
+      this.ready &&
+      !this.closed &&
+      !this.capturing &&
+      !this.abort &&
+      !this.working &&
+      !this.output
+    )
+      this.idleTimer = setTimeout(() => {
+        void this.close();
+      }, this.lifecycle.idleCloseMs);
+  }
   setWorking(value: boolean) {
     this.working = value;
+    this.activity();
   }
   playbackResumed() {
     void this.close();
@@ -417,6 +454,7 @@ export class NativeVoice implements VoicePort {
     this.cancelCapture();
     this.mute(true);
     clearInterval(this.statsTimer);
+    clearTimeout(this.idleTimer);
     if (this.ready) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 3000);
@@ -437,10 +475,11 @@ export class NativeVoice implements VoicePort {
     await this.recording.catch(() => {});
     await this.coordinator.finishQuestion(this.audioOwner);
     this.cb.onStatus("off");
-    this.cb.onClose(false, this.seconds, this.sessionId, true);
+    if (!this.finalized)
+      this.cb.onClose(false, this.seconds, this.sessionId, true);
   }
 }
 export const nativeVoiceFactory =
   (coordinator: AudioCoordinator): VoiceFactory =>
-  (_mic, _config, cb, remote) =>
-    new NativeVoice(cb, remote, coordinator);
+  (_mic, config, cb, remote) =>
+    new NativeVoice(cb, remote, coordinator, config);
