@@ -6,7 +6,42 @@ The compatibility PR #28 is a baseline, not completion of this goal.
 User scope correction: do not change Web behavior. Shared runtime extensions must
 be opt-in for mobile and preserve the existing Web policy and tests.
 
-## Current candidate — 2026-09-18, iPhone 35 / Android 17
+## Current candidate — 2026-09-18, iPhone 37 / Android 18
+
+Integrated main through `4d8003f` in `5dbcfe2`, including backend `answered.final`,
+Web's quiet continuation policy and the temporary barge-in hold. Mobile explicitly
+keeps speech ducking, a three-second default, at least eight seconds for long
+answers and verified native completion. A non-final tool-progress reply cannot
+close the audio window or resume playback. A new answered question clears a
+barge-in hold; the listener's explicit hold remains until Continue. Mobile still
+requires the user to enable continuous capture; Web's play-to-listen change is
+preserved as upstream behavior. No Web product source differs from main.
+
+403 local tests, type/boundary checks and both Cloudflare sideband paths pass.
+[CI for `cb5774a`](https://github.com/qiz029/aside/actions/runs/35319924745) passes.
+The complete Web run passed 69 of 70 scenarios; the remaining scenario contained
+an obsolete assertion that spoken replies never auto-resume. Its test now checks
+the upstream countdown followed by the listener's explicit hold, and the focused
+rerun passed. Web product code was unchanged by that test correction.
+
+Both native build-36 fixtures pass actual RTC/native playback, completed-answer
+replay rejection, ignored speech, anchored follow-ups and 3/8-second continuation.
+Normal iPhone 37 is signed, installed and launched. Android 18 uses the same fixed
+production certificate and production API. Both use embedded JS with fixture mode
+and OTA disabled. Android 18 upgrades 17 and passes real catalogue/transcript/Account
+checks. [Android 18 installation](https://expo.dev/accounts/jiahangzhang/projects/aside/builds/2086c3fe-2b3b-480c-bd82-0c42320e5a55).
+Worker `11ef1749-b9a4-4a87-bc99-a051993b3034` is deployed; authentication smoke
+passes and the existing media image is retained. This turn made no paid model or
+email request.
+
+Evidence: [latest merged-source verification](mobile-evidence/continuous-upstream-2026-09-18.json).
+
+The unfinished-answer duplicate-audio limitation reproduced below remains open;
+the final-answer flag protects completion timing but supplies no per-reply PCM
+identity. PR #29 remains a draft. The physical acceptance items below remain
+distinct from the passing simulator checks.
+
+## Previous candidate — 2026-09-18, iPhone 35 / Android 17
 
 Merged upstream #33 (`bc951fd`) into `5d74781`, resolving the player conflict while
 retaining mobile's asynchronous programme fade before answer playback. Local speech
