@@ -42,6 +42,8 @@ export class FakeDelegatedLive {
   private delegation: LiveDelegation;
   private continuations: (() => void)[] = [];
   private serial = 0;
+  private transcript = "";
+  private transcriptEnd = -Infinity;
   constructor(
     player: LivePlayerState,
     analysis: Analysis,
@@ -65,7 +67,11 @@ export class FakeDelegatedLive {
               output: JSON.parse(item.output),
             });
           }
-          if (event.type === "response.create") this.continuations.shift()?.();
+          if (event.type === "response.create") {
+            const continueResponse = this.continuations.shift();
+            if (continueResponse) continueResponse();
+            else void this.delegate(this.transcript, false);
+          }
         },
         now: Date.now,
         after: (ms, run) => {
@@ -77,32 +83,43 @@ export class FakeDelegatedLive {
     );
   }
   receive(event: Record<string, unknown>) {
+    if (
+      event.type === "session.input_transcript.delta" &&
+      typeof event.delta === "string"
+    ) {
+      if (Number(event.start_ms) - this.transcriptEnd > 1200)
+        this.transcript = "";
+      this.transcript += event.delta;
+      this.transcriptEnd = Number(event.end_ms);
+    }
     this.delegation.receive(event);
   }
-  update(
-    player: LivePlayerState,
-    ack?: LiveControlUpdate["acknowledgement"],
-  ) {
+  update(player: LivePlayerState, ack?: LiveControlUpdate["acknowledgement"]) {
     this.delegation.update(player, ack);
   }
   close() {
     this.delegation.close();
   }
   /** The voice model judged the utterance complete and handed it to the backend. */
-  async delegate(text: string) {
+  async delegate(text: string, automatic = true) {
     const id = `delegation-${++this.serial}`;
     const turn = this.utterances.push(text);
     // GPT-Live delegates first; the backend model then takes its time.
-    this.receive({
-      type: "session.delegation.created",
-      delegation: { id, type: "delegation", target: "responses" },
-    });
-    const decision = await this.decide(text, turn);
+    if (automatic)
+      this.receive({
+        type: "session.delegation.created",
+        delegation: { id, type: "delegation", target: "responses" },
+      });
     const backend = (event: Record<string, unknown>) =>
       this.receive({ type: "response.event", delegation_id: id, event });
+    backend({ type: "response.created", response: {} });
+    const decision = await this.decide(text, turn);
     const call = (name: string, args: unknown) =>
       new Promise<void>((resolve) => {
-        this.continuations.push(resolve);
+        this.continuations.push(() => {
+          backend({ type: "response.created", response: {} });
+          resolve();
+        });
         backend({
           type: "response.output_item.done",
           item: {
@@ -112,10 +129,11 @@ export class FakeDelegatedLive {
             arguments: JSON.stringify(args),
           },
         });
+        backend({ type: "response.completed", response: {} });
       });
-    if (decision.ignore) return call("ignore_input", {});
-    if (decision.wait) return call("wait_for_input", {});
-    if (decision.resume) return call("resume_podcast", {});
+    if (decision.ignore) await call("ignore_input", {});
+    if (decision.wait) await call("wait_for_input", {});
+    if (decision.resume) await call("resume_podcast", {});
     if (decision.commands)
       await call("control_podcast", {
         commands: decision.commands,
@@ -123,10 +141,10 @@ export class FakeDelegatedLive {
           ? { followUpQuestion: decision.followUpQuestion }
           : {}),
       });
-    if (decision.answer === undefined) return;
     if (decision.lookup)
       await call("search_podcast", { query: text.slice(0, 20) });
-    backend({ type: "response.output_text.delta", delta: decision.answer });
+    if (decision.answer !== undefined)
+      backend({ type: "response.output_text.delta", delta: decision.answer });
     backend({
       type: "response.completed",
       response: {

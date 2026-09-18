@@ -215,7 +215,7 @@ async function setupRemote(
   await expect
     .poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused))
     .toBe(false);
-  const speak = async (deltas: string[], captions = true) => {
+  const speak = async (deltas: string[], captions = true, automatic = true) => {
     timeline += 2500;
     for (const [i, delta] of deltas.entries()) {
       const event = {
@@ -233,7 +233,7 @@ async function setupRemote(
     }
     // GPT-Live delegates once the utterance carries words; punctuation alone never does.
     const text = deltas.join("");
-    if (/[\p{L}\p{N}]/u.test(text)) void live.delegate(text);
+    if (automatic && /[\p{L}\p{N}]/u.test(text)) void live.delegate(text);
   };
   return {
     audio,
@@ -831,6 +831,61 @@ test("one stream handles rate, bystander speech, pause and resume without fronte
   await expect
     .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
     .toBe(false);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.transcriptions()).toBe(0);
+  expect(s.errors).toEqual([]);
+});
+
+test("a missing Live handoff still answers through NDJSON and records the spoken conversation", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const s = await setupRemote(page, true, async () => {
+    await pending;
+    return { answer: "The backend explanation" };
+  });
+  await page.locator(".debug-toggle").click();
+  await s.speak(["200 文大概多少钱？"], true, false);
+  await expect.poll(() => s.utterances).toEqual(["200 文大概多少钱？"]);
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(false);
+  release();
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  await s.reply("要看时代和地区。");
+  await expect(page.locator(".message .message-content p")).toHaveText([
+    "200 文大概多少钱？",
+    "要看时代和地区。",
+  ]);
+  expect(s.utterances.length).toBe(1);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.transcriptions()).toBe(0);
+  expect(s.errors).toEqual([]);
+});
+
+test("without any natural delegations, bystanders leave playback alone and controls still work", async ({
+  page,
+}) => {
+  const s = await setupRemote(page);
+  await s.speak(["Honey, what's for dinner?"], false, false);
+  await expect.poll(() => s.utterances.length).toBe(1);
+  expect(
+    await s.audio.evaluate((a: HTMLAudioElement) => ({
+      paused: a.paused,
+      volume: a.volume,
+    })),
+  ).toEqual({ paused: false, volume: 1 });
+  await expect(page.getByRole("log")).not.toContainText("dinner");
+  await s.speak(["Could you pause the podcast?"], false, false);
+  await expect
+    .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(true);
+  await s.speak(["Please resume the podcast"], false, false);
+  await expect
+    .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(false);
+  expect(s.utterances.length).toBe(3);
   expect(s.questionRequests()).toBe(0);
   expect(s.transcriptions()).toBe(0);
   expect(s.errors).toEqual([]);

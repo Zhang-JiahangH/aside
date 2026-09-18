@@ -81,12 +81,15 @@ function setup(debug = false, limit = 30) {
     });
     timeline += 100;
   };
-  const delegate = (id = "d1") =>
+  let currentId = "d1";
+  const delegate = (id = "d1") => {
+    currentId = id;
     delegation.receive({
       type: "session.delegation.created",
       delegation: { id, type: "delegation", target: "responses" },
     });
-  const backend = (event: Record<string, unknown>, delegation_id = "d1") =>
+  };
+  const backend = (event: Record<string, unknown>, delegation_id = currentId) =>
     delegation.receive({ type: "response.event", delegation_id, event });
   const call = (name: string, args: unknown, call_id = "call-1") =>
     backend({
@@ -166,6 +169,199 @@ test("an answer without tools engages at its first text delta", async () => {
   s.backend({ type: "response.completed", response: {} });
   assert.equal(s.engages().length, 1);
   assert.equal(s.events.filter((e) => e.type === "answered").length, 1);
+  s.delegation.close();
+});
+
+test("heard speech reaches Responses even when Live emits no delegation event", async () => {
+  const s = setup();
+  s.speak("200 文大概多少钱");
+  await s.advance(600);
+  assert.equal(s.sent.filter((e) => e.type === "response.create").length, 1);
+  assert.equal(
+    s.engages().length,
+    0,
+    "requesting interpretation does not open audio",
+  );
+  assert.equal(
+    s.decisions().length,
+    0,
+    "requesting interpretation does not pause playback",
+  );
+  s.backend({
+    type: "response.created",
+    response: { id: "fallback-response" },
+  });
+  s.backend({ type: "response.output_text.delta", delta: "要看时代和地区。" });
+  s.backend({ type: "response.completed", response: {} });
+  assert.equal(s.engages().length, 1);
+  assert.equal(s.engages()[0].text, "200 文大概多少钱");
+  assert.equal(
+    s.events.some((e) => e.type === "answered"),
+    true,
+  );
+  await s.advance(12000);
+  assert.equal(s.sent.filter((e) => e.type === "response.create").length, 1);
+  assert.equal(
+    s.events.some((e) => e.type === "error"),
+    false,
+  );
+  s.delegation.close();
+});
+
+test("a fallback still lets the model ignore bystanders without an interruption", async () => {
+  const s = setup();
+  s.speak("Honey, what should we eat tonight?");
+  await s.advance(600);
+  assert.equal(s.sent.filter((e) => e.type === "response.create").length, 1);
+  s.backend({ type: "response.created", response: {} });
+  s.call("ignore_input", {});
+  s.backend({ type: "response.completed", response: {} });
+  await flush();
+  s.backend({ type: "response.completed", response: {} });
+  await s.advance(12000);
+  assert.deepEqual(
+    s.decisions().map((e) => e.result.action),
+    ["ignore"],
+  );
+  assert.equal(s.engages().length, 0);
+  assert.equal(
+    s.events.some((e) => e.type === "error"),
+    false,
+  );
+  s.delegation.close();
+});
+
+test("manual player changes cancel an unrequested fallback", async () => {
+  const s = setup();
+  s.speak("Please explain that");
+  s.delegation.update(state({ sequence: 1, version: 1 }));
+  await s.advance(12000);
+  assert.equal(s.sent.length, 0);
+  s.delegation.close();
+});
+
+test("a rejected or missing fallback and a failed backend produce an explicit error", async () => {
+  for (const failure of ["timeout", "rejected", "failed"] as const) {
+    const s = setup(true);
+    s.speak("What was that?");
+    await s.advance(600);
+    if (failure === "timeout") await s.advance(10000);
+    else if (failure === "rejected")
+      s.delegation.receive({
+        type: "error",
+        error: { client_event_id: s.sent[0].event_id },
+      });
+    else s.backend({ type: "response.failed", response: {} });
+    assert.equal(s.events.at(-1)?.type, "error");
+    s.delegation.close();
+  }
+});
+
+test("a fallback respects the session's existing request budget", async () => {
+  const s = setup(false, 0);
+  s.speak("What is that?");
+  await s.advance(600);
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.events.at(-1)?.type, "error");
+});
+
+for (const initialDecision of ["wait_for_input", "ignore_input"])
+  test(`new speech after ${initialDecision} receives a second interpretation, not a repeated pause`, async () => {
+    const s = setup();
+    s.speak("When");
+    await s.advance(600);
+    s.backend({ type: "response.created", response: {} });
+    s.call(initialDecision, {});
+    s.backend({ type: "response.completed", response: {} });
+    await flush();
+    s.backend({ type: "response.completed", response: {} });
+    s.speak(" did that happen?");
+    await s.advance(600);
+    assert.equal(
+      s.sent.filter((e) => e.type === "response.create").length,
+      3,
+      "first request, tool continuation, then new interpretation",
+    );
+    s.backend({ type: "response.created", response: {} }, "d2");
+    s.backend({ type: "response.output_text.delta", delta: "In 1921." }, "d2");
+    s.backend({ type: "response.completed", response: {} }, "d2");
+    s.backend(
+      { type: "response.output_text.delta", delta: "Old response" },
+      "d1",
+    );
+    assert.equal(s.engages()[0].text, "When did that happen?");
+    assert.equal(s.engages().length, 1);
+    s.delegation.close();
+  });
+
+test("invalidated delegations cannot answer or control playback, but their usage is recorded", async () => {
+  const s = setup();
+  s.speak("Please explain");
+  s.delegate();
+  s.delegation.update(state({ sequence: 1, version: 1 }));
+  s.delegate();
+  s.backend({ type: "response.output_text.delta", delta: "Stale answer" });
+  s.call("resume_podcast", {});
+  s.backend({
+    type: "response.completed",
+    response: { usage: { input_tokens: 10, output_tokens: 5 } },
+  });
+  await s.advance(12000);
+  assert.equal(s.engages().length, 0);
+  assert.equal(s.decisions().length, 0);
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.costs.length, 1);
+  s.delegation.close();
+});
+
+test("a later utterance has its own fallback and old delegation events cannot answer it", async () => {
+  const s = setup();
+  s.speak("First question");
+  s.delegate();
+  s.backend({ type: "response.output_text.delta", delta: "First answer" });
+  s.backend({ type: "response.completed", response: {} });
+  const first = s.engages()[0];
+  s.delegation.receive({
+    type: "session.input_transcript.delta",
+    delta: "Second question",
+    start_ms: 3000,
+    end_ms: 3300,
+  });
+  const observing = s.events.at(-1);
+  assert.equal(observing?.type, "observing");
+  assert.notEqual(
+    observing?.type === "observing" && observing.input?.turnId,
+    first.input?.turnId,
+  );
+  await s.advance(600);
+  s.backend(
+    { type: "response.output_text.delta", delta: "Stale answer" },
+    "d1",
+  );
+  assert.equal(s.engages().length, 1);
+  s.backend(
+    { type: "response.output_text.delta", delta: "Second answer" },
+    "d2",
+  );
+  s.backend({ type: "response.completed", response: {} }, "d2");
+  assert.equal(s.engages()[1].text, "Second question");
+  assert.equal(
+    s.events.some((e) => e.type === "answered" && e.answer.includes("Stale")),
+    false,
+  );
+  s.delegation.close();
+});
+
+test("late output from a completed response cannot cancel the next utterance's fallback", async () => {
+  const s = setup();
+  s.speak("First question");
+  s.delegate();
+  s.backend({ type: "response.output_text.delta", delta: "First answer" });
+  s.backend({ type: "response.completed", response: {} });
+  s.delegation.receive({ type: "session.input_transcript.delta", delta: "Next question", start_ms: 3000, end_ms: 3300 });
+  s.backend({ type: "response.output_text.done" });
+  await s.advance(600);
+  assert.equal(s.sent.filter((e) => e.type === "response.create").length, 1);
   s.delegation.close();
 });
 

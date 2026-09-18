@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import type { QuestionTelemetry } from "./question-service.js";
 import { delegationInstructions } from "./dialogue-policy.js";
+import { LiveResponseTrigger } from "./live-response-trigger.js";
 
 interface Ports {
   /** Push to the browser's NDJSON control stream. */
@@ -32,6 +33,8 @@ interface Delegation {
   sources: Source[];
   engaged?: string;
   ignored: boolean;
+  waitingForInput: boolean;
+  hasTools: boolean;
   /** A local pause already sent for this utterance, resolving with the client's report. */
   fastPause?: Promise<{ applied: boolean; player: LivePlayerState }>;
 }
@@ -43,10 +46,10 @@ const fastPause =
   /^[\s,，。.!！?？]*(等一下|等等|等一等|先等一下|先停一下|停一下|暂停|暂停一下|wait|wait wait|hold on|hang on|pause|pause it)[\s,，。.!！?？]*$/iu;
 
 /**
- * Server side of Responses delegation. GPT-Live owns turn detection, delegates
- * to the configured backend model itself and speaks the result; this class
- * executes the backend's function calls (podcast lookups locally, player
- * actions through the browser) and tells the browser when to yield.
+ * Server side of Responses delegation. GPT-Live normally hands speech to the
+ * configured backend and speaks the result. Missing handoffs are requested over
+ * the same sideband. This class executes backend tools and tells the browser
+ * when to yield; the backend remains responsible for admission and intent.
  */
 export class LiveDelegation {
   private text = "";
@@ -57,6 +60,8 @@ export class LiveDelegation {
   private input?: PlayerInput;
   private inputStartMs?: number;
   private delegation?: Delegation;
+  private responseTrigger: LiveResponseTrigger;
+  private retiredDelegations = new Set<string>();
   private waiting?: {
     decisionId: string;
     resolve(applied: boolean, player: LivePlayerState): void;
@@ -75,6 +80,12 @@ export class LiveDelegation {
     private limit = 30,
   ) {
     this.contextAt = this.passageAt(player.positionMs);
+    this.responseTrigger = new LiveResponseTrigger({
+      now: ports.now,
+      after: ports.after,
+      request: (eventId) => this.requestResponse(eventId),
+      fail: (message) => this.fail(message),
+    });
   }
   private passageAt(positionMs: number) {
     return (
@@ -99,6 +110,10 @@ export class LiveDelegation {
         console.error("Aside voice supplier error", {
           error: JSON.stringify(event.error ?? event).slice(0, 400),
         });
+        this.responseTrigger.reject(
+          (event.error as { client_event_id?: unknown } | undefined)
+            ?.client_event_id,
+        );
         return;
     }
   }
@@ -155,7 +170,8 @@ export class LiveDelegation {
     }
     this.text = (this.text + this.separators + delta).slice(-12000);
     this.separators = "";
-    if (this.delegation) this.delegation.text = this.text;
+    if (this.delegation?.input.turnId === this.input.turnId)
+      this.delegation.text = this.text;
     this.ports.emit({
       type: "observing",
       version: this.player.version,
@@ -163,19 +179,59 @@ export class LiveDelegation {
       ...(this.debug ? { text: this.text } : {}),
     });
     this.pauseEarly();
+    if (this.input) this.responseTrigger.observe(this.input.turnId);
+  }
+  /** Responses stays responsible for admission; a missed Live handoff cannot stall it. */
+  private requestResponse(eventId: string) {
+    if (++this.calls > this.limit) {
+      this.fail(
+        "Voice session reached its request limit. Please reconnect the microphone.",
+      );
+      return;
+    }
+    if (this.delegation?.input.turnId !== this.input!.turnId)
+      this.replaceDelegation(this.startDelegation(`local:${eventId}`));
+    this.delegation!.waitingForInput = false;
+    this.delegation!.ignored = false;
+    console.log("Aside voice delegation fallback requested", {
+      characters: this.text.length,
+      version: this.player.version,
+      eventId,
+    });
+    this.ports.emit({
+      type: "classifying",
+      version: this.player.version,
+      input: this.marker(),
+      ...(this.debug ? { text: this.text } : {}),
+    });
+    this.ports.send({ type: "response.create", event_id: eventId });
+  }
+  private replaceDelegation(next: Delegation) {
+    if (this.delegation && this.delegation.id !== next.id)
+      this.retire(this.delegation.id);
+    this.delegation = next;
+  }
+  private retire(id: string) {
+    this.retiredDelegations.add(id);
+    if (this.retiredDelegations.size > 32)
+      this.retiredDelegations.delete(
+        this.retiredDelegations.values().next().value!,
+      );
   }
   /** A bare pause word stops the podcast now; the backend's later pause call is then already done. */
   private pauseEarly() {
     if (
       !this.input?.wasPlaying ||
       this.waiting ||
-      this.delegation?.fastPause ||
+      (this.delegation?.input.turnId === this.input.turnId &&
+        this.delegation.fastPause) ||
       !fastPause.test(this.text)
     )
       return;
     const decisionId = crypto.randomUUID();
-    this.delegation ??= this.startDelegation(`local:${decisionId}`);
-    this.delegation.fastPause = this.decide(decisionId, {
+    if (this.delegation?.input.turnId !== this.input.turnId)
+      this.replaceDelegation(this.startDelegation(`local:${decisionId}`));
+    this.delegation!.fastPause = this.decide(decisionId, {
       revision: this.player.revision,
       action: "player_control",
       commandId: `${this.input.turnId}:fast-pause`,
@@ -191,7 +247,7 @@ export class LiveDelegation {
     this.inputStartMs = undefined;
   }
   /** Which utterance an event belongs to, so the browser can attribute Live captions. */
-  private marker(delegation = this.delegation) {
+  private marker(delegation?: Delegation) {
     const input = delegation?.input ?? this.input;
     return input
       ? {
@@ -217,32 +273,48 @@ export class LiveDelegation {
       answer: "",
       sources: [],
       ignored: false,
+      waitingForInput: false,
+      hasTools: false,
     };
   }
   private created(event: Record<string, unknown>) {
     const delegation = event.delegation as
-      | { id?: string; target?: string }
-      | undefined;
+      { id?: string; target?: string } | undefined;
     if (delegation?.target && delegation.target !== "responses") return;
     const id = delegation?.id ?? crypto.randomUUID();
+    if (this.retiredDelegations.has(id)) return;
     // A local pause already opened this utterance's delegation record.
     if (this.delegation?.id.startsWith("local:") && !this.delegation.engaged)
       this.delegation.id = id;
-    else this.delegation = this.startDelegation(id);
+    else if (this.delegation?.id !== id)
+      this.replaceDelegation(this.startDelegation(id));
+    this.responseTrigger.started(this.delegation!.input.turnId);
     console.log("Aside voice delegation created", {
       characters: this.text.length,
-      wasPlaying: this.delegation.input.wasPlaying,
+      wasPlaying: this.delegation!.input.wasPlaying,
     });
     this.ports.emit({
       type: "classifying",
       version: this.player.version,
-      input: this.marker(),
+      input: this.marker(this.delegation),
       ...(this.debug ? { text: this.text } : {}),
     });
   }
   private backend(envelope: Record<string, unknown>) {
     const event = envelope.event as Record<string, unknown> | undefined;
     if (!event || typeof event.type !== "string") return;
+    const id =
+      typeof envelope.delegation_id === "string"
+        ? envelope.delegation_id
+        : undefined;
+    // Usage still belongs in the ledger even after a player action invalidates
+    // the response. Its text and tools must no longer affect the browser.
+    if (event.type === "response.completed" || event.type === "response.done") {
+      const response = event.response as Record<string, any> | undefined;
+      if (response?.usage) this.record(response);
+    }
+    if (id && this.retiredDelegations.has(id)) return;
+    const starting = !this.delegation || (id && this.delegation.id !== id);
     const delegation =
       this.delegation ??
       (this.delegation = this.startDelegation(
@@ -250,16 +322,27 @@ export class LiveDelegation {
           ? envelope.delegation_id
           : crypto.randomUUID(),
       ));
+    if (id && delegation.id !== id) {
+      this.retire(delegation.id);
+      delegation.id = id;
+    }
+    if (starting) this.responseTrigger.started(delegation.input.turnId);
     switch (event.type) {
+      case "response.created":
+        this.responseTrigger.started(delegation.input.turnId);
+        delegation.hasTools = false;
+        return;
       case "response.output_item.done": {
         const item = event.item as Record<string, unknown> | undefined;
-        if (item?.type === "function_call")
+        if (item?.type === "function_call") {
+          delegation.hasTools = true;
           void this.call(
             delegation,
             String(item.call_id ?? ""),
             String(item.name ?? ""),
             typeof item.arguments === "string" ? item.arguments : "{}",
           );
+        }
         return;
       }
       case "response.output_text.delta":
@@ -271,8 +354,6 @@ export class LiveDelegation {
         return;
       case "response.completed":
       case "response.done": {
-        const response = event.response as Record<string, any> | undefined;
-        if (response?.usage) this.record(response);
         if (delegation.answer.trim() && delegation.engaged) {
           console.log("Aside voice delegated answer", {
             characters: delegation.answer.length,
@@ -290,6 +371,12 @@ export class LiveDelegation {
           // not surface later at the front of the next real answer.
           this.ports.emit({ type: "discard", version: this.player.version });
         }
+        if (!delegation.hasTools)
+          this.responseTrigger.finished(
+            delegation.input.turnId,
+            delegation.waitingForInput || delegation.ignored,
+          );
+        delegation.hasTools = false;
         return;
       }
       case "response.failed":
@@ -298,6 +385,9 @@ export class LiveDelegation {
           type: event.type,
           detail: JSON.stringify(event.response ?? event).slice(0, 400),
         });
+        this.fail(
+          "Voice response failed. Please reconnect the microphone and try again.",
+        );
         return;
     }
   }
@@ -307,7 +397,9 @@ export class LiveDelegation {
       model: typeof response.model === "string" ? response.model : undefined,
       rounds: 1,
       tiers:
-        typeof response.service_tier === "string" ? [response.service_tier] : [],
+        typeof response.service_tier === "string"
+          ? [response.service_tier]
+          : [],
       inputTokens: usage.input_tokens ?? 0,
       cachedInputTokens: usage.input_tokens_details?.cached_tokens ?? 0,
       outputTokens: usage.output_tokens ?? 0,
@@ -454,6 +546,7 @@ export class LiveDelegation {
     if (name === "ignore_input" || name === "wait_for_input") {
       z.object({}).strict().parse(parsed);
       if (name === "ignore_input") delegation.ignored = true;
+      delegation.waitingForInput = name === "wait_for_input";
       this.ports.emit({
         type: "decision",
         version: this.player.version,
@@ -475,7 +568,8 @@ export class LiveDelegation {
   }
   private observed(player: LivePlayerState) {
     return {
-      playback: player.playback?.mode ?? (player.wasPlaying ? "playing" : "paused"),
+      playback:
+        player.playback?.mode ?? (player.wasPlaying ? "playing" : "paused"),
       interrupted: player.playback?.interrupted ?? false,
       positionMs: player.positionMs,
       playbackRate: player.config.playbackRate,
@@ -493,7 +587,7 @@ export class LiveDelegation {
     this.ports.emit({
       type: "decision",
       version: this.player.version,
-      input: this.marker(),
+      input: this.marker(this.delegation),
       decisionId,
       player: input,
       text,
@@ -558,7 +652,9 @@ export class LiveDelegation {
       this.waiting?.cancel();
       this.waiting = undefined;
       this.resetUtterance();
+      if (this.delegation) this.retire(this.delegation.id);
       this.delegation = undefined;
+      this.responseTrigger.reset();
     }
     this.player = player;
     if (ack && ack.decisionId === this.waiting?.decisionId) {
@@ -606,6 +702,7 @@ export class LiveDelegation {
   }
   close() {
     this.closed = true;
+    this.responseTrigger.close();
     this.waiting?.cancel();
     this.waiting = undefined;
     this.contextTimer?.();
@@ -613,5 +710,6 @@ export class LiveDelegation {
     this.delegation = undefined;
     this.resetUtterance();
     this.fragments.clear();
+    this.retiredDelegations.clear();
   }
 }
