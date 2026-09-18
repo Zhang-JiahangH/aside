@@ -51,10 +51,7 @@ const CHUNK_BYTES = (RATE * 2 * CHUNK_MS) / 1000;
 
 // The production prompts, so the probe measures what the Worker deploys.
 const backendInstructions = delegationInstructions(analysis, positionMs);
-const liveInstructions =
-  liveVoiceInstructions +
-  " Speaking style of the podcast host, for tone only: " +
-  analysis.hostStyle;
+const liveInstructions = liveVoiceInstructions;
 
 const t0 = performance.now();
 const stamp = () => Math.round(performance.now() - t0);

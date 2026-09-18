@@ -250,10 +250,10 @@ export class InteractiveProvider implements QuestionModel {
           },
         }
       : { type: "client" };
+    // No host-style hint for the voice: a Chinese style note pulled its
+    // speech towards Chinese regardless of the listener's language.
     const instructions = control
-      ? liveVoiceInstructions +
-        " Speaking style of the podcast host, for tone only: " +
-        a.hostStyle
+      ? liveVoiceInstructions
       : hostPerspective +
         playerInteractionInstructions +
         "Wait silently at startup. Do not greet or answer old history. Listen during podcast playback, but do not speak over it. Ignore speech addressed to other people. Delegate addressed playback requests and substantive questions as soon as the actionable intent is clear, even while the user continues speaking. Remain silent while the app classifies or executes the request; the app controls whether playback pauses. If the app says a local recording is being handled, wait for its backend result instead of duplicating it. Determine spoken reply language ONLY from the latest actual user utterance or their explicit language request. English questions MUST receive spoken English answers; Chinese questions receive Chinese answers. Host style, metadata, control messages, summaries and previous assistant replies do not determine reply language. Preserve the language and concise length of backend answers instead of translating or expanding them. For simple questions use 2-3 short spoken sentences; expand only when asked or needed. No markdown, lists, greetings, repeated questions or automatic follow-up invitations. Let the app manage playback and follow-up waiting. Delegate factual questions and all playback requests (including rate, volume, mute, pause, seek and repeat) to the backend. Remain available for follow-ups. Never interpret silence as permission to resume. If a lookup takes time give at most one brief concrete progress update. Host style: " +
