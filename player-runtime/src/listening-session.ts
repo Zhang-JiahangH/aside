@@ -1159,6 +1159,64 @@ export class ListeningSession {
       );
       return;
     }
+    if (event.type === "discard") {
+      if (event.version === this.controlVersion && !this.answerWindow)
+        this.voice?.discardPendingOutput?.();
+      return;
+    }
+    if (event.type === "answered") {
+      if (this.spokenReply?.decisionId === event.decisionId)
+        this.conversation.liveAnswered(event.answer, event.sources);
+      return;
+    }
+    if (event.type === "engage") {
+      if (this.seenDecisions.has(event.decisionId)) return;
+      this.seenDecisions.add(event.decisionId);
+      this.controlStatus = "engaged";
+      const current =
+        event.version === this.controlVersion &&
+        event.revision === this.playback.revision;
+      this.log(`Backend delegation: engage${current ? "" : " (stale, skipped)"}`);
+      if (!current) {
+        this.syncControl({ decisionId: event.decisionId, applied: false });
+        return;
+      }
+      this.conversation.liveInputPending(false);
+      this.input = event.player;
+      try {
+        if (
+          this.spokenReply &&
+          ["queued", "speaking", "quiet"].includes(this.spokenReply.state)
+        )
+          this.reportSpoken("interrupted");
+        this.spokenReply = {
+          decisionId: event.decisionId,
+          text: "",
+          state: "queued",
+        };
+        this.liveTranscript.resolve(
+          event.input ?? { turnId: event.decisionId },
+          "answer",
+          event.decisionId,
+        );
+        this.conversation.engageLive(event.text, event.decisionId);
+        this.reconcileLiveTranscript();
+        if (this.spokenReply?.text) {
+          // These captions already passed the audio gate before the backend
+          // engaged; attach the progress to its now-confirmed question.
+          this.reportSpoken(
+            this.playback.assistantSpeaking ? "speaking" : "quiet",
+          );
+          this.reconcileLiveTranscript();
+        }
+        this.syncControl({ decisionId: event.decisionId, applied: true });
+        this.log("Backend decision applied: engage");
+      } catch (error) {
+        this.syncControl({ decisionId: event.decisionId, applied: false });
+        throw error;
+      }
+      return;
+    }
     if (event.type !== "decision" || this.seenDecisions.has(event.decisionId))
       return;
     this.seenDecisions.add(event.decisionId);

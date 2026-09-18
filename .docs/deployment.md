@@ -454,3 +454,11 @@ node scripts/admin-usage.mjs --days 30 --json
 - `stop here` 之后播放器仍显示播放中的反馈未能复现或解释。
 
 补记（同日 07:1xZ，`continuous-cold` 修复）：上述第 2、3 项发布后用户仍反馈「说了很多次都没进去」。日志：06:57:49Z 的会话控制流已连上，但 18 秒内服务端零转写（没有任何 `Aside voice input heard`），同时浏览器发了 6 次 `/transcribe-question`（约每 2.5 秒一次）。原因在 `frontend/src/on-demand-voice.ts`：会话连上之前开口会进入本地录音（cold）路径，此时麦克风不接给语音会话；外放时播客声不断触发本地语音检测，每次触发都重启录音并作废上一次转写，于是永远停在 cold，麦克风始终没接上。连续监听（自动模式）下改为：会话连上后，检测器再触发不重启录音、不作废在途转写；第一次转写返回即结束本地阶段（不再要求「此刻没人说话」）；空转写或转写失败只结束本地阶段、不关会话；若连上 4 秒后仍没有在途转写则直接接上麦克风。按需模式（手动）行为不变。新增 3 项单元测试（其中 2 项做过去掉修复即失败的对照），243 项单元测试、13 项相关浏览器回归通过。尚未由用户实测。
+
+## Live 会话改用 Responses 委派（2026-09-18）
+
+背景与设计见 [ADR 0004](adr/0004-responses-delegation.md)。生产 Worker `c87820df-5aa0-444c-a992-c6134eb828a0`（`--containers-rollout=none`，保留现有 Container），发布前确认线上是队友 02:04Z 的 `f60afc3c`（#24），本分支已变基到含 #23、#24 的 main：保留 #23 的字幕归属（`engage` 事件带 `input` 标记，运行时按识别时间戳把 Live 字幕挂回对应问题），#24 的"先放行再答"路径随 LiveIntent 一并退役（其 QuestionService 侧的 `accept_question` 与运行时 `answer` 事件处理保留，服务端不再发出）。首页引用 `index-CRKzFSQd.js`；`/api/health` 200，`liveConfigured=true`；`npm run test:mobile-service` 4 项通过。
+
+本地验证：`npm run check`、300 项单元测试、Cloudflare 集成 50 项（重写 sideband 用例：委派配置、工具回报等执行回报、engage/answered、账本；一次运行中上传额度用例偶发失败，单跑通过）、Playwright voice-remote 19 项与 player 4 项通过。真服务探针：WebSocket 主连接与 aiortc WebRTC 主连接加 sideband 各若干会话，全部委派、工具选择正确，说完到答案开口 1.2 到 2.7 秒，暂停 1.3 秒。
+
+未验证：生产真人麦克风端到端；Live 对中文短控制词的委派稳定性（保留本地快速暂停作保险）；控制类工具后 Live 偶尔的口头确认。取证：`wrangler tail` 中 `Aside voice delegation created`、`Aside voice engage`、`Aside voice tool call`、`Aside voice decision acknowledged`。

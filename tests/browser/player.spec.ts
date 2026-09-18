@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { LiveIntent } from "../../backend/src/live-intent";
+import { FakeDelegatedLive } from "./delegation-fixture";
 import type { LiveControlEvent } from "@aside/engine/contracts";
 
 test.beforeEach(async ({ page }) => {
@@ -370,13 +370,11 @@ for (const manual of [false]) {
     page,
   }) => {
     let creates = 0,
-      questions = 0,
       transcriptions = 0;
     const usage: any[] = [];
-    let capturedHistory: any;
-    let intent!: LiveIntent;
+    let live!: FakeDelegatedLive;
     let emitted = Promise.resolve();
-    page.on("close", () => intent?.close());
+    page.on("close", () => live?.close());
     const emit = (event: LiveControlEvent) => {
       emitted = emitted
         .then(() =>
@@ -423,7 +421,7 @@ for (const manual of [false]) {
     });
     await page.route("**/api/episodes/*/live-control", (route) => {
       const update = route.request().postDataJSON();
-      intent.update(update.player, update.acknowledgement);
+      live.update(update.player, update.acknowledgement);
       return route.fulfill({ json: { ok: true } });
     });
     await page.route("**/api/episodes/*/usage", async (route) => {
@@ -489,29 +487,19 @@ for (const manual of [false]) {
       creates++;
       const { sdp, control } = route.request().postDataJSON();
       expect(control).toBeTruthy();
-      intent = new LiveIntent(control.player, [], {
-        answer: async (request) => {
-          questions++;
-          capturedHistory = request.history;
-          return {
-            revision: request.revision,
-            action:
-              request.history.at(-1)?.text === "Okay, go on."
-                ? "resume"
-                : "answer",
-            answer: "散步给思考留下一点空间。",
-            sources: [],
-            tools: ["search_podcast"],
-          };
-        },
+      const episode = await (
+        await page.request.get("/api/episodes/demo-natural-resume")
+      ).json();
+      // Only the backend model behind GPT-Live's delegation is substituted.
+      live = new FakeDelegatedLive(
+        control.player,
+        episode.analysis,
         emit,
-        context: () => {},
-        now: Date.now,
-        after: (ms, run) => {
-          const timer = setTimeout(run, ms);
-          return () => clearTimeout(timer);
-        },
-      });
+        (text) =>
+          text === "Okay, go on."
+            ? { resume: true }
+            : { answer: "散步给思考留下一点空间。", lookup: true },
+      );
       const answer = await page.evaluate(async (offer) => {
         const peer = new RTCPeerConnection();
         Object.assign(window, { asideLoopback: peer, asideCloudEvents: [] });
@@ -607,12 +595,25 @@ for (const manual of [false]) {
           }),
         );
       });
-    intent.receive({
+    live.receive({
       type: "session.input_transcript.delta",
       delta: "为什么散步会带来灵感？",
       start_ms: 0,
       end_ms: 500,
     });
+    await live.delegate("为什么散步会带来灵感？");
+    await emitted;
+    await page.waitForTimeout(300);
+    // The voice model speaks the backend's answer itself: its transcript
+    // arrives over the data channel once the reply window is open.
+    await page.evaluate(() =>
+      (window as any).asideCloudChannel.send(
+        JSON.stringify({
+          type: "session.output_transcript.delta",
+          delta: "散步给思考留下一点空间。",
+        }),
+      ),
+    );
     if (manual) await page.keyboard.up("Space");
     else
       await page.evaluate(() => {
@@ -625,17 +626,18 @@ for (const manual of [false]) {
     ).toBeVisible({
       timeout: 15000,
     });
-    await expect.poll(() => questions).toBe(1);
-    expect(capturedHistory.at(-1).text).toBe("为什么散步会带来灵感？");
-    await expect(page.locator(".message.assistant").last()).toContainText(
-      "散步给思考留下一点空间。",
-    );
-    // Emit real loopback audio: the countdown starts after audible output ends.
+    await expect.poll(() => live.utterances.length).toBe(1);
+    expect(live.utterances.at(-1)).toBe("为什么散步会带来灵感？");
+    // Emit real loopback audio: captions are paced against audible output,
+    // and the countdown starts after that output ends.
     await page.waitForTimeout(1100);
     await page.evaluate(() => {
       (window as any).asideAnswerGain.gain.value = 0.15;
     });
     await expect(page.locator(".status")).toContainText("正在回答");
+    await expect(page.locator(".message.assistant").last()).toContainText(
+      "散步给思考留下一点空间。",
+    );
     // Aside's audible answer takes over the dock waveform and marks its avatar.
     await expect(page.locator(".timeline-wave")).toHaveClass(/is-agent/);
     await expect(page.locator(".message.assistant.is-speaking")).toHaveCount(1);
@@ -665,10 +667,12 @@ for (const manual of [false]) {
     await page.evaluate(() => {
       (window as any).asideAnswerGain.gain.value = 0;
     });
+    // Quiet output is not a reply boundary: the spoken conversation stays
+    // held until the listener asks to continue, with no countdown offered.
     await expect(page.locator(".followup-window")).toContainText(
-      "秒后继续播放",
+      "准备好了，再继续听",
     );
-    await page.getByRole("button", { name: "先别继续" }).click();
+    await expect(page.getByRole("button", { name: "先别继续" })).toHaveCount(0);
     await page.waitForTimeout(3200);
     expect(
       await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
@@ -701,14 +705,20 @@ for (const manual of [false]) {
           }),
         );
       });
-      intent.receive({
+      live.receive({
         type: "session.input_transcript.delta",
         delta: "Okay, go on.",
         start_ms: 3000,
         end_ms: 3500,
       });
+      await live.delegate("Okay, go on.");
     }
-    await expect(page.locator(".status")).toContainText("回到音频");
+    // A server-owned resume returns to the anchor at once.
+    await expect
+      .poll(() =>
+        page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
+      )
+      .toBe(false);
     await page.evaluate(() => {
       (window as any).asideCloudChannel.send(
         JSON.stringify({
@@ -739,7 +749,7 @@ for (const manual of [false]) {
     await page.waitForTimeout(900);
     expect(
       await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
-    ).toBe(true);
+    ).toBe(false);
 
     await expect(
       page
@@ -747,7 +757,7 @@ for (const manual of [false]) {
         .filter({ hasText: manual ? "麦克风未监听" : "● 本地监听" }),
     ).toBeVisible();
     await expect.poll(() => usage.length).toBe(1);
-    expect(questions).toBe(2);
+    expect(live.utterances).toHaveLength(2);
     expect(transcriptions).toBe(0);
     expect(usage[0]).toMatchObject({
       sessionId: "loopback-test-session",

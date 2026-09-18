@@ -11,10 +11,8 @@ import {
   type LiveRequest,
 } from "@aside/engine/contracts";
 import { LiveControl } from "../../backend/src/live-control.js";
-import { QuestionService } from "../../backend/src/question-service.js";
 import { recordQuestionUsage } from "./usage.js";
 import { fetchWebSocketUpgrade } from "../../backend/src/websocket-upgrade.js";
-import { connectResponsesWorker } from "../../backend/src/responses-worker.js";
 import {
   liveSessionExpired,
   liveSessionPolicy,
@@ -102,55 +100,34 @@ export class LiveSupervisor extends DurableObject<Env> {
     };
     await this.ctx.storage.put("state", state);
     await this.ctx.storage.setAlarm(Date.now() + 10000);
-    const questions = new QuestionService(
-      new InteractiveProvider(
-        this.env.OPENAI_API_KEY!,
-        this.env.ASIDE_BACKEND_MODEL,
-        true,
-        (events) => connectResponsesWorker(this.env.OPENAI_API_KEY!, events),
-      ),
-      3,
-    );
-    // Start warming the intent model while Live negotiates its audio session.
-    // This is optional preparation, never a prerequisite for opening the mic.
-    const prepared = control?.earlyResponse
-      ? questions.prepareLive(analysis, atMs, history)
-      : undefined;
     try {
       const result = await new InteractiveProvider(
         this.env.OPENAI_API_KEY!,
         this.env.ASIDE_BACKEND_MODEL,
-      ).createLive(sdp, analysis, atMs, history);
+      ).createLive(
+        sdp,
+        analysis,
+        atMs,
+        history,
+        control ? { trial: !accountId } : undefined,
+      );
       state.session = result.session.id;
       // Connection creation must not consume the listener's session allowance.
       state.deadline = Date.now() + policy.seconds * 1000;
       if (control) {
+        // The backend model is invoked by GPT-Live itself; this side only
+        // executes its function calls and reports its cost from the events.
         this.control = new LiveControl(
           result.session.id,
           control,
           analysis,
-          history,
-          {
-            answer: async (...args) => {
-              if (Date.now() >= state.deadline || !(await enabled(this.env)))
-                throw Error("Trial stopped");
-              const result = await (prepared?.questions ?? questions).answer(
-                ...args,
-              );
-              if (Date.now() >= state.deadline || !(await enabled(this.env)))
-                throw Error("Trial stopped");
-              return result;
-            },
-          },
-          (text) => {
+          (event) => {
             if (this.socket?.readyState === 1)
-              this.socket.send(
-                JSON.stringify({
-                  type: "session.thinking.append",
-                  delegation_id: null,
-                  content: text,
-                }),
-              );
+              this.socket.send(JSON.stringify(event));
+            else
+              console.warn("Aside voice sideband unavailable for tool result", {
+                type: event.type,
+              });
           },
           (totals) =>
             this.ctx.waitUntil(
@@ -162,7 +139,6 @@ export class LiveSupervisor extends DurableObject<Env> {
               }),
             ),
           policy.intentCalls,
-          prepared?.close,
         );
       }
       await this.ctx.storage.put("state", state);
@@ -176,7 +152,6 @@ export class LiveSupervisor extends DurableObject<Env> {
         throw Error("Trial stopped");
       return { ...result, ...(control ? { control: true } : {}) };
     } catch (error) {
-      prepared?.close();
       this.control?.close();
       if (error instanceof LiveCreationRejected && !state.session) {
         await this.ctx.storage.delete("state");

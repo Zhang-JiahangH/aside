@@ -207,6 +207,29 @@ export const liveControlEventSchema = z.discriminatedUnion("type", [
     decisionId: z.string(),
     result: z.object({ ...answerFields, action: z.literal("answer") }),
   }),
+  /**
+   * The delegated backend is answering and the voice model will speak the
+   * result itself: the podcast yields and the reply audio window opens. There
+   * is no answer text to speak on the client; `text` is the accepted utterance.
+   */
+  z.object({
+    type: z.literal("engage"),
+    version: revisionSchema,
+    revision: revisionSchema,
+    input: liveInputMarkerSchema.optional(),
+    decisionId: z.string(),
+    player: playerInputSchema,
+    text: z.string(),
+  }),
+  /** A delegation ended without a reply (a playback control only): whatever the voice buffered meanwhile is not an answer. */
+  z.object({ type: z.literal("discard"), version: revisionSchema }),
+  /** The backend's finished answer text and sources, for references and diagnostics; the spoken wording is the voice model's. */
+  z.object({
+    type: z.literal("answered"),
+    decisionId: z.string(),
+    answer: z.string().max(64000),
+    sources: z.array(sourceSchema),
+  }),
   z.object({ type: z.literal("error"), error: z.string() }),
   z.object({ type: z.literal("closed") }),
 ]);

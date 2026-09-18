@@ -351,6 +351,36 @@ export class Conversation {
     if (value) this.followup.cancel();
     else this.scheduleFollowup();
   }
+  /**
+   * The delegated backend is answering and the voice model speaks the result
+   * itself. Opens the reply window without any client-side text to speak.
+   */
+  engageLive(text: string, decisionId: string) {
+    this.beginTurn(!this.host.playback().interruption);
+    this.streamIds = {
+      user: `user:${decisionId}`,
+      assistant: `assistant:${decisionId}`,
+    };
+    this.recognizeQuestion(text);
+    this.submittedText = text;
+    this.settled = true;
+    this.references = [];
+    this.host.log("Backend delegation engaged");
+    this.host.engage();
+    this.answerQueued = true;
+    // Audio inactivity cannot authorize podcast playback; wait for an
+    // explicit resume request throughout this spoken conversation.
+    this.hold();
+    this.host.voice()?.activity();
+    this.host.changed();
+  }
+  /** The backend's finished answer: references and length only; the transcript carries the words. */
+  liveAnswered(answer: string, sources: Source[]) {
+    this.references = sources;
+    this.noteAnswer(answer);
+    this.host.log(`Backend delegated answer (${answer.length} characters)`);
+    this.host.changed();
+  }
   /** A server decision arrives on the session stream; this never submits a question. */
   receiveLive(
     result: QuestionResult,
