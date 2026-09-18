@@ -1142,10 +1142,11 @@ function Main() {
                           nativeEvent.contentOffset.y <
                         80;
                     }}
-                    onMomentumScrollBegin={() => {
-                      followConversation.current = false;
-                    }}
                     onMomentumScrollEnd={({ nativeEvent }) => {
+                      // iOS also emits this after a nonanimated scrollToEnd.
+                      // Only a user drag may turn following off. Momentum may
+                      // restore following after the user reaches the bottom.
+                      if (followConversation.current) return;
                       followConversation.current =
                         nativeEvent.contentSize.height -
                           nativeEvent.layoutMeasurement.height -
