@@ -486,3 +486,13 @@ node scripts/admin-usage.mjs --days 30 --json
 发布与核对：`npm run check`、342 项单元测试、Cloudflare 集成 50 项通过；浏览器用例中语音、账号、试用、麦克风入口、收听控制、VAD 共 34 项通过（含 #33 的新用例）。全量浏览器运行有两项失败，均与本次改动无关：`player.spec.ts` 的 native WebRTC 用例在改动前的代码上同样失败；`public-samples.spec.ts` 期望 6 条英文示例，而本地后端有 12 条节目数据。发布前确认线上是队友 07:04Z 的 `020ab76c`（#33），与 origin/main `bc951fd` 一致，本分支已变基其上并解决了 `answered` 处理处的冲突（保留 #33 的打断判定，并传入 `final`），快进到 main（`67ab9e3`）。生产 Worker `01d95882-37eb-47ef-97de-7022cf246053`（`--containers-rollout=none`，保留现有 Container）。线上 `/api/health` 的 `autoResumeMs` 为 2000；首页引用 `index-DN2bg9Ls.js`，bundle 内已无"Enable microphone"，含人声暂停逻辑与 `/space` 跳转；`/`、`/zh`、`/space`、两张分享图、`/robots.txt`、`/sitemap.xml`、`/llms.txt` 均 200；`npm run test:mobile-service` 4 项通过。
 
 未验证：生产环境真人麦克风端到端（自动续播的时机、外放时人声暂停是否被节目自身的声音误触发、iPad）；Google 登录回调只有集成测试覆盖。取证：调试日志中的 `Podcast stopped for speech`、`Podcast continued`、`Backend delegated answer`。
+
+## 自动续播被"等待判断"卡住：修复与诊断（2026-09-18）
+
+上一节发布后，线上反馈语音回答结束后仍要说"继续"。没有拿到该次会话的客户端状态，原因未经线上证实；用此前探针保存的真实事件流核对过后端顺序（工具响应与最终文本响应各自 `response.created` → `response.completed`），`answered.final` 在真实流程中为 `true`，问题不在后端。代码中确认了一个会造成同样现象的缺陷：回答结束后本地语音检测一旦触发（咳嗽、"嗯"、外放回声），`liveInputPending(true)` 就关闭续播窗口，而它只会被后端的 `decision` 或 `engage` 清除；没有转写的声音不会产生任何判断，窗口永久关闭。`wait_for_input` 之后听众不再说话也是同样结果。
+
+改动：等待判断的状态在最后一次信号 5 秒后过期（期间仍有人说话则顺延），随后重新打开续播窗口。`voiceDiagnostics().autoResume` 给出等待时长与 `blockedBy` 列表（如 `input awaiting a decision`、`backend still answering`、`held after barge-in`），调试日志在窗口打开或被阻止时各写一行（`Auto-resume in …ms` / `Auto-resume waiting: …`）。
+
+发布与核对：`npm run check`、343 项单元测试通过（新增 1 项：回答后的无转写噪音不再困住节目），语音、VAD、收听控制浏览器用例 28 项通过。发布前线上仍是上一节的 `01d95882`，origin/main 无新提交，快进到 main（`37758dd`）。生产 Worker `b123b79e-69be-4397-9b0e-ccd0e9fa2b4d`（`--containers-rollout=none`）。首页引用 `index-CvYvYDIF.js`，bundle 含新逻辑；`/api/health` 200；`npm run test:mobile-service` 4 项通过。
+
+未验证：这是否就是线上那次不续播的原因。若仍不续播，打开 `?debug` 的语音诊断，读 `autoResume.blockedBy`。外放时回答的回声触发 #33 的插话打断会得到 `held after barge-in`，那是另一条路径，本次未改。
