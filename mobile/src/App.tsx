@@ -115,6 +115,8 @@ function Main() {
     const session = new ListeningSession(audio, api, {
       mode: "manual",
       spokenResume: "verified",
+      followupMs: 3000,
+      speechYield: "duck",
       liveContext: "server",
       voiceFactory: nativeVoiceFactory(coordinator),
     });

@@ -45,8 +45,10 @@ export interface SessionOptions {
   playerConfig?: Partial<PlayerConfig>;
   mode?: ListeningMode;
   followupMs?: number;
-  /** Mobile opt-in; Web retains explicit spoken resume until it adopts native playout evidence. */
+  /** Native mobile requires confirmed playout; Web uses the backend-final quiet window. */
   spokenResume?: "quiet" | "verified";
+  /** Mobile keeps ducking on speech; Web can pause immediately before admission. */
+  speechYield?: "duck" | "pause";
   /** Mobile Responses delegation owns its transcript window on the server. */
   liveContext?: "client" | "server";
   clock?: RuntimeClock;
@@ -68,6 +70,7 @@ export const attention = {
    * lines are transcribed as the listener's and swallow a short "wait".
    */
   speechLevel: 0,
+  speechDuckLevel: 0.15,
   duckMs: 150,
   releaseMs: 300,
   /** Longest soft yield without a fresh classification or decision. */
@@ -112,6 +115,7 @@ export class ListeningSession {
   private configured = false;
   private customWait: boolean;
   private spokenResume: "quiet" | "verified";
+  private speechLevel: number;
   private liveContext: "client" | "server";
   private error = "";
   private events: string[] = [];
@@ -157,6 +161,10 @@ export class ListeningSession {
     this.mode = options.mode ?? "auto";
     this.customWait = options.followupMs !== undefined;
     this.spokenResume = options.spokenResume ?? "quiet";
+    this.speechLevel =
+      options.speechYield === "duck"
+        ? attention.speechDuckLevel
+        : attention.speechLevel;
     this.liveContext = options.liveContext ?? "client";
     this.conversation = new Conversation(
       {
@@ -1507,7 +1515,7 @@ export class ListeningSession {
             this.prepareLiveOutput();
             // Local speech stops an audible assistant immediately. The
             // sideband still owns admission, intent and podcast commands.
-            if (active) this.attend(attention.speechLevel);
+            if (active) this.attend(this.speechLevel);
             // The decision is still to come: give it the full hold from here.
             else if (this.attending) this.attend(this.attendLevel);
             if (active && this.playback.interruption)
@@ -1614,11 +1622,7 @@ export class ListeningSession {
             if (
               this.serverVoice &&
               role === "assistant" &&
-              this.conversation.liveReplyId &&
-              !(
-                this.spokenResume === "verified" &&
-                this.input?.source === "text"
-              )
+              this.conversation.liveReplyId
             ) {
               this.liveTranscript.append(text, timing);
               this.reconcileLiveTranscript();

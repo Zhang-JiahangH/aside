@@ -476,11 +476,11 @@ export class Conversation {
     this.host.log("Backend delegation engaged");
     this.host.engage();
     this.answerQueued = true;
+    if (this.spokenResume === "verified") this.expectSpokenAnswer();
     this.bargedIn = false;
     // A quiet gap while the backend is still answering can be a lookup, not
     // the end of the reply: the follow-up window stays shut until `answered`.
     this.liveOpen = true;
-    if (this.spokenResume === "verified") this.expectSpokenAnswer();
     this.host.voice()?.activity();
     this.host.changed();
   }
@@ -653,6 +653,9 @@ export class Conversation {
     const voice = this.host.voice();
     if ((delegationId || speak) && voice) {
       this.answerQueued = true;
+      // A server-pushed answer has no completion event, and GPT-Live may pause
+      // to think before speaking again: silence cannot resume that one. An
+      // answer this client fetched is complete, so its audio ending is the end.
       if (this.spokenResume === "verified") {
         this.bargedIn = false;
         this.expectSpokenAnswer(result.answer);
