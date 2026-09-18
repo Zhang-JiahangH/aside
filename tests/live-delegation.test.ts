@@ -176,6 +176,24 @@ test("heard speech reaches Responses even when Live emits no delegation event", 
   const s = setup();
   s.speak("200 文大概多少钱");
   await s.advance(600);
+  assert.deepEqual(
+    s.sent.map((event) => event.type),
+    ["response.item.create", "response.create"],
+  );
+  const item = s.sent[0].item;
+  assert.equal(item.type, "message");
+  assert.equal(
+    item.role,
+    "user",
+    "recognized speech remains untrusted user data",
+  );
+  assert.equal(item.content[0].type, "input_text");
+  const snapshot = JSON.parse(item.content[0].text);
+  assert.equal(snapshot.voiceInput.text, "200 文大概多少钱");
+  assert.equal(snapshot.voiceInput.turnId, snapshot.player.turnId);
+  assert.equal(snapshot.player.source, "voice");
+  assert.equal(snapshot.player.positionMs, 45000);
+  assert.equal(snapshot.player.wasPlaying, true);
   assert.equal(s.sent.filter((e) => e.type === "response.create").length, 1);
   assert.equal(
     s.engages().length,
@@ -206,6 +224,61 @@ test("heard speech reaches Responses even when Live emits no delegation event", 
     false,
   );
   s.delegation.close();
+});
+
+test("a fallback carries the current audible assistant and preserves the utterance's original player state", async () => {
+  const s = setup();
+  s.speak("Yes");
+  const assistant = {
+    decisionId: "reply",
+    text: "Shall I resume?",
+    state: "quiet" as const,
+  };
+  s.delegation.update(
+    state({
+      sequence: 1,
+      positionMs: 47000,
+      wasPlaying: false,
+      audibleSource: "none",
+      playback: {
+        mode: "awaiting_followup",
+        interrupted: true,
+        resumeMs: 44000,
+      },
+      assistant,
+    }),
+  );
+  await s.advance(600);
+  const message = s.sent.find((event) => event.item?.type === "message");
+  assert.ok(
+    message,
+    "the backend must receive actual input before response.create",
+  );
+  const snapshot = JSON.parse(message.item.content[0].text);
+  assert.equal(snapshot.player.positionMs, 45000);
+  assert.equal(snapshot.conversation.playback.positionMs, 47000);
+  assert.equal(
+    snapshot.conversation.playback.playback.mode,
+    "awaiting_followup",
+  );
+  assert.deepEqual(snapshot.conversation.assistant, assistant);
+  s.delegation.close();
+});
+
+test("rejected transcript input is an explicit error even after response.created", async () => {
+  const s = setup();
+  s.speak("What did he mean?");
+  await s.advance(600);
+  const message = s.sent.find((event) => event.item?.type === "message");
+  assert.ok(message);
+  s.backend({ type: "response.created", response: {} });
+  s.delegation.receive({
+    type: "error",
+    error: { client_event_id: message.event_id, code: "invalid_value" },
+  });
+  assert.equal(s.events.at(-1)?.type, "error");
+  await s.advance(10000);
+  assert.equal(s.events.filter((event) => event.type === "error").length, 1);
 });
 
 test("a fallback still lets the model ignore bystanders without an interruption", async () => {
@@ -277,6 +350,18 @@ for (const initialDecision of ["wait_for_input", "ignore_input"])
     s.backend({ type: "response.completed", response: {} });
     s.speak(" did that happen?");
     await s.advance(600);
+    const inputs = s.sent
+      .filter((event) => event.item?.type === "message")
+      .map((event) => JSON.parse(event.item.content[0].text));
+    assert.deepEqual(
+      inputs.map((input) => input.voiceInput.text),
+      ["When", "When did that happen?"],
+    );
+    assert.equal(
+      inputs[0].voiceInput.turnId,
+      inputs[1].voiceInput.turnId,
+      "new words revise the same utterance",
+    );
     assert.equal(
       s.sent.filter((e) => e.type === "response.create").length,
       3,

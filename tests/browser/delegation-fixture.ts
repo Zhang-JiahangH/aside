@@ -42,8 +42,7 @@ export class FakeDelegatedLive {
   private delegation: LiveDelegation;
   private continuations: (() => void)[] = [];
   private serial = 0;
-  private transcript = "";
-  private transcriptEnd = -Infinity;
+  private queuedInput?: string;
   constructor(
     player: LivePlayerState,
     analysis: Analysis,
@@ -61,16 +60,30 @@ export class FakeDelegatedLive {
         emit,
         send: (event) => {
           if (event.type === "response.item.create") {
-            const item = event.item as { call_id: string; output: string };
-            this.toolReturns.push({
-              call_id: item.call_id,
-              output: JSON.parse(item.output),
-            });
+            const item = event.item as {
+              type: string;
+              call_id: string;
+              output: string;
+              content?: { text: string }[];
+            };
+            if (item.type === "function_call_output")
+              this.toolReturns.push({
+                call_id: item.call_id,
+                output: JSON.parse(item.output),
+              });
+            else if (item.type === "message")
+              this.queuedInput = JSON.parse(
+                item.content![0].text,
+              ).voiceInput.text;
           }
           if (event.type === "response.create") {
             const continueResponse = this.continuations.shift();
             if (continueResponse) continueResponse();
-            else void this.delegate(this.transcript, false);
+            else {
+              const text = this.queuedInput ?? "";
+              this.queuedInput = undefined;
+              void this.delegate(text, false);
+            }
           }
         },
         now: Date.now,
@@ -83,15 +96,6 @@ export class FakeDelegatedLive {
     );
   }
   receive(event: Record<string, unknown>) {
-    if (
-      event.type === "session.input_transcript.delta" &&
-      typeof event.delta === "string"
-    ) {
-      if (Number(event.start_ms) - this.transcriptEnd > 1200)
-        this.transcript = "";
-      this.transcript += event.delta;
-      this.transcriptEnd = Number(event.end_ms);
-    }
     this.delegation.receive(event);
   }
   update(player: LivePlayerState, ack?: LiveControlUpdate["acknowledgement"]) {
@@ -113,7 +117,7 @@ export class FakeDelegatedLive {
     const backend = (event: Record<string, unknown>) =>
       this.receive({ type: "response.event", delegation_id: id, event });
     backend({ type: "response.created", response: {} });
-    const decision = await this.decide(text, turn);
+    const decision = text ? await this.decide(text, turn) : { wait: true };
     const call = (name: string, args: unknown) =>
       new Promise<void>((resolve) => {
         this.continuations.push(() => {

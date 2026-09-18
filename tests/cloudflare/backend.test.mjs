@@ -2696,7 +2696,7 @@ test("Live sideband executes tools and recovers a missing delegation on one owne
   const player = { version: 0, sequence: 0, revision: 1, positionMs: 1000, wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig() };
   liveReply = async () => { throw Error("the server must not call the Responses API itself under delegation"); };
   let reader, sessionId;
-  const toolReturns = () => controlEvents.filter(e => e.type === "response.item.create").map(e => ({ callId: e.item.call_id, output: JSON.parse(e.item.output) }));
+  const toolReturns = () => controlEvents.filter(e => e.type === "response.item.create" && e.item.type === "function_call_output").map(e => ({ callId: e.item.call_id, output: JSON.parse(e.item.output) }));
   try {
     const before = liveCreations.length, callsBefore = networkCalls.length;
     const created = await a.request("/api/episodes/control-public/live", "POST", { sdp: "offer", atMs: 1000, control: { player, debug: true } }, { "cf-connecting-ip": testerIp });
@@ -2804,6 +2804,13 @@ test("Live sideband executes tools and recovers a missing delegation on one owne
     assert.equal(classifying.input.turnId, heard.input.turnId);
     const request = await requested;
     assert.deepEqual(Object.keys(request).sort(), ["event_id", "type"]);
+    const inputMessage = controlEvents.at(-2);
+    assert.equal(inputMessage.type, "response.item.create", "input precedes response.create on the same sideband");
+    assert.equal(inputMessage.item.role, "user");
+    const snapshot = JSON.parse(inputMessage.item.content[0].text);
+    assert.equal(snapshot.voiceInput.text, "200 文大概多少钱");
+    assert.equal(snapshot.voiceInput.turnId, heard.input.turnId);
+    assert.equal(snapshot.player.source, "voice");
     backend({ type: "response.created", response: {} }, "d4");
     backend({ type: "response.output_text.delta", delta: "要看时代和地区。" }, "d4");
     backend({ type: "response.completed", response: {} }, "d4");
