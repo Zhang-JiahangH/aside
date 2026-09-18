@@ -72,6 +72,7 @@ export class Conversation {
   private outputIsAnswer = false;
   private livePending = false;
   private liveAnswerId?: string;
+  private liveReplyOwner?: string;
   private samples: ResponseLatency[] = [];
   private latency: ResponseLatencyTracker;
   private followup: FollowupTimer;
@@ -106,6 +107,10 @@ export class Conversation {
   }
   get startedAt() {
     return this.beganAt;
+  }
+  /** Only NDJSON-admitted replies use the timestamped Live caption reconciler. */
+  get liveReplyId() {
+    return this.liveReplyOwner;
   }
   /** Read only: observing this must never submit or accept an utterance. */
   inputDiagnostics() {
@@ -155,6 +160,7 @@ export class Conversation {
     this.outputIsAnswer = false;
     this.livePending = false;
     this.liveAnswerId = undefined;
+    this.liveReplyOwner = undefined;
     this.latency.cancel();
     this.host.voice()?.setWorking(false);
     this.host.changed();
@@ -357,6 +363,7 @@ export class Conversation {
    */
   engageLive(text: string, decisionId: string) {
     this.beginTurn(!this.host.playback().interruption);
+    this.liveReplyOwner = decisionId;
     this.streamIds = {
       user: `user:${decisionId}`,
       assistant: `assistant:${decisionId}`,
@@ -390,6 +397,7 @@ export class Conversation {
   ) {
     if (result.action === "ignore" || result.action === "wait") return;
     this.beginTurn(!this.host.playback().interruption);
+    this.liveReplyOwner = decisionId;
     if (decisionId)
       this.streamIds = {
         user: `user:${decisionId}`,

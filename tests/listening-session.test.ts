@@ -1559,6 +1559,88 @@ test("a delegated engage pauses the podcast, opens the reply window without clie
   s.session.dispose();
 });
 
+for (const previousDelegation of [false, true]) {
+  test(`a submitted spoken answer keeps its captions and saved history with server control (previous delegation: ${previousDelegation})`, async (t) => {
+    const s = setup("auto", undefined, undefined, false, true);
+    t.after(() => s.session.dispose());
+    s.session.start();
+    await flush();
+    const previous: string[] = [];
+    if (previousDelegation) {
+      const decision = s.decision("answer");
+      s.push(decision);
+      s.callbacks.onOutput(true);
+      s.callbacks.onTranscript("assistant", "Earlier spoken answer");
+      s.callbacks.onOutput(false);
+      previous.push(decision.text, "Earlier spoken answer");
+    }
+    s.session.submitQuestion("200 文大概多少钱？", true);
+    s.answer(0, "A planned answer, not the spoken wording");
+    await flush();
+    assert.deepEqual(
+      s.session.getSnapshot().history.map((t) => t.text),
+      [...previous, "200 文大概多少钱？"],
+    );
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "二百文的购买力");
+    s.callbacks.onTranscript("assistant", "要看时代和地区。");
+    s.callbacks.onOutput(false);
+    const expected = [
+      ...previous,
+      "200 文大概多少钱？",
+      "二百文的购买力要看时代和地区。",
+    ];
+    assert.deepEqual(
+      s.session.getSnapshot().history.map((t) => t.text),
+      expected,
+    );
+    assert.deepEqual(
+      s.session.checkpoint().history.map((t) => t.text),
+      expected,
+    );
+    s.session.stop();
+    s.callbacks.onTranscript(
+      "assistant",
+      "This muted caption must not be saved",
+    );
+    const checkpoint = s.session.checkpoint();
+    s.session.load(episode, checkpoint);
+    assert.deepEqual(
+      s.session.getSnapshot().history.map((t) => t.text),
+      expected,
+    );
+  });
+}
+
+test("a cold first question answered through HTTP keeps its spoken history in a server-controlled session", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  const connected = s.holdLive();
+  s.session.start();
+  await flush();
+  s.callbacks.onSpeech(true);
+  s.callbacks.onSpeech(false);
+  connected();
+  await flush();
+  s.callbacks.onFirstQuestion("What does two hundred wen mean?");
+  assert.equal(s.requests.length, 1);
+  s.answer(0, "A planned reply");
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript(
+    "assistant",
+    "Its purchasing power depends on the period.",
+  );
+  s.callbacks.onOutput(false);
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    [
+      "What does two hundred wen mean?",
+      "Its purchasing power depends on the period.",
+    ],
+  );
+});
+
 test("an ignored server interpretation cannot resume the podcast after voice output goes quiet", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();
