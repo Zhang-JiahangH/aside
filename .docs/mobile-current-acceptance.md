@@ -8,7 +8,7 @@
 
 - iPhone：本地签名 Release 43，已通过局域网安装并启动；设备信息确认版本 43，嵌入 JS，生产 API，测试标记与 OTA 关闭。
 - Android：[EAS 20](https://expo.dev/accounts/jiahangzhang/projects/aside/builds/3af84051-5f8f-4436-b02d-4c6a56b56392)，固定签名密钥；从 19 覆盖更新成功，线上公开库、逐字稿与账号页检查通过。
-- 后端：`f559178`，main 至 `25e1621`；Worker `bb4dd397-dcf6-49d1-8921-1c062ac179db`。
+- PR 已合入 main `bdc90b1`，437 项应用测试、51 项 Cloudflare 集成测试及类型检查通过。本次未部署：main 的最新[发布记录](deployment.md)为 Worker `6d2870f2`，不含尚未合并的移动端后端；此前 `bb4dd397` 已成为历史记录。现有 iPhone 43 / Android 20 安装包仍来自 `2f7466b`。
 - [PR #29](https://github.com/qiz029/aside/pull/29) 仍为草稿。[UI 修复代码 CI](https://github.com/qiz029/aside/actions/runs/35328473929)通过，包含 425 项应用测试、类型检查、Cloudflare 与媒体容器验证。
 - `2f7466b` 精简原生提问工具栏，并修复最大字号下音频库及选项的可达性。双端本地候选为 42；[本轮证据](mobile-evidence/compact-ui-2026-09-18.json)区分原生 fixture 与生产包。后端和 Web 产品源码未在这次 UI 修复中改变。
 

@@ -532,3 +532,34 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 验证：421 项本地测试、类型/边界检查、Cloudflare Web/mobile 语音链路和 [完整 CI](https://github.com/qiz029/aside/actions/runs/35323289839) 通过；双端模拟器复用既有 build 38 验证成功，发布后 4 项登录路由/Bearer/Origin 检查通过。iPhone 39、Android 19 无需重装。此次验证未发邮件或调用真实模型。详细证据见 [移动端交付记录](continuous-mobile-delivery.md)。PR #29 仍为 draft；后续从 main 单独部署仍会移除未合并的移动端后端能力，发布前需继续核对作者、版本与源码。
 
 后续修正：`f559178` 阻止移动端的旧工具回执在手动操作、新问题或关闭会话之后重新打开旧回答、补发后台请求。425 项测试、类型检查、Cloudflare sideband 回归及 [CI](https://github.com/qiz029/aside/actions/runs/35324139889) 通过。确认 main 仍为 `25e1621`、线上前序作者/版本为本任务的 `62fe977a` 后，发布 Worker `bb4dd397-dcf6-49d1-8921-1c062ac179db`（保留 Container 与 Secrets），4 项鉴权烟测通过。既有手机版本可直接使用此修复，无新增模型或邮件调用。单路供应商音频的重叠回答边界仍单独记录，不以此修复宣称解决。
+
+## Jev 抢先决定忽略、暂停与继续（2026-09-18）
+
+决定：产品负责人在影子表仍为 0 行（上线后 7 小时无语音流量）时决定不再等影子数据，直接让 Jev 与后端模型并行、并抢先决定。依据只有离线评测：当天重跑 `npm run eval:jev` 为 73/78，p50 205ms、p95 372ms，置信度 ≥ 0.6 保留 65 句全对；5 个错判里 3 个是把播放中的短问题判成"忽略"，置信度最高 0.54。因此门槛定为 0.7（`jevActConfidence`，覆盖 59/78）。
+
+行为：后端模型仍对每句话做判断，Jev 不替代它，也不省后端调用。Jev 的回答先到且置信度 ≥ 0.7 时，`LiveDelegation.actEarly` 立即执行"忽略"（播客继续）、"暂停"或"继续"；后端随后的判断以它自己的为准：同样的忽略不再重复下发，暂停与继续复用已上报的执行结果，判为提问则照常 engage，把刚恢复的播客重新停下并作答。不抢先的情形：后端已先做出判断、用户还在继续说（Jev 看到的是半句话）、有未确认的播放决定、"调整播放"（Jev 不给参数）与"提问"。Jev 超时或失败时行为与此前完全一样。`jev_shadow.acted`（迁移 `0009`）标记 Jev 抢先执行的行，`acted = 1 AND agree = 0` 即用户看到被后端收回的次数：
+
+```
+npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --command \
+  "SELECT jev, COUNT(*) n, SUM(acted) acted, SUM(acted AND agree = 0) taken_back, ROUND(AVG(jev_ms)) jev_ms, ROUND(AVG(backend_ms)) backend_ms FROM jev_shadow WHERE status = 'ok' GROUP BY jev"
+```
+
+发布与核对：`npm run check`、354 项单元测试（新增协调器 4 项、Jev 模块 1 项、收听会话 1 项"先忽略后被 engage 推翻"）、Cloudflare 集成 50 项通过。迁移 `0009_jev_acted.sql` 已应用到生产 D1。发布前线上是另一位队友 08:28Z 从草稿 PR #29 部署的 `bb4dd397`（已含 Jev 影子提交，外加其未合并的移动端后端改动）；经产品负责人确认后部署 main（`401b649`），生产 Worker `40a69570-361e-4286-88a4-819a361e97ad`（`--containers-rollout=none`），首页引用 `index-ByL8DSq6.js`（前端无改动）。PR #29 的未合并改动第三次不在线上，需要他变基到 main 后重新部署。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过。
+
+未验证：生产上仍没有语音会话经过 Jev，Worker 到 OpenRouter 的调用、线上延迟和抢先路径都未经线上证实；被推翻的忽略可能丢掉 Live 在此之前缓冲的回答开头，真实听感未测。
+
+## 服务端控制下不再把节目文本交给语音（2026-09-18）
+
+现象：产品负责人在英文节目（Acquired 的 Hermès，约 3 小时 07 分处）用英文问 "Do they make perfume for men"，听到的是中文：先是一段刚播过内容的中文翻译（"……通过最近推出的很多香水，并在百货商店销售……苹果手表战略的进一步延续"），然后才是后端的回答，也是中文；整体感觉很慢。
+
+首批 Jev 线上数据（同一次会话，15:37:48–15:38:09Z，7 行）：Jev 延迟 115–273ms，Worker 到 OpenRouter 的链路已证实可用。抢先 3 次，3 次与后端不一致：两次 Jev 判"忽略"而后端判"等待"（都是不作声，无影响）；一次 Jev 以 0.95 判"继续"而后端按提问处理（一句 9 个字符的话，用 "Continue." 探针复现时后端自己也调了 `resume_podcast`，这类话本身有歧义）。一句 57 个字符的话被后端连续判了 5 次"等待"，Jev 判"忽略"，原文未存，无法确认是什么。样本太小，未据此调整 Jev。
+
+原因：`ListeningSession.sendContext` 在播放中每换一段就向 Live 会话追加一条 `session.thinking.append`，内容是最近三段节目原文、当前句前 160 字和一句中文备注。这是 Responses 委派之前的遗留：服务端控制下 Live 的提示词写的是"你不知道节目内容、必须委派"，手里却有节目文本，于是不委派、直接照着这段文本说话；该节目检查点里存着的 4 句助手回答全是中文（`liveStartupHistory` 会把最近 12 轮带进新会话），再加上中文备注，它就用中文说。
+
+复现（`scripts/live-delegation-probe.ts`，新增 `--history` 与 `--context`，生产提示词 + 该集真实分析 + 同一句英文语音，位置 11260000）：无历史无追加 2/2 英文且委派；只有中文历史 2/2 英文且委派；只有追加 3 次中 1 次无回答、1 次 Live 在后端答案之外自己加了节目内容；追加 + 中文历史 3 次中 2 次后端零输出、Live 自己说话，其中 1 次是中文，与线上听到的前半段几乎逐字相同。干净的探针（无历史、无追加）不能代表生产。
+
+修复（`2fc3ff6`）：服务端控制（自动插话）下 `sendContext` 不再向 Live 追加任何内容，后端指令里的 `recentlyHeard` 窗口不变；客户端委派路径（按住说话等）保留这段上下文，备注改为英文。新增收听会话测试 1 项（去掉修复即失败）。
+
+发布与核对：`npm run check`、355 项单元测试通过。发布前线上是本人 15:33Z 的 `40a69570`，origin/main 无他人新提交；由产品负责人本人执行推送与部署，生产 Worker `6d2870f2-fa97-4c5e-86c4-4b722e1ce9ab`（`--containers-rollout=none`），首页引用 `index-JfT-4BtI.js`。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过。PR #29 的未合并改动仍不在线上。
+
+未验证：修复未经真人线上会话证实。该集检查点里的中文助手回答仍会被带进新会话；只有历史时 2/2 为英文，若线上仍偶发中文，下一步是不再把旧的助手回答作为 Live 的启动历史。

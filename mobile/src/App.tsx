@@ -119,7 +119,6 @@ function Main() {
       spokenResume: "verified",
       followupMs: 3000,
       speechYield: "duck",
-      liveContext: "server",
       voiceFactory: nativeVoiceFactory(coordinator),
     });
     const sync = new CheckpointSync(

@@ -104,7 +104,6 @@ function setup(
   debugRecognition = false,
   server = false,
   spokenResume: "quiet" | "verified" = "quiet",
-  liveContext: "client" | "server" = "client",
   options: Pick<SessionOptions, "speechYield" | "followupMs"> = {},
 ) {
   const clock = new Clock();
@@ -271,7 +270,6 @@ function setup(
     playerConfig,
     clock,
     spokenResume,
-    liveContext,
     ...options,
     voiceFactory(_mic, _config, cb, remote) {
       createLive = () => remote.create("mock");
@@ -381,7 +379,6 @@ test("mobile delegates live context to the server across transcript gaps and pla
     false,
     true,
     "verified",
-    "server",
   );
   t.after(() => s.session.dispose());
   s.session.start();
@@ -410,19 +407,15 @@ test("mobile delegates live context to the server across transcript gaps and pla
   await s.session.dispose();
 });
 
-test("client context remains the default for Web and manual questions", async (t) => {
-  for (const [mode, owner] of [
-    ["auto", "client"],
-    ["manual", "server"],
-  ] as const) {
+test("client context remains available for non-server automatic and manual questions", async (t) => {
+  for (const mode of ["auto", "manual"] as const) {
     const s = setup(
       mode,
       undefined,
       undefined,
       false,
-      mode === "auto",
+      mode === "manual",
       "verified",
-      owner,
     );
     t.after(() => s.session.dispose());
     s.session.start();
@@ -1584,6 +1577,95 @@ test("a control-only delegation discards buffered voice output unless a reply wi
     s.commands.filter((c) => c === "discardPendingOutput").length,
     before + 1,
   );
+  s.session.dispose();
+});
+
+test("under server control the voice is never handed the podcast text, which it would answer from by itself", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.audio.positionMs = 45000;
+  s.session.audioTick();
+  await flush();
+  assert.deepEqual(
+    s.commands.filter((c) => c.startsWith("thinking:")),
+    [],
+    "the backend's instructions carry what was heard",
+  );
+  s.session.dispose();
+
+  const client = setup("auto");
+  client.session.start();
+  await flush();
+  client.audio.positionMs = 45000;
+  client.session.audioTick();
+  await flush();
+  const context = client.commands.filter((c) => c.startsWith("thinking:"));
+  assert.ok(context.length > 0, "a voice that answers itself still needs it");
+  assert.equal(
+    context.some((c) => /[\u4e00-\u9fff]/.test(JSON.parse(c.slice(9)).note)),
+    false,
+    "and no Chinese note pulls its speech towards Chinese",
+  );
+  client.session.dispose();
+});
+
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: an early ignore that the backend overrules still becomes an answered question`, async () => {
+  const s = setup(
+    "auto", undefined, undefined, false, true,
+    mobile ? "verified" : "quiet",
+    { speechYield: mobile ? "duck" : "pause" },
+  );
+  s.session.start();
+  await flush();
+  const input = { turnId: "server-turn", startMs: 0 };
+  const player = { ...s.serverState, source: "voice" as const, turnId: "server-turn" };
+  s.callbacks.onSpeech(true);
+  s.push({ type: "observing", version: s.serverState.version, input });
+  s.push({ type: "classifying", version: s.serverState.version, input });
+  await flush();
+  assert.equal(s.audio.playing, mobile, "mobile ducks speech; Web pauses before admission");
+  if (mobile) assert.ok(s.audio.level > 0 && s.audio.level < 1);
+  s.callbacks.onSpeech(false);
+  s.push({
+    type: "decision",
+    version: s.serverState.version,
+    input,
+    decisionId: crypto.randomUUID(),
+    player,
+    text: "",
+    result: {
+      revision: s.serverState.revision,
+      action: "ignore",
+      answer: "",
+      sources: [],
+      tools: ["ignore_input"],
+    },
+  });
+  await flush();
+  assert.equal(s.audio.playing, true, "the fast classifier let the podcast continue");
+  assert.equal(s.session.getSnapshot().state.interruption, undefined);
+  const decisionId = crypto.randomUUID();
+  s.push({
+    type: "engage",
+    version: s.serverState.version,
+    revision: s.serverState.revision,
+    input,
+    decisionId,
+    player,
+    text: "Is that actually true?",
+  });
+  await flush();
+  assert.equal(s.audio.playing, false, "the backend's answer takes it back");
+  assert.ok(s.session.getSnapshot().state.interruption);
+  assert.equal(s.updates.at(-1)?.acknowledgement?.decisionId, decisionId);
+  assert.equal(s.updates.at(-1)?.acknowledgement?.applied, true);
+  assert.ok(
+    s.commands.lastIndexOf("mute:false") > s.commands.lastIndexOf("discardPendingOutput"),
+    "the reply window opens after the ignored output was dropped",
+  );
+  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "Is that actually true?");
   s.session.dispose();
 });
 
@@ -3322,7 +3404,6 @@ test("mobile keeps speech ducking and its three-second default when server defau
     false,
     true,
     "verified",
-    "server",
     {
       speechYield: "duck",
       followupMs: 3000,

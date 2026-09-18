@@ -78,6 +78,7 @@ test("one record pairs Jev's choice with the backend's first decision, without t
     characters: 3,
     han: true,
     wasPlaying: true,
+    acted: false,
   });
   assert.equal(JSON.stringify(s.records[0]).includes("等一下"), false);
   assert.equal(s.requests[0].body.model, "typesafe/jev-1.13");
@@ -119,4 +120,28 @@ test("a superseded utterance or a backend that never decides still records Jev's
   never.advance(15000);
   assert.equal(never.records.length, 1);
   assert.equal(never.records[0].backend, undefined);
+});
+
+test("the caller hears Jev's answer as it arrives and the record keeps whether it acted", async () => {
+  const s = setup(() => answer("ignore", 0.91));
+  const heard: [string, number][] = [];
+  const handle = s.shadow(
+    { text: "Honey, dinner?", wasPlaying: true, interrupted: false },
+    (action, confidence) => {
+      heard.push([action, confidence]);
+      return true;
+    },
+  );
+  await flush();
+  assert.deepEqual(heard, [["ignore", 0.91]], "before the backend has decided");
+  handle.decided("ignore");
+  assert.equal(s.records[0].acted, true);
+
+  const failed = setup(() => new Response("", { status: 529 }));
+  failed.shadow({ text: "Hmm", wasPlaying: true, interrupted: false }, () => {
+    throw Error("a failure is never an answer");
+  }).close();
+  await flush();
+  assert.equal(failed.records[0].status, "http_529");
+  assert.equal(failed.records[0].acted, undefined);
 });

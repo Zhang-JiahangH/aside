@@ -11,6 +11,27 @@ Current requirement-by-requirement evidence and open gates:
 regressions, older native evidence, production observations and outstanding device
 or product decisions; the historical records below remain dated evidence.
 
+## Main compatibility — 2026-09-18, `bdc90b1`
+
+Merged main through `bdc90b1` into PR #29, preserving the published branch history.
+Both deployment histories are retained. Server-controlled voice now universally
+uses backend-owned programme context, following main's `2fc3ff6`; the obsolete
+mobile-only context switch is removed. Client-controlled and manual questions
+keep their context. Native verified completion, speech ducking, fixed continuation
+anchors and stale-tool cancellation remain intact.
+
+Main's early Jev ignore/pause/resume decisions and `0009_jev_acted.sql` are included.
+The early-decision tests now cover both Web and mobile, including a backend answer
+that reverses an early ignore. All 437 application tests and type/module-boundary
+checks pass; all 51 local Cloudflare integration tests pass, including the actual
+Web/mobile NDJSON and sideband paths. No live model or email is used for these regressions.
+
+This synchronization changes the PR, not the installed native candidates or the
+production Worker. Main's deployment record reports Worker
+`6d2870f2-fa97-4c5e-86c4-4b722e1ce9ab`, which excludes the unmerged mobile backend;
+the earlier `bb4dd397` entry below is historical. Production reconciliation remains
+a separate release action. iPhone 43 and Android 20 retain source `2f7466b`.
+
 ## Native UI — 2026-09-18, compact question tools
 
 Source `2f7466b` replaces the stacked idle voice heading, text field and recording
