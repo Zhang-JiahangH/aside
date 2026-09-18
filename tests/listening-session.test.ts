@@ -1509,6 +1509,59 @@ test("a control-only delegation discards buffered voice output unless a reply wi
   s.session.dispose();
 });
 
+test("an early ignore that the backend overrules still becomes an answered question", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  const input = { turnId: "server-turn", startMs: 0 };
+  const player = { ...s.serverState, source: "voice" as const, turnId: "server-turn" };
+  s.callbacks.onSpeech(true);
+  s.push({ type: "observing", version: s.serverState.version, input });
+  s.push({ type: "classifying", version: s.serverState.version, input });
+  await flush();
+  assert.equal(s.audio.playing, false, "speech stops the podcast");
+  s.callbacks.onSpeech(false);
+  s.push({
+    type: "decision",
+    version: s.serverState.version,
+    input,
+    decisionId: crypto.randomUUID(),
+    player,
+    text: "",
+    result: {
+      revision: s.serverState.revision,
+      action: "ignore",
+      answer: "",
+      sources: [],
+      tools: ["ignore_input"],
+    },
+  });
+  await flush();
+  assert.equal(s.audio.playing, true, "the fast classifier let the podcast continue");
+  assert.equal(s.session.getSnapshot().state.interruption, undefined);
+  const decisionId = crypto.randomUUID();
+  s.push({
+    type: "engage",
+    version: s.serverState.version,
+    revision: s.serverState.revision,
+    input,
+    decisionId,
+    player,
+    text: "Is that actually true?",
+  });
+  await flush();
+  assert.equal(s.audio.playing, false, "the backend's answer takes it back");
+  assert.ok(s.session.getSnapshot().state.interruption);
+  assert.equal(s.updates.at(-1)?.acknowledgement?.decisionId, decisionId);
+  assert.equal(s.updates.at(-1)?.acknowledgement?.applied, true);
+  assert.ok(
+    s.commands.lastIndexOf("mute:false") > s.commands.lastIndexOf("discardPendingOutput"),
+    "the reply window opens after the ignored output was dropped",
+  );
+  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "Is that actually true?");
+  s.session.dispose();
+});
+
 test("a delegated engage pauses the podcast, opens the reply window without client text, and records the answer's sources", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();

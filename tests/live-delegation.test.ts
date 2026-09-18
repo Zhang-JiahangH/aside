@@ -43,7 +43,13 @@ function setup(debug = false, limit = 30) {
   const events: LiveControlEvent[] = [];
   const sent: Record<string, any>[] = [];
   const costs: unknown[] = [];
-  const shadowed: { text: string; interrupted: boolean; decided: string[]; closed: boolean }[] = [];
+  const shadowed: {
+    text: string;
+    interrupted: boolean;
+    decided: string[];
+    closed: boolean;
+    answer(action: string, confidence: number): boolean;
+  }[] = [];
   const delegation = new LiveDelegation(
     state(),
     analysis,
@@ -59,8 +65,15 @@ function setup(debug = false, limit = 30) {
         };
       },
       telemetry: (totals) => costs.push(totals),
-      shadow: ({ text, interrupted }) => {
-        const entry = { text, interrupted, decided: [] as string[], closed: false };
+      shadow: ({ text, interrupted }, answered) => {
+        const entry = {
+          text,
+          interrupted,
+          decided: [] as string[],
+          closed: false,
+          answer: (action: string, confidence: number) =>
+            answered?.(action as "ignore", confidence) ?? false,
+        };
         shadowed.push(entry);
         return {
           decided: (action) => entry.decided.push(action),
@@ -632,7 +645,7 @@ test("the tool call cap ends the session with an explicit error", async () => {
   assert.equal(s.sent.filter((e) => e.type === "response.item.create").length, 2);
 });
 
-test("the shadow classifier hears each utterance the backend sees and its first decision, and changes nothing", async () => {
+test("the fast classifier hears each utterance the backend sees and its first decision, and changes nothing unasked", async () => {
   const s = setup();
   s.speak("Honey, what should we have for dinner?");
   s.delegate();
@@ -646,4 +659,96 @@ test("the shadow classifier hears each utterance the backend sees and its first 
   assert.deepEqual(s.shadowed[0].decided, ["ignore"]);
   assert.equal(s.decisions().at(-1)?.result.action, "ignore", "the backend's decision stands");
   s.delegation.close();
+});
+
+test("a confident fast ignore continues the podcast before the backend, which does not repeat it", async () => {
+  const s = setup();
+  s.speak("Honey, what should we have for dinner?");
+  s.delegate();
+  s.backend({ type: "response.created" });
+  assert.equal(s.shadowed[0].answer("ignore", 0.69), false, "not confident enough");
+  assert.equal(s.decisions().length, 0);
+  assert.equal(s.shadowed[0].answer("ignore", 0.93), true);
+  const [early] = s.decisions();
+  assert.equal(early.result.action, "ignore");
+  assert.deepEqual(early.result.tools, ["ignore_input"]);
+  s.call("ignore_input", {});
+  await flush();
+  assert.equal(s.decisions().length, 1, "the browser already has it");
+  assert.deepEqual(s.outputs(), [{ accepted: true }]);
+  s.delegation.close();
+});
+
+test("the backend overrules a fast ignore by answering", async () => {
+  const s = setup();
+  s.speak("Is that actually true?");
+  s.delegate();
+  s.backend({ type: "response.created" });
+  assert.equal(s.shadowed[0].answer("ignore", 0.8), true);
+  s.call("search_podcast", { query: "biography" });
+  await flush();
+  assert.equal(s.engages().length, 1, "the question is still answered");
+  assert.equal(s.engages()[0].text, "Is that actually true?");
+  s.delegation.close();
+});
+
+test("the fast classifier never acts after the backend, on half a sentence, or on what only the backend can do", async () => {
+  const s = setup();
+  s.speak("Slow it down");
+  s.delegate();
+  s.backend({ type: "response.created" });
+  assert.equal(s.shadowed[0].answer("control", 0.99), false, "no parameters to apply");
+  assert.equal(s.shadowed[0].answer("question", 0.99), false);
+  assert.equal(s.shadowed[0].answer("resume", 0.99), false, "the podcast is not stopped");
+  s.speak(" a little");
+  assert.equal(s.shadowed[0].answer("ignore", 0.99), false, "the listener kept talking");
+  assert.equal(s.decisions().length, 0);
+
+  const late = setup();
+  late.speak("Hmm");
+  late.delegate();
+  late.backend({ type: "response.created" });
+  late.call("wait_for_input", {});
+  await flush();
+  assert.equal(late.shadowed[0].answer("ignore", 0.99), false, "the backend already decided");
+  assert.deepEqual(late.decisions().map((d) => d.result.action), ["wait"]);
+  s.delegation.close();
+  late.delegation.close();
+});
+
+test("a fast pause or resume is applied once and its outcome answers the backend's own call", async () => {
+  const s = setup();
+  s.speak("Stop it there for a second");
+  s.delegate();
+  s.backend({ type: "response.created" });
+  assert.equal(s.shadowed[0].answer("pause", 0.9), true);
+  const [pause] = s.decisions();
+  assert.equal(pause.result.action, "player_control");
+  s.ack(pause.decisionId, true, { wasPlaying: false });
+  s.call("control_podcast", { commands: [{ type: "pause" }] });
+  await flush();
+  assert.equal(s.decisions().length, 1, "not paused twice");
+  assert.equal(s.outputs()[0].accepted, true);
+
+  const r = setup();
+  r.delegation.update(
+    state({ sequence: 1, wasPlaying: false, playback: { mode: "awaiting_followup", interrupted: true } }),
+  );
+  r.speak("OK, back to the podcast");
+  r.delegate();
+  r.backend({ type: "response.created" });
+  assert.equal(r.shadowed[0].answer("resume", 0.9), true);
+  const [resume] = r.decisions();
+  assert.equal(resume.result.action, "resume");
+  r.call("resume_podcast", {});
+  await flush();
+  assert.equal(r.decisions().length, 1, "not resumed twice");
+  r.delegation.update(
+    state({ sequence: 2, playback: { mode: "playing", interrupted: false } }),
+    { decisionId: resume.decisionId, applied: true },
+  );
+  await flush();
+  assert.equal(r.outputs()[0].accepted, true);
+  s.delegation.close();
+  r.delegation.close();
 });

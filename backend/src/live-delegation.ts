@@ -1,6 +1,8 @@
 import {
   backendAction,
+  jevActConfidence,
   type JevShadow,
+  type ShadowAction,
   type ShadowHandle,
 } from "./jev-shadow.js";
 import type { Analysis } from "@aside/engine/core";
@@ -27,7 +29,11 @@ interface Ports {
   now(): number;
   after(ms: number, callback: () => void): () => void;
   telemetry?(totals: QuestionTelemetry): void;
-  /** Optional side-by-side evaluation of another classifier; it never affects a decision. */
+  /**
+   * Optional fast classifier asked beside the backend. A confident "ignore",
+   * "pause" or "resume" is applied before the backend decides; the backend's
+   * decision still follows and stands over it.
+   */
   shadow?: JevShadow;
 }
 interface Delegation {
@@ -42,8 +48,14 @@ interface Delegation {
   ignored: boolean;
   waitingForInput: boolean;
   hasTools: boolean;
-  /** A local pause already sent for this utterance, resolving with the client's report. */
+  /** A pause already sent for this utterance, resolving with the client's report. */
   fastPause?: Promise<{ applied: boolean; player: LivePlayerState }>;
+  /** A resume already sent for this utterance on the fast classifier's answer. */
+  fastResume?: Promise<{ applied: boolean; player: LivePlayerState }>;
+  /** The browser was already told to ignore this utterance. */
+  fastIgnore?: boolean;
+  /** The backend has made its first decision; nothing may act ahead of it any more. */
+  decided?: boolean;
   shadow?: ShadowHandle;
 }
 /**
@@ -371,16 +383,23 @@ export class LiveDelegation {
         this.responseTrigger.started(delegation.input.turnId);
         delegation.hasTools = false;
         // Every path that reaches the backend passes here, with the text it saw.
-        if (delegation.text.trim())
-          delegation.shadow ??= this.ports.shadow?.({
-            text: delegation.text,
-            wasPlaying: delegation.input.wasPlaying,
-            interrupted: this.player.playback?.interrupted ?? false,
-          });
+        if (delegation.text.trim() && !delegation.shadow) {
+          const { text } = delegation;
+          delegation.shadow = this.ports.shadow?.(
+            {
+              text,
+              wasPlaying: delegation.input.wasPlaying,
+              interrupted: this.player.playback?.interrupted ?? false,
+            },
+            (action, confidence) =>
+              this.actEarly(delegation, text, action, confidence),
+          );
+        }
         return;
       case "response.output_item.done": {
         const item = event.item as Record<string, unknown> | undefined;
         if (item?.type === "function_call") {
+          delegation.decided = true;
           delegation.shadow?.decided(
             backendAction(
               String(item.name ?? ""),
@@ -399,6 +418,7 @@ export class LiveDelegation {
       }
       case "response.output_text.delta":
         if (typeof event.delta === "string") {
+          delegation.decided = true;
           delegation.shadow?.decided("question");
           delegation.answer = (delegation.answer + event.delta).slice(0, 64000);
           if (!delegation.engaged && !delegation.ignored)
@@ -444,6 +464,85 @@ export class LiveDelegation {
         );
         return;
     }
+  }
+  /**
+   * Apply the fast classifier's answer ahead of the backend. Only what the
+   * backend can take back is allowed: a wrongly continued podcast is stopped
+   * again by its engage, a wrong pause or resume by its own command. Playback
+   * changes carry parameters the classifier does not give, and an answer can
+   * only come from the backend.
+   */
+  private actEarly(
+    delegation: Delegation,
+    seen: string,
+    action: ShadowAction,
+    confidence: number,
+  ) {
+    if (
+      this.closed ||
+      this.delegation !== delegation ||
+      delegation.decided ||
+      // The listener kept talking: this answer is about half a sentence.
+      delegation.text !== seen ||
+      confidence < jevActConfidence
+    )
+      return false;
+    if (action === "ignore") {
+      delegation.fastIgnore = true;
+      this.emitPassive(delegation, "ignore", "ignore_input");
+    } else if (action === "pause") {
+      if (!delegation.input.wasPlaying || delegation.fastPause || this.waiting)
+        return false;
+      delegation.fastPause = this.decide(crypto.randomUUID(), {
+        revision: this.player.revision,
+        action: "player_control",
+        commandId: `${delegation.input.turnId}:fast-pause`,
+        commands: [{ type: "pause" }],
+        answer: "",
+        sources: [],
+        tools: ["control_podcast"],
+      });
+    } else if (action === "resume") {
+      const stopped =
+        this.player.playback?.interrupted ||
+        (this.player.playback
+          ? this.player.playback.mode !== "playing"
+          : !this.player.wasPlaying);
+      if (!stopped || this.waiting) return false;
+      delegation.fastResume = this.decide(crypto.randomUUID(), {
+        revision: this.player.revision,
+        action: "resume",
+        answer: "",
+        sources: [],
+        tools: ["resume_podcast"],
+      });
+    } else return false;
+    console.log("Aside voice early decision", {
+      action,
+      confidence: Math.round(confidence * 100) / 100,
+    });
+    return true;
+  }
+  private emitPassive(
+    delegation: Delegation,
+    action: "ignore" | "wait",
+    tool: string,
+  ) {
+    this.ports.emit({
+      type: "decision",
+      version: this.player.version,
+      input: this.marker(delegation),
+      decisionId: crypto.randomUUID(),
+      player: delegation.input,
+      text: "",
+      result: {
+        revision: this.player.revision,
+        action,
+        answer: "",
+        sources: [],
+        tools: [tool],
+      },
+    });
   }
   private record(response: Record<string, any>) {
     const usage = response.usage ?? {};
@@ -554,11 +653,14 @@ export class LiveDelegation {
         .strict()
         .parse(parsed);
       const onlyPause = commands.length === 1 && commands[0].type === "pause";
+      const onlyPlay = commands.length === 1 && commands[0].type === "play";
       let result: { applied: boolean; player: LivePlayerState } | undefined;
       if (onlyPause && delegation.fastPause) {
         // The listener's own pause word already stopped the podcast; report
         // that outcome instead of pausing twice.
         result = await delegation.fastPause;
+      } else if (onlyPlay && !followUpQuestion && delegation.fastResume) {
+        result = await delegation.fastResume;
       } else {
         const decisionId = crypto.randomUUID();
         result = await this.decide(decisionId, {
@@ -584,14 +686,15 @@ export class LiveDelegation {
     }
     if (name === "resume_podcast") {
       z.object({}).strict().parse(parsed);
-      const decisionId = crypto.randomUUID();
-      const result = await this.decide(decisionId, {
-        revision: this.player.revision,
-        action: "resume",
-        answer: "",
-        sources: [],
-        tools: ["resume_podcast"],
-      });
+      // Already resumed on the fast classifier's answer: report that outcome.
+      const result = await (delegation.fastResume ??
+        this.decide(crypto.randomUUID(), {
+          revision: this.player.revision,
+          action: "resume",
+          answer: "",
+          sources: [],
+          tools: ["resume_podcast"],
+        }));
       return {
         accepted: result.applied,
         player: this.observed(result.player),
@@ -601,21 +704,13 @@ export class LiveDelegation {
       z.object({}).strict().parse(parsed);
       if (name === "ignore_input") delegation.ignored = true;
       delegation.waitingForInput = name === "wait_for_input";
-      this.ports.emit({
-        type: "decision",
-        version: this.player.version,
-        input: this.marker(delegation),
-        decisionId: crypto.randomUUID(),
-        player: delegation.input,
-        text: "",
-        result: {
-          revision: this.player.revision,
-          action: name === "ignore_input" ? "ignore" : "wait",
-          answer: "",
-          sources: [],
-          tools: [name],
-        },
-      });
+      // The browser already has this utterance's "ignore".
+      if (name === "wait_for_input" || !delegation.fastIgnore)
+        this.emitPassive(
+          delegation,
+          name === "ignore_input" ? "ignore" : "wait",
+          name,
+        );
       return { accepted: true };
     }
     return { error: "Unknown tool" };

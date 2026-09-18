@@ -1,12 +1,15 @@
 /**
- * Shadow evaluation of Jev (TypeSafe's structured decision model, reached
- * through OpenRouter) as a fast admission classifier for heard utterances.
+ * Jev (TypeSafe's structured decision model, reached through OpenRouter) as a
+ * fast admission classifier for heard utterances.
  *
- * It runs beside the backend model and changes nothing: each utterance yields
+ * It runs beside the backend model, which still decides everything. Jev only
+ * answers sooner: the caller may act on a confident answer before the backend
+ * does, and the backend's decision then stands over it. Each utterance yields
  * one record comparing Jev's choice with the backend's first decision. The
  * endpoint is alpha with a single provider, so every failure is an outcome to
- * count, never an error to surface. No utterance text leaves this module except
- * in the request to the model.
+ * count, never an error to surface: without an answer the backend decides as
+ * before. No utterance text leaves this module except in the request to the
+ * model.
  */
 export type ShadowAction =
   | "ignore"
@@ -29,6 +32,8 @@ export interface ShadowRecord {
   /** Han characters present: the listener spoke Chinese. */
   han: boolean;
   wasPlaying: boolean;
+  /** The caller acted on Jev's answer before the backend decided. */
+  acted?: boolean;
 }
 
 export interface ShadowUtterance {
@@ -45,14 +50,24 @@ export interface ShadowHandle {
   close(): void;
 }
 
-export type JevShadow = (utterance: ShadowUtterance) => ShadowHandle;
+/** `answered` receives Jev's choice and reports whether the caller acted on it. */
+export type JevShadow = (
+  utterance: ShadowUtterance,
+  answered?: (action: ShadowAction, confidence: number) => boolean,
+) => ShadowHandle;
 
 /** Pinned: `jev-latest` would change the decisions being measured. */
 export const jevModel = "typesafe/jev-1.13";
 const endpoint = "https://openrouter.ai/api/alpha/decisions";
 /**
- * Give up here. A live admission path could afford about 300 ms; slower
- * answers are kept with their real latency so the analysis can draw that line.
+ * Least confidence to act on before the backend decides. In the offline set
+ * every miss was below 0.55, one of them a real question read as bystander
+ * talk at 0.54; 0.7 keeps a margin and still covers three quarters of input.
+ */
+export const jevActConfidence = 0.7;
+/**
+ * Give up here. An answer is only useful before the backend's own, about a
+ * second in; slower ones are kept with their real latency for the analysis.
  */
 export const jevTimeoutMs = 3000;
 /** A record without a backend decision is still written after this long. */
@@ -129,7 +144,7 @@ export function createJevShadow(
     after(ms: number, run: () => void): () => void;
   },
 ): JevShadow {
-  return (utterance) => {
+  return (utterance, answered) => {
     const started = ports.now();
     const entry: ShadowRecord = {
       status: "pending",
@@ -204,6 +219,7 @@ export function createJevShadow(
         entry.status = "ok";
         entry.jev = answer.choice as ShadowAction;
         entry.confidence = answer.confidence;
+        entry.acted = answered?.(entry.jev, answer.confidence ?? 0) ?? false;
       })
       .catch(() => {
         if (jevDone) return;

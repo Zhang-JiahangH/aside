@@ -20,8 +20,8 @@ export async function recordJevShadow(
   const now = new Date();
   try {
     await env.DB.prepare(
-      `INSERT INTO jev_shadow(id,ts,day,model,status,jev_ms,jev,confidence,backend,backend_ms,agree,characters,han,was_playing)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO jev_shadow(id,ts,day,model,status,jev_ms,jev,confidence,backend,backend_ms,agree,characters,han,was_playing,acted)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
       .bind(
         crypto.randomUUID(),
@@ -38,6 +38,7 @@ export async function recordJevShadow(
         entry.characters,
         Number(entry.han),
         Number(entry.wasPlaying),
+        Number(entry.acted ?? false),
       )
       .run();
   } catch (error) {
