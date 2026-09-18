@@ -549,9 +549,22 @@ export class LiveDelegation {
       );
       return;
     }
+    const version = this.player.version;
+    const id = delegation.id;
+    // Awaiting a player acknowledgement can outlive this utterance. Its tool
+    // result still settles the pending call, but cannot open audio or ask the
+    // backend to continue an answer the mobile listener has replaced.
+    const isCurrent = () =>
+      !this.mobile ||
+      (!this.closed &&
+        this.player.version === version &&
+        this.delegation === delegation &&
+        delegation.id === id &&
+        !this.retiredDelegations.has(id) &&
+        this.input?.turnId === delegation.input.turnId);
     let output: unknown;
     try {
-      output = await this.execute(delegation, name, args);
+      output = await this.execute(delegation, name, args, isCurrent);
     } catch (error) {
       output = {
         error: error instanceof Error ? error.message : "Tool failed",
@@ -573,12 +586,14 @@ export class LiveDelegation {
         output: JSON.stringify(output),
       },
     });
-    this.ports.send({ type: "response.create", event_id: crypto.randomUUID() });
+    if (isCurrent())
+      this.ports.send({ type: "response.create", event_id: crypto.randomUUID() });
   }
   private async execute(
     delegation: Delegation,
     name: string,
     args: string,
+    isCurrent: () => boolean,
   ): Promise<unknown> {
     const parsed: unknown = JSON.parse(args || "{}");
     const atMs = delegation.input.positionMs;
@@ -631,7 +646,12 @@ export class LiveDelegation {
           tools: ["control_podcast"],
         });
       }
-      if (followUpQuestion && !delegation.engaged && !delegation.ignored)
+      if (
+        isCurrent() &&
+        followUpQuestion &&
+        !delegation.engaged &&
+        !delegation.ignored
+      )
         this.engage(delegation, followUpQuestion);
       return {
         accepted: result.applied,

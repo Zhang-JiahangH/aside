@@ -545,8 +545,9 @@ test("a bare pause word stops the podcast before any delegation and the backend'
   s.delegation.close();
 });
 
-test("a pause word followed by a question engages on the follow-up only", async () => {
-  const s = setup();
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: a pause word followed by a question engages on the follow-up only`, async () => {
+  const s = setup(false, 30, mobile);
   s.speak("Hold on");
   await flush();
   assert.equal(s.decisions().length, 1);
@@ -561,6 +562,7 @@ test("a pause word followed by a question engages on the follow-up only", async 
   const [engage] = s.engages();
   assert.equal(engage.text, "What does that mean?");
   assert.equal(s.outputs()[0].accepted, true);
+  assert.equal(s.sent.filter((e) => e.type === "response.create").length, 1);
   s.delegation.close();
 });
 
@@ -600,6 +602,45 @@ test("resume waits for the client and a manual action cancels a pending report",
   assert.equal(s.outputs()[0].accepted, false);
   s.delegation.close();
 });
+
+for (const invalidation of ["manual action", "new utterance", "session close"] as const) {
+  test(`mobile cannot revive an old tool follow-up after ${invalidation}`, async () => {
+    const s = setup(false, 30, true);
+    s.speak("Pause and explain that passage");
+    s.delegate();
+    s.call("control_podcast", {
+      commands: [{ type: "pause" }],
+      followUpQuestion: "Explain the old passage",
+    });
+    await flush();
+    const [old] = s.decisions();
+    assert.ok(old);
+    assert.equal(s.engages().length, 0, "waiting for the client execution report");
+    if (invalidation === "manual action") {
+      s.delegation.update(state({ sequence: 1, version: 1 }));
+    } else if (invalidation === "new utterance") {
+      s.delegation.receive({ type: "session.input_transcript.delta", delta: "A different question", start_ms: 2000, end_ms: 2200 });
+      s.delegate("d2");
+      s.ack(old.decisionId);
+    } else {
+      s.delegation.close();
+    }
+    await flush();
+    assert.equal(s.engages().length, 0, "a late execution report must not open old answer audio");
+    assert.equal(s.sent.filter((e) => e.type === "response.create").length, 0,
+      "the obsolete tool result must not request another paid answer");
+    if (invalidation !== "session close") {
+      assert.equal(s.outputs().length, 1, "settle the outstanding tool without continuing its old answer");
+    }
+    if (invalidation === "new utterance") {
+      s.backend({ type: "response.output_text.delta", delta: "The new answer." });
+      s.backend({ type: "response.completed", response: {} });
+      assert.equal(s.engages().length, 1, "the replacement question still works");
+      assert.equal(s.engages()[0].text, "A different question");
+    }
+    s.delegation.close();
+  });
+}
 
 test("the backend's transcript window follows playback with session.update, at most once per passage", async () => {
   const s = setup();

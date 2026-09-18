@@ -2851,6 +2851,26 @@ test(`${client ?? "Web"}: Live sideband executes tools and recovers a missing de
     backend({ type: "response.completed", response: {} }, "d4");
     assert.equal((await next("engage")).text, "200 文大概多少钱");
     assert.equal((await next("answered")).answer, "要看时代和地区。");
+    if (client === "mobile") {
+      // A mobile playback change cancels the pending tool's follow-up. Its
+      // result still settles over the real sideband, without another response.
+      sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Pause and explain the old passage", start_ms: 14000, end_ms: 14500 }));
+      sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d5", target: "responses" } }));
+      functionCall("c5", "control_podcast", { commands: [{ type: "pause" }], followUpQuestion: "Explain the old passage" }, "d5");
+      await next("decision");
+      const continuations = currentControl().filter(e => e.type === "response.create").length;
+      assert.equal((await a.request(path, "PUT", { sessionId, player: { ...player, version: 1, sequence: 4 } })).status, 200);
+      const canceled = await waitForControl(() => toolReturns().find(r => r.callId === "c5"));
+      assert.equal(canceled.output.accepted, false);
+      sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "A new question", start_ms: 17000, end_ms: 17500 }));
+      sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d6", target: "responses" } }));
+      backend({ type: "response.output_text.delta", delta: "A new answer." }, "d6");
+      backend({ type: "response.completed", response: {} }, "d6");
+      assert.equal((await next("engage")).text, "A new question", "the canceled follow-up cannot reopen the audio window");
+      assert.equal((await next("answered")).answer, "A new answer.");
+      assert.equal(currentControl().filter(e => e.type === "response.create").length, continuations,
+        "the canceled follow-up did not issue a paid continuation");
+    }
     const usage = await db.prepare("SELECT model, tiers, input_tokens, reasoning_tokens FROM question_usage WHERE owner_id=? ORDER BY ts DESC LIMIT 1").bind(a.id).all();
     assert.deepEqual(usage.results[0], { model: "gpt-5.6-luna", tiers: "priority", input_tokens: 1200, reasoning_tokens: 10 }, "delegated cost is ledgered from the supplier's usage");
     const rows = await db.prepare("SELECT bucket FROM budgets WHERE bucket=?").bind(`trial:${new Date().toISOString().slice(0, 10)}:question:${a.id}`).all();
