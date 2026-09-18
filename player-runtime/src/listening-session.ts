@@ -1439,7 +1439,8 @@ export class ListeningSession {
             this.conversation.outputQuiet();
           }
           // Playback silence can be a thinking gap, never a Live turn boundary.
-          this.reportSpoken(active ? "speaking" : "quiet");
+          if (this.conversation.liveReplyId === this.spokenReply?.decisionId)
+            this.reportSpoken(active ? "speaking" : "quiet");
         },
         onTranscript: (role, text, timing) => {
           if (this.serverVoice && role === "user") {
@@ -1469,7 +1470,13 @@ export class ListeningSession {
                 ? "Skipped while playback resumes"
                 : "Skipped: no active input";
           if (accepted) {
-            if (this.serverVoice && role === "assistant") {
+            // HTTP answers, including first-connection captures, have no
+            // NDJSON reply ID. Their captions belong to the current turn.
+            if (
+              this.serverVoice &&
+              role === "assistant" &&
+              this.conversation.liveReplyId
+            ) {
               this.liveTranscript.append(text, timing);
               this.reconcileLiveTranscript();
             } else this.conversation.transcript(role, text);
