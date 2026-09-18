@@ -21,7 +21,8 @@ maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice
 - `upload-android.yaml`: copy a generated WAV named `Aside-upload.wav` to `/sdcard/Download` first. iOS Files uses the app's Documents folder; open the **thumbnail** of the generated file.
 - `background-start.yaml`: open the 31-minute silent AAC fixture and put the app in the background.
 - `locked-start.yaml`: restart that fixture at its transcript anchor and lock the device. Retain the exact lock timestamp. Wait at least 30 real minutes, then inspect native media state / lock controls and reopen with `background-finish.yaml`. A playing icon alone is insufficient: verify actual position exceeds 30 minutes.
-- `voice-autoresume.yaml` / `voice-capture.yaml`: focused follow-ups for an already signed-in app. Clear the existing hold by actively continuing before testing automatic continuation.
+- `voice-resume.yaml` / `voice-capture.yaml`: focused follow-ups for an already signed-in app. Spoken answers stay paused for follow-up questions; only an explicit Continue resumes the podcast. Silence is not a reliable end-of-answer signal. The native idle timer releases the unused Live connection without resuming playback; pending transcription, backend work, active audio and recording prevent idle closure.
+- `voice-history.yaml`: use an empty checkpoint and `QUESTION_DELAY_MS=15000` to verify a recognized question appears before the answer, survives background cancellation, and restores after restart. Require the user-role bubble rather than the composer's similarly named accessibility label.
 
 The fixture uses the actual production Worker, D1/R2, media decoder and analysis workflow. External transcription/model output is deterministic; the RTC peer transports real audio and data channels. These checks do not measure production model quality/latency, physical audio routes, Apple signing or distribution.
 
