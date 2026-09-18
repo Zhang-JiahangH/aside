@@ -1523,18 +1523,27 @@ test("a delegated engage pauses the podcast, opens the reply window without clie
   });
   await flush();
   assert.equal(s.audio.playing, false, "the backend is answering: hard yield");
-  assert.equal(s.commands.some((c) => c.startsWith("commentary:")), false, "the voice speaks the backend's answer itself");
+  assert.equal(
+    s.commands.some((c) => c.startsWith("commentary:")),
+    false,
+    "the voice speaks the backend's answer itself",
+  );
   assert.ok(s.commands.includes("mute:false"), "the reply audio window opens");
   assert.equal(s.updates.at(-1)?.acknowledgement?.decisionId, decisionId);
   assert.equal(s.updates.at(-1)?.acknowledgement?.applied, true);
   assert.equal(s.updates.at(-1)?.player.assistant?.state, "queued");
-  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "What is a biography?");
+  assert.equal(
+    s.session.getSnapshot().history.at(-1)?.text,
+    "What is a biography?",
+  );
   assert.equal(s.requests.length, 0, "no frontend question request");
   s.push({
     type: "answered",
     decisionId,
     answer: "A biography is a life story.",
-    sources: [{ text: "A biography tells someone else's life story.", startMs: 20000 }],
+    sources: [
+      { text: "A biography tells someone else's life story.", startMs: 20000 },
+    ],
   });
   await flush();
   assert.equal(s.session.getSnapshot().sources.length, 1);
@@ -1544,7 +1553,11 @@ test("a delegated engage pauses the podcast, opens the reply window without clie
   s.callbacks.onOutput(false);
   await flush();
   assert.equal(s.session.getSnapshot().history.at(-1)?.role, "assistant");
-  assert.equal(s.audio.playing, false, "quiet output is not permission to resume");
+  assert.equal(
+    s.audio.playing,
+    false,
+    "quiet output is not permission to resume",
+  );
   const stale = {
     type: "engage" as const,
     version: s.serverState.version + 5,
@@ -1639,6 +1652,34 @@ test("a cold first question answered through HTTP keeps its spoken history in a 
       "Its purchasing power depends on the period.",
     ],
   );
+});
+
+test("barge-in also cuts a first-connection HTTP answer without a Live reply ID", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  const connected = s.holdLive();
+  s.session.start();
+  await flush();
+  s.callbacks.onSpeech(true);
+  s.callbacks.onSpeech(false);
+  connected();
+  await flush();
+  s.callbacks.onFirstQuestion("Explain this story");
+  s.answer(0, "A planned reply");
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "The heard prefix");
+  s.commands.length = 0;
+  s.callbacks.onSpeech(true);
+  assert.ok(s.commands.includes("interrupt"));
+  assert.equal(s.commands.includes("prepareOutput"), false);
+  s.callbacks.onTranscript("assistant", " unheard tail");
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    ["Explain this story", "The heard prefix"],
+  );
+  s.callbacks.onSpeech(false);
+  assert.equal(s.commands.at(-1), "prepareOutput");
 });
 
 test("an ignored server interpretation cannot resume the podcast after voice output goes quiet", async () => {
@@ -2211,6 +2252,98 @@ test("interrupting a spoken reply reports the admitted prefix, never its planned
   s.session.dispose();
 });
 
+test("local speech cuts an audible Live reply before any transcript or backend decision", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const first = s.decision("answer");
+  s.push(first);
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "The part you heard");
+  const revision = s.serverState.revision;
+  s.commands.length = 0;
+
+  s.callbacks.onSpeech(true);
+  assert.ok(
+    s.commands.includes("interrupt"),
+    "stop locally, without a server round trip",
+  );
+  assert.ok(s.commands.includes("mute:true"));
+  assert.equal(
+    s.commands.includes("prepareOutput"),
+    false,
+    "drop old audio while the listener speaks",
+  );
+  s.callbacks.onSpeech(true);
+  assert.equal(s.commands.filter((c) => c === "interrupt").length, 1);
+  s.callbacks.onInputTranscript?.("Wait, another question");
+  s.push({ type: "observing", version: s.serverState.version });
+  assert.equal(s.commands.includes("prepareOutput"), false);
+  s.callbacks.onTranscript("assistant", " unheard old tail");
+  s.callbacks.onOutput(true);
+  s.push({
+    type: "answered",
+    decisionId: first.decisionId,
+    answer: "The unheard planned ending",
+    sources: [{ text: "A late reference", startMs: 20000 }],
+  });
+  assert.deepEqual(s.session.getSnapshot().sources, []);
+  await flush();
+  assert.equal(s.serverState.audibleSource, "none");
+  assert.equal(
+    s.serverState.revision,
+    revision,
+    "local audio gating must not stale the new backend decision",
+  );
+  assert.deepEqual(s.serverState.assistant, {
+    decisionId: first.decisionId,
+    text: "The part you heard",
+    state: "interrupted",
+  });
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    [first.text, "The part you heard"],
+  );
+
+  s.callbacks.onSpeech(false);
+  assert.equal(
+    s.commands.at(-1),
+    "prepareOutput",
+    "retain the next reply's prefix after speech ends",
+  );
+  s.push(s.decision("ignore"));
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(
+    s.audio.playing,
+    false,
+    "ignored input does not resume either audio source",
+  );
+  s.commands.length = 0;
+  const next = { ...s.decision("answer"), text: "The new question" };
+  s.push(next);
+  await flush();
+  assert.ok(s.commands.includes("mute:false"));
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "The new reply from its first word");
+  s.clock.advance(250);
+  await flush();
+  assert.equal(s.serverState.assistant?.state, "speaking");
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    [
+      first.text,
+      "The part you heard",
+      next.text,
+      "The new reply from its first word",
+    ],
+  );
+  assert.equal(s.requests.length, 0);
+  s.session.dispose();
+});
+
 test("cancelling a queued reply before audio starts does not report its transcript as spoken", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();
@@ -2234,6 +2367,10 @@ test("recognition notifications before answer audio starts cannot swallow its fi
   s.push(answer);
   await flush();
   assert.equal(s.serverState.assistant?.state, "queued");
+  s.commands.length = 0;
+  s.callbacks.onSpeech(true);
+  s.callbacks.onSpeech(false);
+  assert.equal(s.commands.includes("interrupt"), false);
   s.push({ type: "observing", version: s.serverState.version });
   s.push({ type: "classifying", version: s.serverState.version });
   s.callbacks.onTranscript("assistant", "因为这些名目都不合，");
@@ -2284,13 +2421,14 @@ test("given a pending voice request, arm audio before classification even with d
   await flush();
   assert.ok(s.commands.includes("mute:false"));
   s.callbacks.onOutput(true);
+  s.callbacks.onOutput(false);
   s.commands.length = 0;
   s.callbacks.onSpeech(true);
   s.callbacks.onInputTranscript?.("Honey, dinner?");
   assert.equal(
     s.commands.includes("prepareOutput"),
     false,
-    "do not clear/rearm an audible answer",
+    "do not clear/rearm a reply during a thinking gap",
   );
   s.callbacks.onOutput(false);
   s.commands.length = 0;

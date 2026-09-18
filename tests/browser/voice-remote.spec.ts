@@ -310,6 +310,121 @@ async function setupRemote(
   };
 }
 
+test("microphone speech stops an audible reply before the backend sees a transcript, then a new reply keeps its prefix", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const s = await setupRemote(page, true, async (_text, turn) => {
+    if (turn === 2) await pending;
+    return { answer: "Explanation" };
+  });
+  await page.locator(".debug-toggle").click();
+  const diagnostics = async () =>
+    JSON.parse(
+      (await page
+        .getByRole("region", { name: "Voice diagnostics" })
+        .locator("pre")
+        .textContent())!,
+    );
+  const caption = (delta: string) =>
+    page.evaluate(
+      (delta) =>
+        (window as any).remoteChannel.send(
+          JSON.stringify({ type: "session.output_transcript.delta", delta }),
+        ),
+      delta,
+    );
+  await s.speak(["Tell me about this story"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  await page.evaluate(() => {
+    const { ctx, gain } = (window as any).remoteOutput;
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+  });
+  await expect
+    .poll(async () => (await diagnostics()).session?.spokenReply?.state)
+    .toBe("speaking");
+  await caption("The part you heard");
+  await expect(
+    page.locator(".message.assistant .message-content p"),
+  ).toHaveText("The part you heard");
+
+  // Real local capture frames, with no new transcript or NDJSON decision.
+  await page.evaluate(() => {
+    const { ctx, gain } = (window as any).remoteMic;
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+  });
+  await expect
+    .poll(async () => (await diagnostics()).session?.spokenReply?.state)
+    .toBe("interrupted");
+  await expect
+    .poll(async () => (await diagnostics()).session?.voice?.live?.outputGate)
+    .toBe("discard");
+  expect(s.utterances).toHaveLength(1);
+  await expect
+    .poll(() => s.updates.at(-1)?.player?.assistant?.state)
+    .toBe("interrupted");
+  const stoppedFrames = (await diagnostics()).session.voice.live.output
+    .playedFrames;
+  const discardedFrames = (await diagnostics()).session.voice.live.output
+    .discardedFrames;
+  await caption(" unheard old tail");
+  await expect
+    .poll(
+      async () =>
+        (await diagnostics()).session.voice.live.output.discardedFrames,
+    )
+    .toBeGreaterThan(discardedFrames);
+  expect((await diagnostics()).session.voice.live.output.playedFrames).toBe(
+    stoppedFrames,
+  );
+  await expect(
+    page.locator(".message.assistant .message-content p"),
+  ).toHaveText("The part you heard");
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+
+  await page.evaluate(() => {
+    for (const source of [
+      (window as any).remoteMic,
+      (window as any).remoteOutput,
+    ])
+      source.gain.gain.setValueAtTime(0, source.ctx.currentTime);
+  });
+  await expect
+    .poll(async () => (await diagnostics()).session?.voice?.live?.outputGate)
+    .toBe("hold");
+  await s.speak(["Why is he called Ah Q?"]);
+  await expect.poll(() => s.utterances.length).toBe(2);
+  // New output can arrive before the delayed backend admission.
+  await page.evaluate(() => {
+    const { ctx, gain } = (window as any).remoteOutput;
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+  });
+  await caption("Let me check. ");
+  await expect
+    .poll(
+      async () =>
+        (await diagnostics()).session?.voice?.live?.output?.bufferedFrames,
+    )
+    .toBeGreaterThan(0);
+  release();
+  await expect.poll(() => s.acknowledgements.length).toBe(2);
+  await expect
+    .poll(async () => (await diagnostics()).session?.spokenReply?.state)
+    .toBe("speaking");
+  await caption("Here is why.");
+  await expect(page.locator(".message .message-content p")).toHaveText([
+    "Tell me about this story",
+    "The part you heard",
+    "Why is he called Ah Q?",
+    "Let me check. Here is why.",
+  ]);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.errors).toEqual([]);
+});
+
 test("an interrupted reply and early progress stay on opposite sides of the new question", async ({
   page,
 }) => {

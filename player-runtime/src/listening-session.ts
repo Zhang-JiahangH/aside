@@ -115,6 +115,7 @@ export class ListeningSession {
   private attendLevel = 1;
   /** Server voice control: the voice may only be heard while it delivers a backend answer. */
   private answerWindow = false;
+  private discardInterruptedOutput = false;
   private spokenReply?: SpokenReply;
   private liveTranscript = new LiveTranscript();
   private heardLiveReplies = new Set<string>();
@@ -567,6 +568,7 @@ export class ListeningSession {
     }
     if (!this.inputSpeaking) this.dispatch({ type: "user_end" });
     this.answerWindow = true;
+    this.discardInterruptedOutput = false;
     this.voice?.mute(false);
     this.startHeartbeat();
     this.sendContext(true);
@@ -884,6 +886,7 @@ export class ListeningSession {
     const live = this.liveSession;
     this.liveSession = undefined;
     this.answerWindow = false;
+    this.discardInterruptedOutput = false;
     this.spokenSync?.();
     this.spokenSync = undefined;
     this.cancelManual();
@@ -1116,9 +1119,24 @@ export class ListeningSession {
   }
   private prepareLiveOutput() {
     if (!this.serverVoice) return;
+    // After barge-in, discard the old reply's remaining packets while the
+    // listener speaks. Re-arm at speech end to retain the new reply's prefix.
+    if (this.inputSpeaking && this.discardInterruptedOutput) return;
     // A quiet gap does not close the accepted reply's audio window. Background
     // input during a lookup must not discard the continuation of that reply.
     if (!this.answerWindow) this.voice?.prepareOutput?.();
+  }
+  private interruptLiveOutput() {
+    if (!this.answerWindow || !this.playback.assistantSpeaking) return;
+    // This is an audible interruption, not an intent decision. Keep the
+    // revision and conversation intact for the incoming sideband turn.
+    this.dispatch({ type: "assistant_end", revision: this.playback.revision });
+    this.conversation.outputQuiet();
+    this.conversation.hold();
+    this.silenceVoice();
+    this.discardInterruptedOutput = true;
+    this.voice?.interrupt();
+    this.log("Local barge-in: assistant audio interrupted");
   }
   private receiveControl(event: LiveControlEvent) {
     if (event.type === "answer") {
@@ -1165,7 +1183,11 @@ export class ListeningSession {
       return;
     }
     if (event.type === "answered") {
-      if (this.spokenReply?.decisionId === event.decisionId)
+      if (
+        this.answerWindow &&
+        this.spokenReply?.decisionId === event.decisionId &&
+        this.spokenReply.state !== "interrupted"
+      )
         this.conversation.liveAnswered(event.answer, event.sources);
       return;
     }
@@ -1176,7 +1198,9 @@ export class ListeningSession {
       const current =
         event.version === this.controlVersion &&
         event.revision === this.playback.revision;
-      this.log(`Backend delegation: engage${current ? "" : " (stale, skipped)"}`);
+      this.log(
+        `Backend delegation: engage${current ? "" : " (stale, skipped)"}`,
+      );
       if (!current) {
         this.syncControl({ decisionId: event.decisionId, applied: false });
         return;
@@ -1371,9 +1395,10 @@ export class ListeningSession {
           this.inputSpeaking = active;
           this.log(active ? "Local speech started" : "Local speech ended");
           if (this.serverVoice && voice.isWarm && !voice.isCold) {
-            if (active) this.prepareLiveOutput();
-            // VAD never segments turns or pauses: the sideband owns that. It
-            // only makes room for the listener's voice before any transcript.
+            if (active) this.interruptLiveOutput();
+            this.prepareLiveOutput();
+            // Local speech stops an audible assistant immediately. The
+            // sideband still owns admission, intent and podcast commands.
             if (active) this.attend(attention.speechLevel);
             if (active && this.playback.interruption)
               this.conversation.liveInputPending(true);
