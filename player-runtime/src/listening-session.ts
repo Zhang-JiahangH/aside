@@ -56,15 +56,19 @@ export const attention = {
   /** Fraction of the configured volume while an utterance is being classified. */
   level: 0.6,
   /**
-   * Fraction while the listener is audibly speaking. On loudspeakers the
-   * podcast otherwise reaches the microphone with the listener: its lines are
-   * transcribed as theirs and echo cancellation swallows a short "wait".
+   * While someone is audibly speaking the podcast stops at once: zero is a
+   * pause, not a volume. It is still a soft yield, so bystander talk or a
+   * noise that yields no transcript lets the podcast continue on its own. On
+   * loudspeakers this also keeps the podcast out of the microphone, where its
+   * lines are transcribed as the listener's and swallow a short "wait".
    */
-  speechLevel: 0.15,
+  speechLevel: 0,
   duckMs: 150,
   releaseMs: 300,
   /** Longest soft yield without a fresh classification or decision. */
   holdMs: 2500,
+  /** Longest stop for speech that never ends or reaches a decision: a stuck detector must not strand the podcast. */
+  speechHoldMs: 30000,
   /** Fade before a confirmed interruption or spoken pause request stops the audio. */
   settleMs: 250,
 } as const;
@@ -113,6 +117,7 @@ export class ListeningSession {
   private attentionTimer?: () => void;
   private attending = false;
   private attendLevel = 1;
+  private attendedAt = 0;
   /** Server voice control: the voice may only be heard while it delivers a backend answer. */
   private answerWindow = false;
   private discardInterruptedOutput = false;
@@ -674,29 +679,47 @@ export class ListeningSession {
         this.syncControl();
       });
   }
-  /** Soft yield: the podcast ducks while an utterance is classified, and comes back on its own. */
+  /**
+   * Soft yield: the podcast ducks while an utterance is classified, or stops
+   * while someone speaks, and comes back on its own. Playback state does not
+   * change; only a decision turns the yield into an interruption.
+   */
   private attend(level: number = attention.level) {
     if (this.playback.mode !== "playing") return;
     this.attentionTimer?.();
+    // The hold runs from the end of speech: a long question must not bring
+    // the podcast back over the person still asking it.
     this.attentionTimer = this.clock.after(attention.holdMs, () =>
-      this.release(),
+      this.inputSpeaking &&
+      this.attendLevel <= 0 &&
+      this.clock.now() - this.attendedAt < attention.speechHoldMs
+        ? this.attend(this.attendLevel)
+        : this.release(),
     );
     // Within one yield the podcast only gets quieter: classification must not
     // bring it back up over a listener who is still speaking.
     if (this.attending && level >= this.attendLevel) return;
+    if (!this.attending) this.attendedAt = this.clock.now();
     this.attending = true;
     this.attendLevel = level;
-    this.audio.duck(level, attention.duckMs);
-    this.log("Podcast yielding");
+    if (level > 0) this.audio.duck(level, attention.duckMs);
+    else this.audio.pause();
+    this.log(level > 0 ? "Podcast yielding" : "Podcast stopped for speech");
   }
   private release() {
     this.attentionTimer?.();
     this.attentionTimer = undefined;
     if (!this.attending) return;
+    const stopped = this.attendLevel <= 0;
     this.attending = false;
     this.attendLevel = 1;
-    this.audio.duck(1, attention.releaseMs);
-    this.log("Podcast resumed full volume");
+    if (!stopped) this.audio.duck(1, attention.releaseMs);
+    else if (this.playback.mode === "playing")
+      void this.audio.play().catch((error) => {
+        this.stop();
+        this.setError(String(error));
+      });
+    this.log(stopped ? "Podcast continued" : "Podcast resumed full volume");
   }
   /** Hard yield: fade out, then pause. The interruption position was captured when the listener began speaking. */
   private settle() {
@@ -1404,6 +1427,8 @@ export class ListeningSession {
             // Local speech stops an audible assistant immediately. The
             // sideband still owns admission, intent and podcast commands.
             if (active) this.attend(attention.speechLevel);
+            // The decision is still to come: give it the full hold from here.
+            else if (this.attending) this.attend(this.attendLevel);
             if (active && this.playback.interruption)
               this.conversation.liveInputPending(true);
             if (!active && this.playback.interruption) {

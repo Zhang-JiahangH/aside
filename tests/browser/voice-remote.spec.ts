@@ -840,9 +840,10 @@ for (const width of [1440, 320]) {
     expect(s.utterances).toHaveLength(0);
     expect(s.questionRequests()).toBe(0);
     expect(s.transcriptions()).toBe(0);
-    expect(
-      await s.audio.evaluate((audio: HTMLAudioElement) => audio.paused),
-    ).toBe(false);
+    // Loud input may stop the audio as a soft yield; it is not an interruption.
+    await expect(
+      page.getByRole("button", { name: "Pause", exact: true }),
+    ).toBeVisible();
     const activityBox = (await feedback.boundingBox())!;
     const dockBox = (await page.locator(".player-dock").boundingBox())!;
     expect(activityBox.y + activityBox.height).toBeLessThan(dockBox.y);

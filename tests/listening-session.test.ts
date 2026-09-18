@@ -1399,7 +1399,7 @@ test("server stream owns voice decisions; frontend captions, delegation and VAD 
   s.clock.advance(2000);
   await flush();
   assert.equal(s.requests.length, 0);
-  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.playing, false, "speech stops the podcast; the server decides what it was");
   s.push({
     type: "observing",
     version: s.serverState.version,
@@ -1874,30 +1874,70 @@ test("a session start that is still wanted is not closed", async (t) => {
   assert.deepEqual(s.usages, []);
 });
 
-test("the listener's own voice ducks the podcast deeply before any transcript, and classification never raises it", async () => {
+test("hearing someone speak stops the podcast at once, and bystander talk or noise lets it continue", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();
   await flush();
   s.callbacks.onSpeech(true);
-  assert.deepEqual(s.audio.ducks, [attention.speechLevel]);
-  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.playing, false, "stopped before any transcript");
+  assert.equal(s.session.getSnapshot().state.mode, "playing", "a soft yield is not an interruption");
+  // A long utterance outlasts the hold without the podcast coming back over it.
+  s.clock.advance(attention.holdMs * 3);
+  assert.equal(s.audio.playing, false);
   s.push({ type: "classifying", version: s.serverState.version });
   s.callbacks.onSpeech(false);
-  assert.deepEqual(s.audio.ducks, [attention.speechLevel]);
+  assert.equal(s.audio.playing, false, "classification never restarts it");
+  assert.deepEqual(s.audio.ducks, [], "a stop is not a volume change");
   s.push(s.decision("ignore"));
   await flush();
-  assert.deepEqual(s.audio.ducks, [attention.speechLevel, 1]);
-  assert.equal(s.audio.playing, true);
-  // Speech that produces no transcript comes back up on its own.
+  assert.equal(s.audio.playing, true, "bystander talk: the podcast continues");
+  // Speech that produces no transcript continues on its own after the hold.
   s.callbacks.onSpeech(true);
   s.callbacks.onSpeech(false);
-  s.clock.advance(attention.holdMs);
-  assert.deepEqual(s.audio.ducks, [
-    attention.speechLevel,
-    1,
-    attention.speechLevel,
-    1,
-  ]);
+  assert.equal(s.audio.playing, false);
+  s.clock.advance(attention.holdMs - 1);
+  assert.equal(s.audio.playing, false);
+  s.clock.advance(1);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.session.getSnapshot().state.interruption, undefined);
+  s.session.dispose();
+});
+
+test("a speech detector that never reports the end cannot strand the podcast", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.callbacks.onSpeech(true);
+  s.clock.advance(attention.speechHoldMs - attention.holdMs);
+  assert.equal(s.audio.playing, false);
+  s.clock.advance(attention.holdMs * 2);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("a question after the speech stop becomes an interruption at the position where speech began", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.callbacks.onSpeech(true);
+  assert.equal(s.audio.playing, false);
+  s.callbacks.onSpeech(false);
+  s.push({
+    type: "engage",
+    version: s.serverState.version,
+    revision: s.serverState.revision,
+    decisionId: crypto.randomUUID(),
+    player: { ...s.serverState, source: "voice", turnId: "server-turn" },
+    text: "What is a biography?",
+  });
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.ok(s.session.getSnapshot().state.interruption, "the soft stop became an interruption");
+  s.clock.advance(attention.holdMs * 2);
+  await flush();
+  assert.equal(s.audio.playing, false, "the expired hold cannot restart an interrupted podcast");
   s.session.dispose();
 });
 
@@ -2396,9 +2436,9 @@ test("given a pending voice request, arm audio before classification even with d
   s.callbacks.onSpeech(true);
   assert.ok(s.commands.includes("prepareOutput"));
   assert.equal(
-    s.audio.playing,
-    true,
-    "buffering alone does not pause the podcast",
+    s.session.getSnapshot().state.mode,
+    "playing",
+    "buffering alone is not an interruption",
   );
   s.commands.length = 0;
   s.callbacks.onInputTranscript?.("Tell me more");
