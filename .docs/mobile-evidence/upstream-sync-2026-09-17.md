@@ -54,6 +54,11 @@ tool gaps; completion needs a reliable model-and-playback condition first.
 - `npm run check`: passed (root, module boundaries, Cloudflare and mobile types).
 - `npm run test:cloudflare`: 50 passed. The first invocation lacked FFmpeg on
   PATH; rerunning with the installed FFmpeg/ffprobe binaries passed.
+- Initial PR CI exposed an upstream sideband test race: `engage` arrives before
+  the lookup result on an independent channel, so checking the last tool return
+  could see `c1` while expecting `c2`. The test now waits for the expected call ID
+  (and continuation event for the first acknowledged control), with a bounded
+  timeout, instead of relying on event arrival order or fixed 50 ms sleeps.
 - `npm run build -w @aside/frontend`: passed.
 - Player and preload coverage gates: passed.
 - iPhone 16 Pro / iOS 18.3 simulator: Release build 17 built and installed with
