@@ -462,3 +462,13 @@ node scripts/admin-usage.mjs --days 30 --json
 本地验证：`npm run check`、300 项单元测试、Cloudflare 集成 50 项（重写 sideband 用例：委派配置、工具回报等执行回报、engage/answered、账本；一次运行中上传额度用例偶发失败，单跑通过）、Playwright voice-remote 19 项与 player 4 项通过。真服务探针：WebSocket 主连接与 aiortc WebRTC 主连接加 sideband 各若干会话，全部委派、工具选择正确，说完到答案开口 1.2 到 2.7 秒，暂停 1.3 秒。
 
 未验证：生产真人麦克风端到端；Live 对中文短控制词的委派稳定性（保留本地快速暂停作保险）；控制类工具后 Live 偶尔的口头确认。取证：`wrangler tail` 中 `Aside voice delegation created`、`Aside voice engage`、`Aside voice tool call`、`Aside voice decision acknowledged`。
+
+## 分享卡片按语言出图，hero 加 Product Hunt 链接（2026-09-18）
+
+起因：在 LinkedIn 粘贴 `https://asidefm.com`，预览是英文标题配中文图。全站只有一张 `og-image.png`，由 `scripts/prepare-og-image.mjs` 写死中文标题渲染，`og:image` 又放在 Worker 按路由改写的 head 区块之外，所以 `/` 和 `/zh` 共用同一张中文图。
+
+改动：脚本一次生成两张 1200×630 卡片，`og-image.png` 改为英文（Follow your curiosity, ask anytime.），新增中文的 `og-image-zh.png`；`og:image`、`twitter:image` 及其 alt 移入 seo:head 区块，`cloudflare/src/seo-html.ts` 的 `seoHead` 按语言选图，`frontend/src/i18n.ts` 在浏览器内切换语言时同步。首页 hero 按钮下方新增一行 Product Hunt 文字链接（内联 SVG 图标，无第三方请求，新标签页打开，带 `utm_source=asidefm&utm_medium=hero`）；推广期结束后删除 `Landing.tsx` 中的 `<a className="hero-note">` 即可。
+
+发布与核对：`npm run check` 与 333 项单元测试通过（新增 1 项英文卡片用例，`/zh` 用例补了图片断言）；hero 链接在本地浏览器截图核对了英文浅色桌面、中文深色桌面与 390 宽手机，无横向溢出。发布前确认线上是队友 06:06Z 的 `a19fefb7`（#31），与 origin/main `de79fb1` 一致，本次提交直接快进到 main（`57f8c5f`）。生产 Worker `de4575a6-72b4-4476-bfa5-e8730c54bbf4`（`--containers-rollout=none`，保留现有 Container）。正式域名 `/` 的 `og:image` 与 `twitter:image` 指向 `og-image.png`，`/zh` 指向 `og-image-zh.png`；两张图均 200 `image/png`，线上 `og-image.png` 的 SHA-1 与本地一致；首页引用 `index-Bt5O4Hj6.js`、`index-jraiRU-3.css`，bundle 内含 Product Hunt 链接；`/api/health`、`/robots.txt`、`/sitemap.xml`、`/llms.txt` 均 200；`npm run test:mobile-service` 4 项通过。
+
+未验证：LinkedIn 等平台会缓存旧预览，需在 Post Inspector 重新抓取后才会显示新图，本次未做；生产页面上的 hero 链接未用浏览器再截图，只核对了 bundle 内容。
