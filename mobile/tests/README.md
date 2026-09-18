@@ -41,7 +41,19 @@ maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice
 - `continuous.mjs ios|android DEVICE`: launch through Maestro, enable conversation, and drive a unique question through the actual Worker control stream and native RTC output. Assert microphone RTP, rendered answer activity, drained PCM before countdown, semantic continuation, retained microphone, visible question/answer and no overlap with podcast playback. Inject a second delegation and real PCM after verified completion; it must not reopen the reply or enter history. Native diagnostics retain `lastDrain`, the measured playout state before the completed answer's gate closes. Set `EXTENDED=1` to also exercise ignored speech, continuous follow-ups on one anchor and the long-answer eight-second wait. `PORT` and `MAESTRO` select the fixture and executable. Evidence defaults to `/tmp/aside-continuous-PLATFORM-native.json`.
 - `player-ui.yaml`: keyboard/composer, playback options, Chinese/English and restoring the default preference. Run separately in light/dark and at small screen / enlarged text sizes; inspect screenshots for clipping and hierarchy.
 
+`overlap.mjs EVIDENCE_FILE DEVICE` characterizes a different boundary immediately
+after `continuous.mjs`, while its microphone/session remains connected. It injects
+a second delegation and real PCM while the first answer is still audibly playing.
+Use the same `PORT` and `MAESTRO`; `EVIDENCE` selects the output JSON. Both platforms
+currently keep the programme paused, expose Continue and recover on a genuine
+follow-up. The result also records `extraWasHeard`: it is currently **true**.
+These safeguards passing does not mean the additional supplier audio was filtered.
+Live's single unlabelled audio stream cannot yet separate that speech from an
+unfinished admitted answer. This probe is intentionally separate from the
+after-completion duplicate-suppression assertion in `continuous.mjs`.
+
 For a long local acceptance session, `VOICE_SESSION_SECONDS=600 TRIAL_DAILY_LIMITS=false` prevents synthetic provider traffic exhausting the fixture's daily pool. Production authorization/concurrency still executes, and normal quota coverage remains in Worker tests. Close voice or background the app before deliberately terminating an older binary. Current builds also journal and clean up their own abandoned lease on restart.
+
 - `voice-history.yaml`: use an empty checkpoint and `QUESTION_DELAY_MS=15000` to verify a recognized question appears before the answer, survives background cancellation, and restores after restart. Require the user-role bubble rather than the composer's similarly named accessibility label.
 
 The fixture uses the actual production Worker, D1/R2, media decoder and analysis workflow. External transcription/model output is deterministic; the RTC peer transports real audio and data channels. These checks do not measure production model quality/latency, physical audio routes, Apple signing or distribution.

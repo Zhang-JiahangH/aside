@@ -6,7 +6,46 @@ The compatibility PR #28 is a baseline, not completion of this goal.
 User scope correction: do not change Web behavior. Shared runtime extensions must
 be opt-in for mobile and preserve the existing Web policy and tests.
 
-## Current candidate — 2026-09-18
+## Current candidate — 2026-09-18, iPhone 35 / Android 17
+
+Merged upstream #33 (`bc951fd`) into `5d74781`, resolving the player conflict while
+retaining mobile's asynchronous programme fade before answer playback. Local speech
+now cuts an audible reply immediately, preserves its heard prefix and keeps the
+programme paused. Regressions exercise both Web's explicit policy and mobile's
+verified continuation, including first-connection HTTP replies and a late drain
+after interruption. Web source remains identical to upstream.
+
+394 local tests, type/module-boundary checks and all 22 Web voice regressions pass.
+[Source CI](https://github.com/qiz029/aside/actions/runs/35318521978) passes, including
+Cloudflare and the media container. Both native Release fixtures (build 34) pass
+actual RTC input/output, verified drain, after-completion replay suppression,
+ignored speech, anchored follow-ups and the long-answer wait. No new paid model
+or email requests were made.
+
+The separate `mobile/tests/overlap.mjs` probe now reproduces a remaining limitation
+on **both platforms**: a second supplier audio response can be heard while the
+first admitted answer is unfinished. Backend admission is rejected, but the single
+audio stream has no reply identity for that boundary. Both apps keep the programme
+paused, show Continue and recover on a genuine follow-up. These safeguards pass;
+**during-playback duplicate audio suppression remains unresolved**. Do not replace
+this finding with the passing after-completion replay test.
+
+Normal iPhone Release 35 is signed, installed and launched. Native and Expo versions
+both read 35. Android EAS 17 uses the existing production key, upgrades build 16 and
+passes real catalogue/transcript/Account checks. Both releases use asidefm.com,
+disable test mode and OTA, and contain no temporary diagnostic helper.
+[Android 17 installation](https://expo.dev/accounts/jiahangzhang/projects/aside/builds/e7ceac6c-d62f-4a0b-90e0-0cc51a67adbb).
+Worker `fc415100-4350-4820-a29b-8f51a4d5d764` contains latest main and mobile changes;
+the existing media image is retained and read-only authentication smoke passes.
+
+Evidence: [interruption and release verification](mobile-evidence/continuous-barge-2026-09-18.json).
+The user's built-in-speaker confirmation remains recorded below. Natural spoken
+continuation, physical quality of the new local interruption behavior, headset/call
+handling and the visible iOS lock-screen card remain device acceptance. Paid Apple
+Ad Hoc/TestFlight signing remains pending. This candidate does not close every
+conversation quality gap; PR #29 remains a draft with the duplicate-audio finding.
+
+## Previous candidate — 2026-09-18, iPhone 33 / Android 16
 
 Mobile now explicitly requests its conversation policy. Responses receives the
 initial observed player state and subsequent interruption/assistant transitions,
