@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test("guest can listen first; enabling the microphone requests permission before verification", async ({ page }) => {
+test("guest can listen first; playing requests the microphone before verification", async ({ page }) => {
   let trialReads = 0;
   let proofs = 0;
   let verified = false;
@@ -33,7 +33,9 @@ test("guest can listen first; enabling the microphone requests permission before
   await expect(page.getByRole("region", { name: "文字稿" })).toBeVisible();
   expect(trialReads).toBe(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
+  await page.getByRole("button", { name: "播放", exact: true }).click();
+  // Listening starts with playback, and the episode plays while permission is pending.
+  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.paused)).toBe(false);
   expect(await page.evaluate(() => (window as any).permissionRequested)).toBe(true);
   expect(trialReads).toBe(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -42,11 +44,9 @@ test("guest can listen first; enabling the microphone requests permission before
   await page.getByRole("button", { name: "Test verification" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(proofs).toBe(1);
-  await page.getByRole("button", { name: "播放", exact: true }).click();
-  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.paused)).toBe(false);
 });
 
-test("signed-in listener enables the microphone without a Turnstile dialog", async ({ page }) => {
+test("signed-in listener starts listening on play without a Turnstile dialog", async ({ page }) => {
   let trialReads = 0;
   await page.addInitScript(() => {
     navigator.mediaDevices.getUserMedia = async () => {
@@ -68,7 +68,7 @@ test("signed-in listener enables the microphone without a Turnstile dialog", asy
   await expect(page.getByRole("region", { name: "文字稿" })).toBeVisible();
   expect(trialReads).toBe(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
+  await page.getByRole("button", { name: "播放", exact: true }).click();
   await expect.poll(() => trialReads).toBeGreaterThan(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });

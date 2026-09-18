@@ -327,7 +327,6 @@ test("automatic listening preconnects; speech during startup uses WAV fallback w
   });
   await page.goto("/");
   await page.getByRole("link", { name: /给思考留一点空间/ }).click();
-  await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
   await page.getByRole("button", { name: "播放", exact: true }).click();
   await expect.poll(() => creates).toBe(1);
   expect(transcriptions).toBe(0);
@@ -563,7 +562,6 @@ for (const manual of [false]) {
     });
     await page.goto("/");
     await page.getByRole("link", { name: /给思考留一点空间/ }).click();
-    await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
     await page.getByRole("button", { name: "播放", exact: true }).click();
     await expect(
       page.getByRole("status").filter({ hasText: "● 语音交流中" }),

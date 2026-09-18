@@ -202,7 +202,6 @@ export const english: Record<string, string> = {
   探索公共音频: "Explore public audio",
   听这段: "Listen to this",
   分析进度: "Analysis progress",
-  开启麦克风: "Enable microphone",
   "从 {time} 开始聊": "Started talking at {time}",
   回到音频: "Returning to the audio",
   只听音频: "Listen only",

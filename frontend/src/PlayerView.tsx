@@ -91,7 +91,6 @@ export function PlayerView({
   } = player;
   const [chatUser, setChatUser] = useState<User | null>(null);
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
-  const [enablingMic, setEnablingMic] = useState(false);
   const newConversationButton = (
     <button
       className="btn btn-secondary btn-sm new-conversation"
@@ -509,33 +508,6 @@ export function PlayerView({
               <h2>{t("聊两句")}</h2>
               {newConversationButton}
               <div className="conversation-microphone">
-                {listeningMode === "off" && (
-                  <button
-                    className="enable-microphone btn btn-voice btn-sm"
-                    disabled={enablingMic || !configured}
-                    onClick={async () => {
-                      setEnablingMic(true);
-                      try {
-                        await player.enableMicrophone();
-                      } finally {
-                        setEnablingMic(false);
-                      }
-                    }}
-                  >
-                    <svg
-                      viewBox="0 0 16 16"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                      aria-hidden="true"
-                    >
-                      <rect x="5.5" y="1.5" width="5" height="8" rx="2.5" />
-                      <path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2" />
-                    </svg>
-                    {enablingMic ? t("开启麦克风…") : t("开启麦克风")}
-                  </button>
-                )}
                 <span
                   role="status"
                   className={liveStatus !== "off" ? "mic active" : "mic"}

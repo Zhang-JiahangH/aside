@@ -67,6 +67,7 @@ export function usePlayerController() {
   const selected = useRef<Episode | undefined>(undefined);
   const loadVersion = useRef(0);
   const autoplayVersion = useRef<number | null>(null);
+  const microphoneAsked = useRef(false);
   const refresh = async () => {
     try {
       setEpisodes(await episodeLibrary.list());
@@ -74,9 +75,52 @@ export function usePlayerController() {
       setEpisodesLoading(false);
     }
   };
+  /**
+   * Playing is listening: the first play of an episode asks for the microphone.
+   * A refusal is reported once and the episode keeps playing; it is not asked
+   * again until another episode loads.
+   */
+  async function listen() {
+    const snapshot = session.getSnapshot();
+    if (
+      snapshot.listeningMode !== "off" ||
+      !snapshot.configured ||
+      microphoneAsked.current
+    )
+      return;
+    microphoneAsked.current = true;
+    const version = loadVersion.current;
+    try {
+      await requestMicrophonePermission();
+    } catch {
+      if (version === loadVersion.current)
+        session.setError("未获得麦克风权限，仍可继续收听或打字提问。");
+      return;
+    }
+    try {
+      // The episode is already playing, so the voice connects the moment
+      // listening turns on: a guest has to be verified before that.
+      await prepareTrial();
+    } catch (error) {
+      if (version !== loadVersion.current) return;
+      session.setError((error as Error).message);
+      // Verification was dismissed or failed; the next play offers it again.
+      microphoneAsked.current = false;
+      return;
+    }
+    if (version === loadVersion.current && selected.current) {
+      session.setError("");
+      session.setListeningMode("auto");
+    }
+  }
+  function play() {
+    session.executePlayerCommand({ type: "play" });
+    void listen();
+  }
   async function load(id: string, autoplay = false) {
     const version = ++loadVersion.current;
     autoplayVersion.current = null;
+    microphoneAsked.current = false;
     session.stop();
     await save();
     if (version !== loadVersion.current) return;
@@ -96,6 +140,7 @@ export function usePlayerController() {
     if (episode && autoplayVersion.current === loadVersion.current) {
       autoplayVersion.current = null;
       session.start();
+      void listen();
     }
   }, [episode, session, audio]);
   useEffect(() => {
@@ -223,9 +268,9 @@ export function usePlayerController() {
       }
     },
     setError: (error: string) => session.setError(error),
-    startListening: () => session.executePlayerCommand({ type: "play" }),
+    startListening: play,
     stopListening: () => session.executePlayerCommand({ type: "stop" }),
-    requestResume: () => session.executePlayerCommand({ type: "play" }),
+    requestResume: play,
     beginManual: () => session.beginManual(),
     endManual: () => session.endManual(),
     holdResume: () => session.holdResume(),
@@ -248,23 +293,6 @@ export function usePlayerController() {
       selected.current = undefined;
       setEpisode(undefined);
       await refresh();
-    },
-    async enableMicrophone() {
-      const version = loadVersion.current;
-      try {
-        await requestMicrophonePermission();
-        if (version === loadVersion.current && selected.current) {
-          session.setError("");
-          session.setListeningMode("auto");
-          void prepareTrial().catch((error) => {
-            if (version === loadVersion.current)
-              session.setError(error.message);
-          });
-        }
-      } catch {
-        if (version === loadVersion.current)
-          session.setError("未获得麦克风权限，仍可继续收听或打字提问。");
-      }
     },
     async playEpisode(id: string) {
       session.setListeningMode("off");

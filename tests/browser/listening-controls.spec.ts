@@ -67,7 +67,6 @@ test("denied entry permission keeps playback and follow-up controls usable", asy
     };
   });
   await openDemo(page);
-  await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
   await page.getByRole("button", { name: "播放", exact: true }).click();
   await expect.poll(() => paused(page)).toBe(false);
   expect(await page.evaluate(() => (window as any).micRequests)).toBe(1);
@@ -94,9 +93,8 @@ test("microphone rejection leaves original playback usable", async ({
     };
   });
   await openDemo(page);
-  await page.getByRole("button", { name: "开启麦克风", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("仍可继续收听");
   await page.getByRole("button", { name: "播放", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("仍可继续收听");
   await expect.poll(() => paused(page)).toBe(false);
   await page.getByRole("button", { name: "暂停", exact: true }).click();
   await expect.poll(() => paused(page)).toBe(true);

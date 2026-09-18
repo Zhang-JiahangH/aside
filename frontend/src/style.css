@@ -2181,10 +2181,6 @@ progress {
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
-.enable-microphone {
-  margin-left: auto;
-  margin-right: 10px;
-}
 .conversation-heading {
   flex-wrap: wrap;
   gap: 8px 12px;
@@ -2199,9 +2195,6 @@ progress {
   flex: 1 0 100%;
   gap: 8px;
   min-width: 0;
-}
-.conversation-microphone .enable-microphone {
-  margin: 0 auto 0 0;
 }
 .conversation-microphone .mic {
   display: inline-flex;
