@@ -54,6 +54,8 @@ export class Conversation {
   private draft = "";
   private answerPreview = "";
   private held = false;
+  /** A barge-in's hold: it lasts until the listener's next accepted question. */
+  private bargedIn = false;
   private deadline: number | null = null;
   private waitMs = 2000;
   private beganAt: number | null = null;
@@ -98,7 +100,7 @@ export class Conversation {
       question: this.draft,
       answerPreview: this.answerPreview,
       busy: (!!this.pending && this.acceptedInput) || !!this.liveAnswerId,
-      resumeHeld: this.held,
+      resumeHeld: this.held || this.bargedIn,
       followupMs: this.waitMs,
       resumeSeconds:
         this.deadline === null
@@ -134,6 +136,7 @@ export class Conversation {
     this.references = [];
     this.draft = "";
     this.held = false;
+    this.bargedIn = false;
     this.beganAt = null;
     this.streamIds = {};
     this.acceptedInput = true;
@@ -174,6 +177,7 @@ export class Conversation {
     this.cancel(true);
     if (firstInterruption) {
       this.held = false;
+      this.bargedIn = false;
       this.beganAt = this.clock.now();
     }
     this.longAnswer = false;
@@ -184,11 +188,22 @@ export class Conversation {
   continued() {
     this.cancel();
     this.held = false;
+    this.bargedIn = false;
     this.beganAt = null;
     this.host.changed();
   }
   hold() {
     this.held = true;
+    this.followup.cancel();
+  }
+  /**
+   * The listener talked over the reply. It is over, and silence after an
+   * ignored barge-in must not resume; unlike a requested hold, their next
+   * accepted question lifts it, so that answer can resume the podcast.
+   */
+  bargeIn() {
+    this.bargedIn = true;
+    this.liveOpen = false;
     this.followup.cancel();
   }
   setDraft(text: string) {
@@ -351,7 +366,8 @@ export class Conversation {
           !this.delegation &&
           !this.answerQueued &&
           !this.draft.trim() &&
-          !this.held
+          !this.held &&
+          !this.bargedIn
         );
       },
       () => this.host.resume(0),
@@ -380,6 +396,7 @@ export class Conversation {
     this.host.log("Backend delegation engaged");
     this.host.engage();
     this.answerQueued = true;
+    this.bargedIn = false;
     // A quiet gap while the backend is still answering can be a lookup, not
     // the end of the reply: the follow-up window stays shut until `answered`.
     this.liveOpen = true;

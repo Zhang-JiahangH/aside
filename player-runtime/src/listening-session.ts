@@ -1155,7 +1155,7 @@ export class ListeningSession {
     // revision and conversation intact for the incoming sideband turn.
     this.dispatch({ type: "assistant_end", revision: this.playback.revision });
     this.conversation.outputQuiet();
-    this.conversation.hold();
+    this.conversation.bargeIn();
     this.silenceVoice();
     this.discardInterruptedOutput = true;
     this.voice?.interrupt();

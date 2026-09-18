@@ -2801,3 +2801,35 @@ test("speech or a held window stops a delegated answer from resuming the podcast
   await flush();
   assert.equal(s.audio.playing, false, "the listener asked to stay paused");
 });
+
+test("a barge-in holds the podcast only until the listener's next answered question", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const first = engaged(s);
+  await flush();
+  s.push({ type: "answered", decisionId: first, answer: "A long first answer.", sources: [] });
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "A long first");
+  // The listener talks over the reply; the backend finds nothing addressed to it.
+  s.callbacks.onSpeech(true);
+  s.callbacks.onOutput(false);
+  s.callbacks.onSpeech(false);
+  s.push(s.decision("ignore"));
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false, "an ignored barge-in stays quiet");
+  assert.equal(s.session.getSnapshot().resumeHeld, true);
+  // Their next question is answered in full: that answer resumes the podcast.
+  const second = engaged(s);
+  await flush();
+  s.push({ type: "answered", decisionId: second, answer: "The second answer.", sources: [] });
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "The second answer.");
+  s.callbacks.onOutput(false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.clock.advance(3000);
+  await flush();
+  assert.equal(s.audio.playing, true);
+});
