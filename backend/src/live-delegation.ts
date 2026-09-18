@@ -285,6 +285,10 @@ export class LiveDelegation {
             sources: delegation.sources,
           });
           delegation.answer = "";
+        } else if (!delegation.engaged && !delegation.ignored) {
+          // A control-only turn: the voice's own acknowledgement, if any, must
+          // not surface later at the front of the next real answer.
+          this.ports.emit({ type: "discard", version: this.player.version });
         }
         return;
       }

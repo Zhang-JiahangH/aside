@@ -221,6 +221,8 @@ export const liveControlEventSchema = z.discriminatedUnion("type", [
     player: playerInputSchema,
     text: z.string(),
   }),
+  /** A delegation ended without a reply (a playback control only): whatever the voice buffered meanwhile is not an answer. */
+  z.object({ type: z.literal("discard"), version: revisionSchema }),
   /** The backend's finished answer text and sources, for references and diagnostics; the spoken wording is the voice model's. */
   z.object({
     type: z.literal("answered"),

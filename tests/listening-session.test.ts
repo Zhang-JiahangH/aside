@@ -1492,6 +1492,22 @@ test("a pushed answer pauses only when accepted and mixed questions never submit
   s.session.dispose();
 });
 
+test("a control-only delegation discards buffered voice output unless a reply window is open", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push({ type: "classifying", version: s.serverState.version });
+  await flush();
+  const before = s.commands.filter((c) => c === "discardPendingOutput").length;
+  s.push({ type: "discard", version: s.serverState.version });
+  await flush();
+  assert.equal(
+    s.commands.filter((c) => c === "discardPendingOutput").length,
+    before + 1,
+  );
+  s.session.dispose();
+});
+
 test("a delegated engage pauses the podcast, opens the reply window without client text, and records the answer's sources", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();

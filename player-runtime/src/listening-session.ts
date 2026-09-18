@@ -1159,6 +1159,11 @@ export class ListeningSession {
       );
       return;
     }
+    if (event.type === "discard") {
+      if (event.version === this.controlVersion && !this.answerWindow)
+        this.voice?.discardPendingOutput?.();
+      return;
+    }
     if (event.type === "answered") {
       if (this.spokenReply?.decisionId === event.decisionId)
         this.conversation.liveAnswered(event.answer, event.sources);

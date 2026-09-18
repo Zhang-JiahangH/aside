@@ -186,6 +186,12 @@ test("a player command waits for the browser's report before the tool result ret
   assert.equal(output.accepted, true);
   assert.equal(output.player.playbackRate, 0.9);
   assert.equal(s.engages().length, 0, "a pure control never opens the reply window");
+  s.backend({ type: "response.completed", response: {} });
+  assert.equal(
+    s.events.at(-1)?.type,
+    "discard",
+    "a control-only turn tells the client to drop buffered voice output",
+  );
   s.delegation.close();
 });
 
