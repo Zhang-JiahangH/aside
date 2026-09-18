@@ -2688,7 +2688,7 @@ test("the worker serves indexable pages, a live sitemap and real 404s", async ()
 });
 
 
-test("Live sideband executes delegated tool calls on one owner-bound NDJSON stream without question requests", async () => {
+test("Live sideband executes tools and recovers a missing delegation on one owner-bound NDJSON stream", { timeout: 30000 }, async () => {
   const a = await visitor(), b = await visitor();
   await seed("control-public", "seed", true);
   await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, { "cf-connecting-ip": testerIp });
@@ -2735,7 +2735,10 @@ test("Live sideband executes delegated tool calls on one owner-bound NDJSON stre
     await new Promise(resolve => setTimeout(resolve, 5500));
     const sideband = sidebands.get(sessionId);
     const backend = (event, delegation_id = "d1") => sideband.send(JSON.stringify({ type: "response.event", delegation_id, event }));
-    const functionCall = (call_id, name, args) => backend({ type: "response.output_item.done", item: { type: "function_call", call_id, name, arguments: JSON.stringify(args) } });
+    const functionCall = (call_id, name, args, delegation_id = "d1") => {
+      backend({ type: "response.output_item.done", item: { type: "function_call", call_id, name, arguments: JSON.stringify(args) } }, delegation_id);
+      backend({ type: "response.completed", response: {} }, delegation_id);
+    };
     sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Could you lower that a bit?", start_ms: 0, end_ms: 200 }));
     assert.equal((await next("observing")).text, "Could you lower that a bit?");
     sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d1", target: "responses" } }));
@@ -2756,7 +2759,7 @@ test("Live sideband executes delegated tool calls on one owner-bound NDJSON stre
     // A lookup means the backend is answering: the client yields and the voice model speaks.
     sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "What does that mean?", start_ms: 5000, end_ms: 5300 }));
     sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d2", target: "responses" } }));
-    functionCall("c2", "search_podcast", { query: "seed" });
+    functionCall("c2", "search_podcast", { query: "seed" }, "d2");
     const engage = await next("engage");
     assert.equal(engage.text, "What does that mean?");
     assert.equal(engage.revision, 2);
@@ -2774,13 +2777,38 @@ test("Live sideband executes delegated tool calls on one owner-bound NDJSON stre
     // Resume goes through the client and reports back before the tool result.
     sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Yes", start_ms: 8000, end_ms: 8100 }));
     sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d3", target: "responses" } }));
-    functionCall("c3", "resume_podcast", {});
+    functionCall("c3", "resume_podcast", {}, "d3");
     const resume = await next("decision");
     assert.equal(resume.result.action, "resume");
     assert.equal((await a.request(path, "PUT", { sessionId, player: { ...spokenPlayer, sequence: 3, revision: 3, wasPlaying: true, audibleSource: "podcast", playback: { mode: "playing", interrupted: false } }, acknowledgement: { decisionId: resume.decisionId, applied: true } })).status, 200);
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(toolReturns().at(-1).output.accepted, true);
     assert.equal(toolReturns().at(-1).output.player.playback, "playing");
+    backend({ type: "response.completed", response: {} }, "d3");
+    // No session.delegation.created this time: the worker must request the
+    // configured backend itself, without opening a separate Responses request.
+    const requested = new Promise(resolve => {
+      const listener = event => {
+        const message = JSON.parse(event.data);
+        if (message.type === "response.create") {
+          sideband.removeEventListener("message", listener);
+          resolve(message);
+        }
+      };
+      sideband.addEventListener("message", listener);
+    });
+    sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "200 文大概多少钱", start_ms: 11000, end_ms: 11500 }));
+    const heard = await next("observing");
+    assert.equal(heard.text, "200 文大概多少钱");
+    const classifying = await next("classifying");
+    assert.equal(classifying.input.turnId, heard.input.turnId);
+    const request = await requested;
+    assert.deepEqual(Object.keys(request).sort(), ["event_id", "type"]);
+    backend({ type: "response.created", response: {} }, "d4");
+    backend({ type: "response.output_text.delta", delta: "要看时代和地区。" }, "d4");
+    backend({ type: "response.completed", response: {} }, "d4");
+    assert.equal((await next("engage")).text, "200 文大概多少钱");
+    assert.equal((await next("answered")).answer, "要看时代和地区。");
     const usage = await db.prepare("SELECT model, tiers, input_tokens, reasoning_tokens FROM question_usage WHERE owner_id=? ORDER BY ts DESC LIMIT 1").bind(a.id).all();
     assert.deepEqual(usage.results[0], { model: "gpt-5.6-luna", tiers: "priority", input_tokens: 1200, reasoning_tokens: 10 }, "delegated cost is ledgered from the supplier's usage");
     const rows = await db.prepare("SELECT bucket FROM budgets WHERE bucket=?").bind(`trial:${new Date().toISOString().slice(0, 10)}:question:${a.id}`).all();

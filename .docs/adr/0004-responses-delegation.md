@@ -23,3 +23,13 @@ GPT-Live 文档把逐片段处理定位为"投机查询、护栏、界面更新"
 - 真服务探针 `scripts/live-delegation-probe.ts`（WebSocket 主连接）与本地的 aiortc 探针（WebRTC 主连接 + sideband）：九次会话全部委派、工具选择正确；说完到答案开口 1.2 到 2.7 秒，暂停 1.3 秒；sideband 收到全部后台事件，工具结果从 sideband 交回后后台继续，`session.update` 从 sideband 刷新指令成功。英文提问中文节目的跨语言检索会多绕两轮，后台指令已要求用节目语言检索。
 - `npm test`、`npm run test:cloudflare`（含重写的 sideband 用例：委派配置、工具回报等待执行回报、engage/answered、账本）、`npm run check`、Playwright voice-remote 18 项与 player 4 项通过。player.spec 的语音用例此前未随 #17/#20 更新，本次一并修正为字幕随可听输出释放、静音后保持等待。
 - 未验证：生产环境真人麦克风端到端；Live 对中文短控制词的委派稳定性；控制类工具后 Live 偶尔的口头确认（后台指令已要求控制类不产生文本）。
+
+## 补充：转写到了，但没有委派
+
+生产 sideband 曾收到 `session.input_transcript.delta`，直到会话关闭仍没有 `session.delegation.created` 或后台事件。因此不能只靠 Live 自己决定是否启动后台。
+
+`LiveResponseTrigger` 在有效转写片段后合并 600ms；连续说话时最多等 1200ms 就通过 sideband 发送 `response.create`，请求会话中已经配置的同一个 Responses 后台。正常委派会取消这个计时器，后台运行期间不另开请求；工具轮次完成后才释放等待中的新话语。`ignore_input` / `wait_for_input` 之后只有新词到达才重新判断，不循环请求。播放器手动操作、断开会话都会取消待处理工作，旧委派的迟到文本和指令不再影响播放器，但使用量仍记账。
+
+这只是保证后台有机会判断，不直接决定回应或放行音频：旁人聊天仍由 `ignore_input` 忽略，后台输出答案或查询文稿才 `engage`，播放器工具仍经 NDJSON 和执行回报。请求被拒绝、10 秒没有开始事件、或后台明确失败都会输出错误，避免一直停在“听到了但没反馈”。日志新增 `Aside voice delegation fallback requested`，包含事件 ID 和字符数，不记录用户原话。
+
+接口依据：[Live sideband `response.create`](https://developers.openai.com/api/reference/resources/live/sideband-websocket#response.create) 支持主动请求 Responses 后台响应，以及继续工具调用。此次回归用确定性工具事件和静音合成 WebRTC 覆盖不委派、正常委派竞争、等待更多输入、忽略旁人、播放控制及对话历史；真实供应商和 iPad 麦克风效果仍需上线后验证。
