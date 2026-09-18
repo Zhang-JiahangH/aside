@@ -6,7 +6,49 @@ The compatibility PR #28 is a baseline, not completion of this goal.
 User scope correction: do not change Web behavior. Shared runtime extensions must
 be opt-in for mobile and preserve the existing Web policy and tests.
 
-## Current candidate — 2026-09-18, iPhone 39 / Android 19
+## Current backend — 2026-09-18, main `25e1621`
+
+Rebased the mobile branch onto `25e1621` without conflicts, preserving main's
+Jev shadow evaluation and deployment documentation. Runtime source `7ed30db`
+passes 421 local tests, type/module-boundary checks, both focused Cloudflare
+sideband paths and [full CI](https://github.com/qiz029/aside/actions/runs/35323289839).
+Web product source still matches main.
+
+Re-reading the successful physical speaker trace found two backend formulations
+of one question but only the later formulation in the accumulated spoken captions.
+That trace alone does not establish two audible answers. The previous completion
+metadata retained the first wording, which could leave an actually completed
+reply waiting for manual continuation. The server now observes at most two
+additional tool-free formulations and updates the original decision only after
+completed text matches output captions. No duplicate turn or player tool is
+admitted, and no extra model request is sent by this correction. The native client
+still owns heard history and must confirm matching captions and drained PCM.
+New input, manual state changes and finished/interrupted answers invalidate the
+observer; late events cannot revive an older turn.
+
+The existing iOS/Android build-38 fixture apps both pass this case against the
+updated backend, with actual RTC/native playback, one question/answer in history,
+no programme/reply overlap and after-completion replay rejection. Observed waits
+after native completion: iOS 3,001 ms, Android 3,101 ms (200 ms sampling).
+Supplier output is synthetic; this does not measure model quality. The installed
+iPhone 39 and distributed Android 19 use the same protocol and need no rebuild
+for this server-side correction.
+
+Before deployment, remote main and the production author/version were rechecked:
+main was `25e1621`; the preceding Worker was Todd's `99cfb905`, containing Jev
+but omitting the unmerged mobile policy. Worker
+`62fe977a-e6e6-42a2-ad06-dbf1febcb115` now contains both. Deployment retained the
+media container and existing secrets; four read-only mobile-auth/Origin checks
+pass. Future main-only deployments can still remove the unmerged mobile policy.
+No paid model or email request was made during this validation.
+
+Evidence: [answer-variant compatibility](mobile-evidence/continuous-variants-2026-09-18.json).
+The distinct artificial case where two supplier replies actually overlap remains
+unresolved, as recorded below. Physical natural continuation, local barge-in
+quality, headset/call handling, the visible iOS lock-screen card and paid Apple
+distribution remain acceptance items. PR #29 remains a draft.
+
+## Native candidate — 2026-09-18, iPhone 39 / Android 19
 
 Source `b685f13` integrates main through `6164f99`, including the decision-wait
 expiry and continuation diagnostics. Unclassified brief input no longer strands
@@ -28,9 +70,9 @@ embedded JS with test mode, OTA and temporary diagnostic helpers off.
 [Android 19 installation](https://expo.dev/accounts/jiahangzhang/projects/aside/builds/18115024-dfe0-4a7e-8671-4b38389d64ad).
 Evidence: [latest candidate verification](mobile-evidence/continuous-noise-2026-09-18.json).
 
-Before publishing, the deployment author/version was checked against the known
-upstream `6c57ab56` deployment. Worker `3cc34209-2d82-4e88-8c5e-a0dedc7beda5` now
-contains both that upstream fix and the mobile backend policy; read-only
+At this candidate's original publication, the deployment author/version was checked against the known
+upstream `6c57ab56` deployment. Worker `3cc34209-2d82-4e88-8c5e-a0dedc7beda5` then
+contained both that upstream fix and the mobile backend policy; read-only
 authentication smoke passes and the media image is retained. A future deployment
 from main alone can still remove the unmerged mobile backend changes. PR #29's
 source and this deployment must be considered together until integration.

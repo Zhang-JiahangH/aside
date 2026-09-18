@@ -41,6 +41,16 @@ maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice
 - `continuous.mjs ios|android DEVICE`: launch through Maestro, enable conversation, and drive a unique question through the actual Worker control stream and native RTC output. Assert microphone RTP, rendered answer activity, drained PCM before countdown, semantic continuation, retained microphone, visible question/answer and no overlap with podcast playback. Inject a second delegation and real PCM after verified completion; it must not reopen the reply or enter history. Native diagnostics retain `lastDrain`, the measured playout state before the completed answer's gate closes. Set `EXTENDED=1` to also exercise ignored speech, continuous follow-ups on one anchor and the long-answer eight-second wait. `PORT` and `MAESTRO` select the fixture and executable. Evidence defaults to `/tmp/aside-continuous-PLATFORM-native.json`.
 - `player-ui.yaml`: keyboard/composer, playback options, Chinese/English and restoring the default preference. Run separately in light/dark and at small screen / enlarged text sizes; inspect screenshots for clipping and hierarchy.
 
+Set `VARIANT=1` for `continuous.mjs` to reproduce two completed backend
+formulations with only the later formulation spoken by Live. The first answer
+must not strand completion: the server observes the later tool-free answer and
+matching output captions, then updates the original decision's metadata. The
+native client still requires matching heard captions and drained PCM before
+continuation. This uses the existing protocol and can validate an already-built
+fixture app against the current server. Run platforms sequentially against one
+fixture server, because session discovery assumes one new voice session at a time.
+It does not establish suppression of two actually audible overlapping replies.
+
 `overlap.mjs EVIDENCE_FILE DEVICE` characterizes a different boundary immediately
 after `continuous.mjs`, while its microphone/session remains connected. It injects
 a second delegation and real PCM while the first answer is still audibly playing.

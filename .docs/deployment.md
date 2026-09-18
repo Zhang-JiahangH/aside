@@ -522,3 +522,11 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 ```
 
 采用门槛（建议）：数百句真实数据上，置信度 ≥ 0.6 的一致率 ≥ 98%，`jev_ms` p95 < 400ms，非 `ok` 比例 < 1%；达标后也只让它接管"忽略"与播放控制，并始终保留后端模型兜底。
+
+## Jev 与移动端兼容部署（2026-09-18）
+
+移动分支 PR #29 已 rebase 到 `25e1621`。发布前重新核对远端 main、生产作者与版本，确认线上为上述 `99cfb905`。从 `7ed30db` 部署 Worker `62fe977a-e6e6-42a2-ad06-dbf1febcb115`，同时包含 Jev 影子评测与移动端尚未合并的语音策略；Web 产品代码与 main 一致。使用 `--containers-rollout=none`，保留媒体容器与现有 Secrets，未重新执行数据库迁移。
+
+该版本还修复了同一问题产生两份后端措辞、Live 只朗读后一份时，移动端完成判断滞留在第一份文字的问题。只在完整候选文字与输出字幕吻合后更新原有回答元数据；原生端仍核对实际播放与音频队列排空。额外的问答轮次和播放工具调用继续拒绝。
+
+验证：421 项本地测试、类型/边界检查、Cloudflare Web/mobile 语音链路和 [完整 CI](https://github.com/qiz029/aside/actions/runs/35323289839) 通过；双端模拟器复用既有 build 38 验证成功，发布后 4 项登录路由/Bearer/Origin 检查通过。iPhone 39、Android 19 无需重装。此次验证未发邮件或调用真实模型。详细证据见 [移动端交付记录](continuous-mobile-delivery.md)。PR #29 仍为 draft；后续从 main 单独部署仍会移除未合并的移动端后端能力，发布前需继续核对作者、版本与源码。
