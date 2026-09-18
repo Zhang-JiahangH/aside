@@ -14,7 +14,8 @@ export interface BackendDecision {
   resume?: boolean;
   commands?: PlayerCommand[];
   followUpQuestion?: string;
-  answer?: string;
+  /** A promise is a backend still writing after its lookup; it engaged already. */
+  answer?: string | Promise<string>;
   /** Read the podcast first, as a real answer usually does. */
   lookup?: boolean;
 }
@@ -148,7 +149,10 @@ export class FakeDelegatedLive {
     if (decision.lookup)
       await call("search_podcast", { query: text.slice(0, 20) });
     if (decision.answer !== undefined)
-      backend({ type: "response.output_text.delta", delta: decision.answer });
+      backend({
+        type: "response.output_text.delta",
+        delta: await decision.answer,
+      });
     backend({
       type: "response.completed",
       response: {

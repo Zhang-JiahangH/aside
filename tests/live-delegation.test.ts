@@ -132,6 +132,9 @@ test("a podcast lookup engages the browser and returns passages over the sideban
   assert.equal(s.sent[0].item.type, "function_call_output");
   assert.equal("delegation_id" in s.sent[0], false);
   assert.match(s.sent[0].item.output, /biography/);
+  // The continuation is its own response; its text is the whole remaining reply.
+  s.backend({ type: "response.completed", response: {} });
+  s.backend({ type: "response.created" });
   s.backend({ type: "response.output_text.delta", delta: "A biography " });
   s.backend({ type: "response.output_text.delta", delta: "is a life story." });
   s.backend({
@@ -152,6 +155,7 @@ test("a podcast lookup engages the browser and returns passages over the sideban
   assert.equal(answered?.type === "answered" && answered.decisionId, engage.decisionId);
   assert.equal(answered?.type === "answered" && answered.answer, "A biography is a life story.");
   assert.equal(answered?.type === "answered" && answered.sources.length > 0, true);
+  assert.equal(answered?.type === "answered" && answered.final, true, "no tool call follows: the reply is complete");
   assert.equal(s.engages().length, 1, "one engage per delegation");
   assert.deepEqual(s.costs, [
     { model: "gpt-5.6-luna", rounds: 1, tiers: ["priority"], inputTokens: 3000, cachedInputTokens: 2000, outputTokens: 90, reasoningTokens: 30 },

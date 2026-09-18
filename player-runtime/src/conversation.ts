@@ -55,7 +55,7 @@ export class Conversation {
   private answerPreview = "";
   private held = false;
   private deadline: number | null = null;
-  private waitMs = 3000;
+  private waitMs = 2000;
   private beganAt: number | null = null;
   private epoch = 0;
   private pending?: AbortController;
@@ -71,6 +71,8 @@ export class Conversation {
   private answerQueued = false;
   private outputIsAnswer = false;
   private livePending = false;
+  /** The delegated backend has engaged but not yet reported its finished answer. */
+  private liveOpen = false;
   private liveAnswerId?: string;
   private liveReplyOwner?: string;
   private samples: ResponseLatency[] = [];
@@ -159,6 +161,7 @@ export class Conversation {
     this.answerQueued = false;
     this.outputIsAnswer = false;
     this.livePending = false;
+    this.liveOpen = false;
     this.liveAnswerId = undefined;
     this.liveReplyOwner = undefined;
     this.latency.cancel();
@@ -326,8 +329,9 @@ export class Conversation {
   scheduleFollowup() {
     const epoch = this.epoch,
       revision = this.host.playback().revision;
+    // A long written answer earns reading time; a spoken one has been heard.
     const delay =
-      this.waitMs > 0 && this.longAnswer
+      this.waitMs > 0 && this.longAnswer && !this.outputIsAnswer
         ? Math.max(this.waitMs, 8000)
         : this.waitMs;
     this.followup.arm(
@@ -343,6 +347,7 @@ export class Conversation {
           !state.assistantSpeaking &&
           !this.pending &&
           !this.livePending &&
+          !this.liveOpen &&
           !this.delegation &&
           !this.answerQueued &&
           !this.draft.trim() &&
@@ -375,17 +380,28 @@ export class Conversation {
     this.host.log("Backend delegation engaged");
     this.host.engage();
     this.answerQueued = true;
-    // Audio inactivity cannot authorize podcast playback; wait for an
-    // explicit resume request throughout this spoken conversation.
-    this.hold();
+    // A quiet gap while the backend is still answering can be a lookup, not
+    // the end of the reply: the follow-up window stays shut until `answered`.
+    this.liveOpen = true;
     this.host.voice()?.activity();
     this.host.changed();
   }
-  /** The backend's finished answer: references and length only; the transcript carries the words. */
-  liveAnswered(answer: string, sources: Source[]) {
+  /**
+   * The backend's answer: references and length only; the transcript carries
+   * the words. A final answer is the reply boundary audio silence cannot give,
+   * so from here a quiet follow-up window may resume the podcast.
+   */
+  liveAnswered(answer: string, sources: Source[], final = true) {
     this.references = sources;
-    this.noteAnswer(answer);
     this.host.log(`Backend delegated answer (${answer.length} characters)`);
+    if (final) {
+      this.liveOpen = false;
+      // Text finishes before speech does. If the voice is silent right now,
+      // what it said so far was at most a progress sentence: the answer audio
+      // is still to come and must play out before the window opens.
+      if (!this.host.playback().assistantSpeaking) this.answerQueued = true;
+      this.scheduleFollowup();
+    }
     this.host.changed();
   }
   /** A server decision arrives on the session stream; this never submits a question. */
@@ -528,10 +544,10 @@ export class Conversation {
     const voice = this.host.voice();
     if ((delegationId || speak) && voice) {
       this.answerQueued = true;
-      // GPT-Live may pause to think or fetch information, then speak again.
-      // Audio inactivity cannot authorize podcast playback; wait for an
-      // explicit resume request throughout this spoken conversation.
-      this.hold();
+      // A server-pushed answer has no completion event, and GPT-Live may pause
+      // to think before speaking again: silence cannot resume that one. An
+      // answer this client fetched is complete, so its audio ending is the end.
+      if (serverOwned) this.hold();
       if (result.answer.trim())
         voice.append("commentary", result.answer, delegationId ?? null);
       voice.activity();

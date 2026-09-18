@@ -536,7 +536,7 @@ test("manual permission resolving after release or mode change cannot begin capt
     s.session.dispose();
   }
 });
-test("voice progress is excluded from latency and silence after the answer does not start a countdown", async () => {
+test("voice progress is excluded from latency and the countdown starts after the answer audio", async () => {
   const s = setup("auto");
   s.session.start();
   await flush();
@@ -559,10 +559,10 @@ test("voice progress is excluded from latency and silence after the answer does 
   ]);
   s.clock.advance(1000);
   s.callbacks.onOutput(false);
-  assert.equal(s.session.getSnapshot().resumeSeconds, null);
-  s.clock.advance(10000);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.clock.advance(3000);
   await flush();
-  assert.equal(s.audio.playing, false);
+  assert.equal(s.audio.playing, true, "three quiet seconds resume the podcast");
   s.session.dispose();
 });
 test("warm transcript and delegation cancel countdown, then resume survives cloud failure", async () => {
@@ -1553,11 +1553,7 @@ test("a delegated engage pauses the podcast, opens the reply window without clie
   s.callbacks.onOutput(false);
   await flush();
   assert.equal(s.session.getSnapshot().history.at(-1)?.role, "assistant");
-  assert.equal(
-    s.audio.playing,
-    false,
-    "quiet output is not permission to resume",
-  );
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3, "a finished answer opens the follow-up window");
   const stale = {
     type: "engage" as const,
     version: s.serverState.version + 5,
@@ -2686,4 +2682,82 @@ test("new conversation preserves playing audio and never opens a microphone that
   assert.equal(s.session.getSnapshot().state.mode, "playing");
   assert.deepEqual(s.session.checkpoint().history, []);
   assert.equal(s.voiceCount, 0);
+});
+
+function engaged(s: ReturnType<typeof setup>) {
+  const decisionId = crypto.randomUUID();
+  s.push({
+    type: "engage",
+    version: s.serverState.version,
+    revision: s.serverState.revision,
+    decisionId,
+    player: { ...s.serverState, source: "voice", turnId: "server-turn" },
+    text: "What is a biography?",
+  });
+  return decisionId;
+}
+
+test("a delegated answer resumes the podcast after a quiet follow-up window, never before it is complete", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const decisionId = engaged(s);
+  await flush();
+  // A lookup pause: the voice spoke, went quiet, and the backend is not done.
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "Let me check that.");
+  s.callbacks.onOutput(false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false, "silence before `answered` is not the end");
+  // Text and a tool call in one response: more of the reply is still coming.
+  s.push({ type: "answered", decisionId, answer: "One moment.", sources: [], final: false });
+  await flush();
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false, "a non-final answer keeps the window shut");
+  s.push({ type: "answered", decisionId, answer: "A biography is a life story.", sources: [] });
+  await flush();
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false, "the answer text is ready but has not been spoken yet");
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", " A biography is a life story.");
+  await flush();
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false, "never while the answer is being spoken");
+  s.callbacks.onOutput(false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.clock.advance(3000);
+  await flush();
+  assert.equal(s.audio.playing, true);
+});
+
+test("speech or a held window stops a delegated answer from resuming the podcast", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const decisionId = engaged(s);
+  await flush();
+  s.push({ type: "answered", decisionId, answer: "A biography is a life story.", sources: [] });
+  s.callbacks.onOutput(true);
+  s.callbacks.onOutput(false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.callbacks.onSpeech(true);
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false, "someone is speaking");
+  s.callbacks.onSpeech(false);
+  // The server decides what that speech was; background talk reopens the window.
+  s.push(s.decision("ignore"));
+  await flush();
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3, "the window restarts after speech");
+  s.session.holdResume();
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false, "the listener asked to stay paused");
 });

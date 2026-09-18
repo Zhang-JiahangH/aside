@@ -507,12 +507,15 @@ test("an interrupted reply and early progress stay on opposite sides of the new 
 test("a progress sentence, thinking pause and ignored bystander speech keep the podcast paused until requested", async ({
   page,
 }) => {
+  // The backend is still working through the pause; it finishes on release.
+  let finish = () => {};
+  const finished = new Promise<void>((resolve) => (finish = resolve));
   const s = await setupRemote(page, true, (text) =>
     text.includes("dinner")
       ? { ignore: true }
       : text.includes("resume")
         ? { resume: true }
-        : { answer: "The actual explanation" },
+        : { lookup: true, answer: finished.then(() => "The actual explanation") },
   );
   await page.locator(".debug-toggle").click();
   await s.speak(["Can you explain that?"]);
@@ -528,6 +531,7 @@ test("a progress sentence, thinking pause and ignored bystander speech keep the 
     s.updates.some((u) => u.player.assistant?.state === "quiet"),
     "the quiet spoken reply was reported to the server",
   ).toBe(true);
+  finish();
   await s.reply(" Here is what I found.");
   await expect
     .poll(
@@ -540,10 +544,40 @@ test("a progress sentence, thinking pause and ignored bystander speech keep the 
         ).session?.spokenReply?.text,
     )
     .toBe("Let me check that. Here is what I found.");
+  // The bystander's utterance superseded the first delegation, so the backend
+  // never reports that answer finished: silence alone must not resume.
+  await page.waitForTimeout(4000);
   expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
   await s.speak(["Please resume the podcast"]);
   await expect
     .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(false);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.errors).toEqual([]);
+});
+
+test("a finished spoken answer resumes the podcast after a quiet follow-up window, not during a lookup pause", async ({
+  page,
+}) => {
+  let finish = () => {};
+  const finished = new Promise<void>((resolve) => (finish = resolve));
+  const s = await setupRemote(page, true, () => ({
+    lookup: true,
+    answer: finished.then(() => "The actual explanation"),
+  }));
+  await page.locator(".debug-toggle").click();
+  await s.speak(["Can you explain that?"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  await s.reply("Let me check that.");
+  // Longer than the follow-up window, with the backend still answering.
+  await page.waitForTimeout(4000);
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+  finish();
+  await s.reply(" Here is what I found.");
+  await expect
+    .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused), {
+      timeout: 10000,
+    })
     .toBe(false);
   expect(s.questionRequests()).toBe(0);
   expect(s.errors).toEqual([]);

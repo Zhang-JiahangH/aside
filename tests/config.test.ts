@@ -52,7 +52,7 @@ test("voice lifecycle budgets have bounded configurable defaults", async () => {
     preRollMs: 750,
     graceMs: 5000,
     idleCloseMs: 60000,
-    autoResumeMs: 3000,
+    autoResumeMs: 2000,
   });
   assert.equal(
     readVoiceLifecycleConfig({ ASIDE_LIVE_GRACE_MS: "0" }).graceMs,

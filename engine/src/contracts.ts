@@ -223,12 +223,17 @@ export const liveControlEventSchema = z.discriminatedUnion("type", [
   }),
   /** A delegation ended without a reply (a playback control only): whatever the voice buffered meanwhile is not an answer. */
   z.object({ type: z.literal("discard"), version: revisionSchema }),
-  /** The backend's finished answer text and sources, for references and diagnostics; the spoken wording is the voice model's. */
+  /**
+   * The backend's answer text and sources, for references and diagnostics; the
+   * spoken wording is the voice model's. `final: false` means tool calls follow
+   * and more of the reply is coming, so silence is not yet the end of it.
+   */
   z.object({
     type: z.literal("answered"),
     decisionId: z.string(),
     answer: z.string().max(64000),
     sources: z.array(sourceSchema),
+    final: z.boolean().optional(),
   }),
   z.object({ type: z.literal("error"), error: z.string() }),
   z.object({ type: z.literal("closed") }),

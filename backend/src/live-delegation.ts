@@ -393,6 +393,7 @@ export class LiveDelegation {
             decisionId: delegation.engaged,
             answer: delegation.answer,
             sources: delegation.sources,
+            final: !delegation.hasTools,
           });
           delegation.answer = "";
         } else if (!delegation.engaged && !delegation.ignored) {

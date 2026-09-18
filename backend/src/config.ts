@@ -54,7 +54,7 @@ export function readVoiceLifecycleConfig(env: NodeJS.ProcessEnv = process.env) {
     return n;
   };
   return {
-    autoResumeMs: integer("ASIDE_AUTO_RESUME_MS", 3000, 0, 60000),
+    autoResumeMs: integer("ASIDE_AUTO_RESUME_MS", 2000, 0, 60000),
     preRollMs: integer("ASIDE_MIC_PRE_ROLL_MS", 750, 200, 3000),
     graceMs: integer("ASIDE_LIVE_GRACE_MS", 5000, 0, 60000),
     idleCloseMs: integer("ASIDE_LIVE_IDLE_CLOSE_MS", 60000, 10000, 300000),

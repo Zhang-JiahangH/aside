@@ -232,7 +232,7 @@ export class ListeningSession {
     this.lifecycle = health.voiceLifecycle;
     this.configured = health.liveConfigured;
     if (!this.customWait)
-      this.conversation.setWait(health.voiceLifecycle.autoResumeMs ?? 3000);
+      this.conversation.setWait(health.voiceLifecycle.autoResumeMs ?? 2000);
     this.publish();
   }
   load(episode: Episode, checkpoint: Checkpoint | null) {
@@ -1188,7 +1188,11 @@ export class ListeningSession {
         this.spokenReply?.decisionId === event.decisionId &&
         this.spokenReply.state !== "interrupted"
       )
-        this.conversation.liveAnswered(event.answer, event.sources);
+        this.conversation.liveAnswered(
+          event.answer,
+          event.sources,
+          event.final !== false,
+        );
       return;
     }
     if (event.type === "engage") {
