@@ -233,6 +233,7 @@ export const english: Record<string, string> = {
   收听与对话示意: "Preview of listening and conversation",
   "无需注册，先听一段": "No sign-up. Start with a listen.",
   体验示例: "Try a sample",
+  "我们在 Product Hunt 上线了": "We’re live on Product Hunt",
   "听访谈、课程或讨论时，随时开口。Aside 会结合刚才的内容，和你聊问题、想法与不同意见。聊完，从刚才那句话继续听。":
     "Speak up during an interview, lecture, or discussion. Aside draws on what you just heard to explore your questions, ideas, and different perspectives. Then pick up from the sentence you left.",
   "你也有话想说。": "Interactive now.",

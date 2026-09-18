@@ -132,9 +132,24 @@
   flex-wrap: wrap;
 }
 .hero-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
   font-size: 13px;
-  color: var(--ink-2);
-  margin: 16px 0 0;
+  color: var(--ink-3);
+  text-decoration: none;
+  margin: 22px 0 0;
+  transition: color 160ms ease;
+}
+.hero-note svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.hero-note:hover,
+.hero-note:focus-visible {
+  color: var(--ink);
 }
 .hero-preview {
   position: relative;

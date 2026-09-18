@@ -118,6 +118,21 @@ export function Landing({
               </button>
               {accountControl}
             </div>
+            <a
+              className="hero-note"
+              href="https://www.producthunt.com/products/aside-7?utm_source=asidefm&utm_medium=hero"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path
+                  fillRule="evenodd"
+                  d="M10 20a10 10 0 1 1 0-20 10 10 0 0 1 0 20zm1.33-10H8.5V7h2.83a1.5 1.5 0 0 1 0 3zm0-5H6.5v10h2v-3h2.83a3.5 3.5 0 1 0 0-7z"
+                />
+              </svg>
+              {t("我们在 Product Hunt 上线了")}
+              <span aria-hidden="true">↗</span>
+            </a>
             {error && <p role="alert">{error}</p>}
           </div>
         </section>
