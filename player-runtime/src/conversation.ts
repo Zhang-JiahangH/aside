@@ -40,6 +40,7 @@ interface ConversationHost {
     handledText: string,
   ): void;
   textAnswered(): void;
+  spokenFinished?(decisionId: string): void;
   error(message: string): void;
   changed(): void;
   log(message: string): void;
@@ -86,8 +87,9 @@ export class Conversation {
   /** The delegated backend has engaged but not yet reported its finished answer. */
   private liveOpen = false;
   private liveAnswerId?: string;
-  private liveReplyOwner?: string;
   private spokenCompletion?: SpokenCompletion;
+  private completionReported = false;
+  private liveReplyOwner?: string;
   private samples: ResponseLatency[] = [];
   private latency: ResponseLatencyTracker;
   private followup: FollowupTimer;
@@ -182,8 +184,9 @@ export class Conversation {
     this.pendingExpiry = undefined;
     this.liveOpen = false;
     this.liveAnswerId = undefined;
-    this.liveReplyOwner = undefined;
     this.spokenCompletion = undefined;
+    this.completionReported = false;
+    this.liveReplyOwner = undefined;
     this.latency.cancel();
     this.host.voice()?.setWorking(false);
     this.host.changed();
@@ -372,6 +375,10 @@ export class Conversation {
   }
   private confirmSpokenCompletion() {
     if (!this.spokenCompletion?.complete) return;
+    if (!this.completionReported && this.liveReplyOwner) {
+      this.completionReported = true;
+      this.host.spokenFinished?.(this.liveReplyOwner);
+    }
     this.answerQueued = false;
     this.scheduleFollowup();
     this.host.changed();

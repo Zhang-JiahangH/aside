@@ -29,6 +29,7 @@ export class NativeAudioOutput {
   private speechCandidate?: number;
   private lastInput = 0;
   private status?: AudioStatus;
+  private lastDrain?: AudioStatus;
   private pending: {
     text: string;
     frame: number;
@@ -81,6 +82,7 @@ export class NativeAudioOutput {
             !this.pending.length
           ) {
             this.drained = true;
+            this.lastDrain = status;
             this.cb.onOutputDrained?.();
           }
           if (this.microphone) this.input(status.inputLevel);
@@ -127,6 +129,7 @@ export class NativeAudioOutput {
     void this.command(value ? 0 : 2);
   }
   private command(mode: number) {
+    if (mode !== 0 && mode !== this.mode) this.lastDrain = undefined;
     this.mode = mode;
     if (mode === 0) {
       this.pending = [];
@@ -174,7 +177,11 @@ export class NativeAudioOutput {
     }
   }
   diagnostics() {
-    return { ...this.status, pendingCaptionCharacters: this.characters };
+    return {
+      ...this.status,
+      lastDrain: this.lastDrain,
+      pendingCaptionCharacters: this.characters,
+    };
   }
   close() {
     this.closed = true;

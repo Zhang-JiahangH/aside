@@ -148,7 +148,9 @@ mf = new Miniflare(
         };
         if (action.action === "status")
           return Response.json(await rtc({ action: "status" }));
-        if (!["question", "ignore", "resume"].includes(action.action))
+        if (
+          !["question", "duplicate", "ignore", "resume"].includes(action.action)
+        )
           return Response.json(
             { error: "Unknown fixture action" },
             { status: 400 },
@@ -163,8 +165,10 @@ mf = new Miniflare(
           start_ms: Math.max(0, endMs - 500),
           end_ms: endMs,
         };
-        await rtc({ action: "event", event: input });
-        send(input);
+        if (action.action !== "duplicate") {
+          await rtc({ action: "event", event: input });
+          send(input);
+        }
         send({
           type: "session.delegation.created",
           delegation: {
@@ -173,6 +177,14 @@ mf = new Miniflare(
             type: "delegation",
           },
         });
+        if (action.action === "duplicate") {
+          response({ type: "response.created", response: {} });
+          response({ type: "response.output_text.delta", delta: answer });
+          response({ type: "response.completed", response: { output: [] } });
+          return Response.json(
+            await rtc({ action: "answer", text: answer, duration: 1 }),
+          );
+        }
         if (action.action === "question") {
           // Deliberately start real audio BEFORE the server admits the reply.
           // A muted media track would lose this prefix; the native PCM gate must retain it.
@@ -191,7 +203,9 @@ mf = new Miniflare(
               arguments: JSON.stringify({ query: "curiosity" }),
             },
           });
+          response({ type: "response.completed", response: { output: [] } });
           await new Promise((resolve) => setTimeout(resolve, 200));
+          response({ type: "response.created", response: {} });
           response({ type: "response.output_text.delta", delta: answer });
           response({ type: "response.completed", response: { output: [] } });
           return Response.json({ ok: true, delegation, ...evidence });

@@ -36,7 +36,7 @@ const state = (patch: Partial<LivePlayerState> = {}): LivePlayerState => ({
   config: createPlayerConfig(),
   ...patch,
 });
-function setup(debug = false, limit = 30) {
+function setup(debug = false, limit = 30, mobile = false) {
   let now = 0;
   const timers = new Map<number, { at: number; run: () => void }>();
   let next = 0;
@@ -70,6 +70,7 @@ function setup(debug = false, limit = 30) {
     },
     debug,
     limit,
+    mobile,
   );
   const advance = async (ms = 200) => {
     now += ms;
@@ -351,9 +352,10 @@ test("a fallback respects the session's existing request budget", async () => {
   assert.equal(s.events.at(-1)?.type, "error");
 });
 
+for (const mobile of [false, true])
 for (const initialDecision of ["wait_for_input", "ignore_input"])
-  test(`new speech after ${initialDecision} receives a second interpretation, not a repeated pause`, async () => {
-    const s = setup();
+  test(`${mobile ? "mobile" : "Web"}: new speech after ${initialDecision} receives a second interpretation, not a repeated pause`, async () => {
+    const s = setup(false, 30, mobile);
     s.speak("When");
     await s.advance(600);
     s.backend({ type: "response.created", response: {} });
@@ -617,6 +619,62 @@ test("the backend's transcript window follows playback with session.update, at m
   assert.match(s.sent[1].session.delegation.responses.instructions, /playheadMs 1000/);
   s.delegation.close();
 });
+
+test("mobile reports interruption and heard-answer state even while the playhead stays in one passage", async () => {
+  const s = setup(false, 30, true);
+  const updates = () => s.sent.filter((e) => e.type === "session.update");
+  s.delegation.update(state({ sequence: 1, wasPlaying: false, audibleSource: "none",
+    playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 40000 },
+    assistant: { decisionId: "answer-1", text: "A biography is a life story.", state: "finished" },
+  }));
+  assert.equal(updates().length, 1, "state change must reach Responses without a passage change");
+  const instructions = updates()[0].session.delegation.responses.instructions;
+  assert.match(instructions, /"interrupted":true/);
+  assert.match(instructions, /"state":"finished"/);
+  assert.match(instructions, /A biography is a life story/);
+  for (let i = 2; i <= 21; i++) {
+    s.delegation.update(state({ sequence: i, positionMs: 45000 + i, wasPlaying: false, audibleSource: "none",
+      playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 40000 },
+      assistant: { decisionId: "answer-1", text: "A biography is a life story.", state: "finished" },
+    }));
+    await s.advance(250);
+  }
+  assert.equal(updates().length, 1, "native status ticks do not resend context");
+  s.delegation.update(state({ sequence: 22, playback: { mode: "playing", interrupted: false } }));
+  assert.equal(updates().length, 2);
+  assert.match(updates()[1].session.delegation.responses.instructions, /"interrupted":false/);
+  assert.doesNotMatch(updates()[1].session.delegation.responses.instructions, /"decisionId":"answer-1"/);
+  s.delegation.close();
+});
+
+for (const mobile of [false, true])
+  test(`a second delegation for an already answered input is ${mobile ? "suppressed on mobile" : "unchanged on Web"}`, async () => {
+    const s = setup(false, 30, mobile);
+    s.speak("What is a novelist?");
+    await s.advance(600); // The same fallback/natural-delegation ordering as the device trace.
+    s.delegate("first");
+    s.backend({ type: "response.created", response: { id: "response-first" } });
+    s.backend({ type: "response.output_text.delta", delta: "A novelist writes novels." });
+    s.backend({ type: "response.completed", response: { id: "response-first" } });
+    s.delegate("duplicate");
+    s.backend({ type: "response.created", response: { id: "response-duplicate" } });
+    s.backend({ type: "response.output_text.delta", delta: "A novelist is a writer of novels." });
+    s.call("control_podcast", { commands: [{ type: "adjust_rate", direction: "faster" }] });
+    s.backend({ type: "response.completed", response: { id: "response-duplicate", usage: { input_tokens: 10, output_tokens: 5 } } });
+    assert.equal(s.engages().length, mobile ? 1 : 2);
+    assert.equal(s.events.filter((e) => e.type === "answered").length, mobile ? 1 : 2);
+    assert.equal(s.decisions().length, mobile ? 0 : 1);
+    assert.equal(s.costs.length, 1, "ignored supplier work remains billable and must be accounted for");
+    if (mobile) {
+      s.delegation.receive({ type: "session.input_transcript.delta", delta: "And a poet?", start_ms: 5000, end_ms: 5500 });
+      s.delegate("follow-up");
+      s.backend({ type: "response.output_text.delta", delta: "A poet writes poetry." });
+      s.backend({ type: "response.completed", response: {} });
+      assert.equal(s.engages().length, 2, "a genuine next utterance still answers");
+      assert.equal(s.engages()[1].text, "And a poet?");
+    }
+    s.delegation.close();
+  });
 
 test("the tool call cap ends the session with an explicit error", async () => {
   const s = setup(false, 2);

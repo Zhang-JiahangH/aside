@@ -10,6 +10,8 @@ type MobileApi = Required<
   restore(): Promise<void>;
 };
 import type { LiveControlUpdate } from "@aside/engine/contracts";
+import { liveSchema } from "@aside/engine/contracts";
+import { createPlayerConfig } from "@aside/engine/player";
 
 async function fixture(
   fetcher: typeof fetch,
@@ -176,6 +178,24 @@ test("mobile execution acknowledgements use authenticated PUT and reject inactiv
     api.updateControl("episode", update, signal),
     /no longer active/,
   );
+});
+
+test("only controlled mobile sessions opt in to native conversation policy", async (t) => {
+  const bodies: unknown[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    bodies.push(JSON.parse(String(init.body)));
+    return Response.json({ session: { id: "test-live" }, transport: { sdp: "answer" } });
+  });
+  const api = await fixture(fetch);
+  api.token = null;
+  const request = { sdp: "offer", atMs: 1000, history: [] };
+  await api.live("episode", request);
+  assert.equal(liveSchema.parse(bodies[0]).control, undefined);
+  await api.live("episode", { ...request, control: { debug: false, player: {
+    version: 0, revision: 1, sequence: 0, positionMs: 1000,
+    wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig(),
+  } } });
+  assert.equal(liveSchema.parse(bodies[1]).control?.client, "mobile");
 });
 
 test("restarting mobile closes its persisted orphan before creating a paid replacement", async (t) => {

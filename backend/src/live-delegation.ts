@@ -81,14 +81,18 @@ export class LiveDelegation {
   private contextAt = -1;
   private contextSentAt = Number.NEGATIVE_INFINITY;
   private contextTimer?: () => void;
+  private conversationKey = "";
+  private answeredInput?: { turnId: string; text: string };
   constructor(
     private player: LivePlayerState,
     private analysis: Analysis,
     private ports: Ports,
     private debug = false,
     private limit = 30,
+    private mobile = false,
   ) {
     this.contextAt = this.passageAt(player.positionMs);
+    this.conversationKey = this.contextKey();
     this.responseTrigger = new LiveResponseTrigger({
       now: ports.now,
       after: ports.after,
@@ -322,6 +326,10 @@ export class LiveDelegation {
     if (delegation?.target && delegation.target !== "responses") return;
     const id = delegation?.id ?? crypto.randomUUID();
     if (this.retiredDelegations.has(id)) return;
+    if (this.mobile && this.alreadyAnswered()) {
+      this.retire(id);
+      return;
+    }
     // A local pause already opened this utterance's delegation record.
     if (this.delegation?.id.startsWith("local:") && !this.delegation.engaged)
       this.delegation.id = id;
@@ -353,6 +361,10 @@ export class LiveDelegation {
       if (response?.usage) this.record(response);
     }
     if (id && this.retiredDelegations.has(id)) return;
+    if (this.mobile && this.alreadyAnswered()) {
+      if (id) this.retire(id);
+      return;
+    }
     const starting = !this.delegation || (id && this.delegation.id !== id);
     const delegation =
       this.delegation ??
@@ -420,6 +432,13 @@ export class LiveDelegation {
             final: !delegation.hasTools,
           });
           delegation.answer = "";
+          if (this.mobile && !delegation.hasTools) {
+            this.answeredInput = {
+              turnId: delegation.input.turnId,
+              text: delegation.text,
+            };
+            this.retire(delegation.id);
+          }
         } else if (!delegation.engaged && !delegation.ignored) {
           // A control-only turn: the voice's own acknowledgement, if any, must
           // not surface later at the front of the next real answer.
@@ -459,6 +478,12 @@ export class LiveDelegation {
       outputTokens: usage.output_tokens ?? 0,
       reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? 0,
     });
+  }
+  private alreadyAnswered() {
+    return (
+      this.answeredInput?.turnId === this.input?.turnId &&
+      this.answeredInput?.text === this.text
+    );
   }
   private engage(delegation: Delegation, text: string) {
     const decisionId = crypto.randomUUID();
@@ -719,12 +744,14 @@ export class LiveDelegation {
     }
     this.refreshContext();
   }
-  /** The backend's transcript window follows playback, at most once per passage and every 3 s. */
+  /** Passage updates coalesce for 3 s; mobile conversation transitions reach the backend immediately. */
   private refreshContext() {
     const at = this.passageAt(this.player.positionMs);
-    if (at === this.contextAt) return;
+    const key = this.contextKey();
+    const conversationChanged = this.mobile && key !== this.conversationKey;
+    if (at === this.contextAt && !conversationChanged) return;
     const due = this.contextSentAt + 3000 - this.ports.now();
-    if (due > 0) {
+    if (due > 0 && !conversationChanged) {
       this.contextTimer ??= this.ports.after(due, () => {
         this.contextTimer = undefined;
         this.refreshContext();
@@ -732,6 +759,7 @@ export class LiveDelegation {
       return;
     }
     this.contextAt = at;
+    this.conversationKey = key;
     this.contextSentAt = this.ports.now();
     this.ports.send({
       type: "session.update",
@@ -743,9 +771,28 @@ export class LiveDelegation {
             instructions: delegationInstructions(
               this.analysis,
               this.player.positionMs,
+              this.mobile ? this.player : undefined,
             ),
           },
         },
+      },
+    });
+  }
+  private contextKey() {
+    if (!this.mobile) return "";
+    // Position, sequence and streaming caption fragments must not create
+    // repeated updates at the native player's status cadence.
+    const { wasPlaying, audibleSource, playback, config, assistant } =
+      this.player;
+    return JSON.stringify({
+      wasPlaying,
+      audibleSource,
+      playback,
+      config,
+      assistant: assistant && {
+        decisionId: assistant.decisionId,
+        state: assistant.state,
+        ...(assistant.state === "finished" ? { text: assistant.text } : {}),
       },
     });
   }

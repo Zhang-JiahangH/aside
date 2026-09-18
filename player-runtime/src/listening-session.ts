@@ -172,6 +172,14 @@ export class ListeningSession {
         followup: (text, speak) => this.submitQuestion(text, speak),
         control: (result, text) => this.applyRemoteControl(result, text),
         textAnswered: () => this.answerEnded(),
+        spokenFinished: (id) => {
+          if (this.spokenReply?.decisionId !== id || !this.answerWindow) return;
+          // Verified captions AND a drained native queue close this answer.
+          // Later supplier output requires a new admitted question.
+          this.answerWindow = false;
+          this.voice?.mute(true);
+          this.reportSpoken("finished");
+        },
         error: (message) => this.setError(message),
         changed: () => this.publish(),
         log: (message) => this.log(message),

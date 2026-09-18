@@ -234,7 +234,12 @@ export class MobileApi implements PlayerBackend {
     const token = this.token;
     const result = await this.json<Awaited<ReturnType<PlayerBackend["live"]>>>(
       `/episodes/${id}/live`,
-      request,
+      {
+        ...request,
+        ...(request.control
+          ? { control: { ...request.control, client: "mobile" } }
+          : {}),
+      },
     );
     if (token) {
       const entry = { token, episodeId: id, sessionId: result.session.id };

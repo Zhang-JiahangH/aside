@@ -2688,15 +2688,19 @@ test("the worker serves indexable pages, a live sitemap and real 404s", async ()
 });
 
 
-test("Live sideband executes tools and recovers a missing delegation on one owner-bound NDJSON stream", { timeout: 30000 }, async () => {
+for (const client of [undefined, "mobile"])
+test(`${client ?? "Web"}: Live sideband executes tools and recovers a missing delegation on one owner-bound NDJSON stream`, { timeout: 30000 }, async () => {
   const a = await visitor(), b = await visitor();
-  await seed("control-public", "seed", true);
+  const episodeId = `${client ?? "web"}-control-public`;
+  await seed(episodeId, "seed", true);
   await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, { "cf-connecting-ip": testerIp });
   const { createPlayerConfig } = await import("../../engine/src/player.ts");
   const player = { version: 0, sequence: 0, revision: 1, positionMs: 1000, wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig() };
   liveReply = async () => { throw Error("the server must not call the Responses API itself under delegation"); };
   let reader, sessionId;
-  const toolReturns = () => controlEvents.filter(e => e.type === "response.item.create" && e.item.type === "function_call_output").map(e => ({ callId: e.item.call_id, output: JSON.parse(e.item.output) }));
+  const controlStart = controlEvents.length;
+  const currentControl = () => controlEvents.slice(controlStart);
+  const toolReturns = () => currentControl().filter(e => e.type === "response.item.create" && e.item.type === "function_call_output").map(e => ({ callId: e.item.call_id, output: JSON.parse(e.item.output) }));
   const waitForControl = async read => {
     const deadline = Date.now() + 2000;
     while (Date.now() < deadline) {
@@ -2708,7 +2712,7 @@ test("Live sideband executes tools and recovers a missing delegation on one owne
   };
   try {
     const before = liveCreations.length, callsBefore = networkCalls.length;
-    const created = await a.request("/api/episodes/control-public/live", "POST", { sdp: "offer", atMs: 1000, control: { player, debug: true } }, { "cf-connecting-ip": testerIp });
+    const created = await a.request(`/api/episodes/${episodeId}/live`, "POST", { sdp: "offer", atMs: 1000, control: { player, debug: true, client } }, { "cf-connecting-ip": testerIp });
     assert.equal(created.status, 200, await created.clone().text());
     const live = await created.json(); sessionId = live.session.id;
     assert.equal(live.control, true);
@@ -2719,18 +2723,21 @@ test("Live sideband executes tools and recovers a missing delegation on one owne
     assert.equal(session.delegation.responses.service_tier, "priority");
     assert.equal(session.delegation.responses.tools.some(t => t.type === "web_search"), false, "trial delegation has no web search");
     assert.match(session.delegation.responses.instructions, /playheadMs 1000/);
+    assert.equal(session.delegation.responses.instructions.includes("Latest client-observed conversation state"), client === "mobile");
     assert.match(session.instructions, /MUST delegate/);
-    const path = `/api/episodes/control-public/live-control?sessionId=${sessionId}`;
+    const path = `/api/episodes/${episodeId}/live-control?sessionId=${sessionId}`;
     assert.equal((await b.request(path)).status, 404, "another visitor cannot subscribe to this session");
     const stream = await a.request(path);
     assert.equal(stream.status, 200); assert.match(stream.headers.get("content-type"), /ndjson/);
     reader = stream.body.getReader();
     let buffered = "";
+    const received = [];
     const next = async type => {
       for (;;) {
         while (buffered.includes("\n")) {
           const at = buffered.indexOf("\n"), line = buffered.slice(0, at); buffered = buffered.slice(at + 1);
           const event = JSON.parse(line);
+          received.push(event);
           assert.notEqual(event.type, "error", event.message);
           if (event.type === type) return event;
         }
@@ -2760,11 +2767,11 @@ test("Live sideband executes tools and recovers a missing delegation on one owne
     const update = { sessionId, player: { ...player, sequence: 1, revision: 2, config: { ...player.config, volume: 0.5 } }, acknowledgement: { decisionId: first.decisionId, applied: true } };
     assert.equal((await b.request(path, "PUT", update)).status, 404);
     assert.equal((await a.request(path, "PUT", update)).status, 200);
-    await waitForControl(() => controlEvents.filter(e => e.type === "response.create").length === 1);
+    await waitForControl(() => currentControl().filter(e => e.type === "response.create").length === 1);
     assert.deepEqual(toolReturns().map(r => r.callId), ["c1"]);
     assert.equal(toolReturns()[0].output.accepted, true);
     assert.equal(toolReturns()[0].output.player.volume, 0.5);
-    assert.equal(controlEvents.filter(e => e.type === "response.create").length, 1, "continuation follows the tool result");
+    assert.equal(currentControl().filter(e => e.type === "response.create").length, 1, "continuation follows the tool result");
     // A lookup means the backend is answering: the client yields and the voice model speaks.
     sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "What does that mean?", start_ms: 5000, end_ms: 5300 }));
     sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d2", target: "responses" } }));
@@ -2781,16 +2788,28 @@ test("Live sideband executes tools and recovers a missing delegation on one owne
     const answered = await next("answered");
     assert.equal(answered.decisionId, engage.decisionId);
     assert.equal(answered.answer, "A draft explanation");
+    if (client === "mobile") {
+      sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "duplicate-d2", target: "responses" } }));
+      backend({ type: "response.output_text.delta", delta: "Repeated explanation" }, "duplicate-d2");
+      backend({ type: "response.completed", response: {} }, "duplicate-d2");
+    }
     const spokenPlayer = { ...update.player, sequence: 2, revision: 2, wasPlaying: false, audibleSource: "none",
       playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 900 },
       assistant: { decisionId: engage.decisionId, text: "A draft explanation", state: "quiet" },
     };
     assert.equal((await a.request(path, "PUT", { sessionId, player: spokenPlayer, acknowledgement: { decisionId: engage.decisionId, applied: true } })).status, 200);
+    if (client === "mobile") {
+      const context = await waitForControl(() => currentControl().find(e => e.type === "session.update" && e.session.delegation.responses.instructions.includes('"state":"quiet"')));
+      assert.match(context.session.delegation.responses.instructions, /"interrupted":true/);
+      assert.match(context.session.delegation.responses.instructions, /A draft explanation/);
+    }
     // Resume goes through the client and reports back before the tool result.
     sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Yes", start_ms: 8000, end_ms: 8100 }));
     sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d3", target: "responses" } }));
     functionCall("c3", "resume_podcast", {}, "d3");
     const resume = await next("decision");
+    assert.equal(received.filter(e => e.type === "engage").length, 1);
+    assert.equal(received.filter(e => e.type === "answered").length, 1);
     assert.equal(resume.result.action, "resume");
     assert.equal((await a.request(path, "PUT", { sessionId, player: { ...spokenPlayer, sequence: 3, revision: 3, wasPlaying: true, audibleSource: "podcast", playback: { mode: "playing", interrupted: false } }, acknowledgement: { decisionId: resume.decisionId, applied: true } })).status, 200);
     const resumed = await waitForControl(() => toolReturns().find(r => r.callId === "c3"));
@@ -2840,7 +2859,7 @@ test("Live sideband executes tools and recovers a missing delegation on one owne
   } finally {
     liveReply = undefined;
     await reader?.cancel();
-    if (sessionId) await a.request("/api/episodes/control-public/usage", "POST", { sessionId, seconds: 1, finalized: true });
+    if (sessionId) await a.request(`/api/episodes/${episodeId}/usage`, "POST", { sessionId, seconds: 1, finalized: true });
   }
 });
 

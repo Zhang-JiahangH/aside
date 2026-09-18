@@ -2960,6 +2960,30 @@ async function mobileSpoken() {
   return { ...s, answer, hear };
 }
 
+test("mobile reports a verified answer as finished and closes its audio window before a late replay", async (t) => {
+  for (const metadataLast of [false, true]) {
+    const s = await mobileSpoken();
+    t.after(() => s.session.dispose());
+    if (!metadataLast) s.answer();
+    s.hear();
+    if (metadataLast) s.answer();
+    await flush();
+    assert.equal(s.updates.at(-1)?.player.assistant?.state, "finished");
+    assert.equal(s.updates.at(-1)?.player.assistant?.text, "A biography is a life story.");
+    const history = s.session.checkpoint().history;
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "Unrequested repeated answer.");
+    s.callbacks.onOutput(false);
+    s.callbacks.onOutputDrained?.();
+    assert.deepEqual(s.session.checkpoint().history, history);
+    assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+    s.clock.advance(3000);
+    await flush();
+    assert.equal(s.audio.playing, true);
+    assert.equal(s.session.getSnapshot().listeningActive, true);
+  }
+});
+
 test("native interruption cancels a mobile answer and never resumes or reopens the microphone on late drain", async (t) => {
   const s = await mobileSpoken();
   t.after(() => s.session.dispose());
@@ -3080,15 +3104,24 @@ test("mobile manual hold persists after a verified spoken answer and late comple
   assert.equal(s.session.getSnapshot().resumeHeld, true);
 });
 
-test("mobile draft and newly audible output cancel a pending automatic continuation", async (t) => {
+test("mobile draft and a newly admitted reply cancel a pending automatic continuation", async (t) => {
   const s = await mobileSpoken();
   t.after(() => s.session.dispose());
   s.answer();
   s.hear();
   s.clock.advance(1000);
+  const player = s.updates.at(-1)!.player;
+  const decisionId = "new-follow-up";
+  s.push({ type: "engage", version: player.version, revision: player.revision,
+    decisionId, player: { ...player, source: "voice", turnId: "new-input" },
+    text: "And an autobiography?",
+  });
+  await flush();
   s.callbacks.onOutput(true);
   s.clock.advance(10000);
   assert.equal(s.audio.playing, false);
+  s.push({ type: "answered", decisionId, answer: "The author tells their own life story.", sources: [] });
+  s.callbacks.onTranscript("assistant", "The author tells their own life story.");
   s.callbacks.onOutput(false);
   s.callbacks.onOutputDrained?.();
   s.session.setQuestion("A follow-up I am typing");

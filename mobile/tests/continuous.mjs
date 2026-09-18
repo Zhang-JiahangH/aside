@@ -78,6 +78,7 @@ try {
   assert.equal(response.status, 200);
   const transport = await response.json();
   assert.ok(transport.inputFrames > 0, "actual input media reaches RTC");
+  let replaySent = false;
   await waitFor(
     "native answer drain and resume",
     async () => {
@@ -93,11 +94,24 @@ try {
         "podcast remains paused during follow-up window",
       );
       assert.equal(
-        countdown.diagnostics.voice?.audio?.drained,
+        countdown.diagnostics.voice?.audio?.lastDrain?.drained,
         true,
         "native PCM drained before countdown",
       );
       assert.equal(countdown.diagnostics.voice?.audio?.active, false);
+      if (!replaySent) {
+        replaySent = true;
+        const replay = await fetch(`${base}/voice`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "duplicate",
+            sessionId,
+            answer: `Unrequested replay ${run}.`,
+          }),
+        });
+        assert.equal(replay.status, 200);
+      }
       return evidence.find(
         (s) =>
           s.at > countdown.at &&
@@ -138,7 +152,8 @@ try {
       `The second follow-up answer ${run}. ` +
       "A biography records the experiences and decisions of a person's life. ".repeat(
         8,
-      )).trim();
+      )
+    ).trim();
     await action({ action: "question", text: first, answer: short });
     const held = await waitFor(
       "first follow-up countdown",
@@ -190,6 +205,13 @@ try {
       assert.ok(resumed.history.some((t) => t.text === text));
   }
   const evidence = await samples();
+  assert.ok(replaySent);
+  assert.ok(
+    !evidence.some((s) =>
+      s.history.some((t) => t.text.includes(`Unrequested replay ${run}`)),
+    ),
+    "a duplicate backend delegation cannot reopen the completed answer or enter history",
+  );
   assert.ok(
     evidence.some((s) => s.diagnostics.voice?.audio?.active),
     "actual answer playout was observed",
