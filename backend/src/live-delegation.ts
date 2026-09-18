@@ -1,3 +1,8 @@
+import {
+  backendAction,
+  type JevShadow,
+  type ShadowHandle,
+} from "./jev-shadow.js";
 import type { Analysis } from "@aside/engine/core";
 import { getPassage, searchPodcast } from "@aside/engine/server";
 import {
@@ -22,6 +27,8 @@ interface Ports {
   now(): number;
   after(ms: number, callback: () => void): () => void;
   telemetry?(totals: QuestionTelemetry): void;
+  /** Optional side-by-side evaluation of another classifier; it never affects a decision. */
+  shadow?: JevShadow;
 }
 interface Delegation {
   id: string;
@@ -37,6 +44,7 @@ interface Delegation {
   hasTools: boolean;
   /** A local pause already sent for this utterance, resolving with the client's report. */
   fastPause?: Promise<{ applied: boolean; player: LivePlayerState }>;
+  shadow?: ShadowHandle;
 }
 /**
  * Immediate, safe pause words. GPT-Live delegates these too, but a listener
@@ -236,8 +244,10 @@ export class LiveDelegation {
     this.ports.send({ type: "response.create", event_id: eventId });
   }
   private replaceDelegation(next: Delegation) {
-    if (this.delegation && this.delegation.id !== next.id)
+    if (this.delegation && this.delegation.id !== next.id) {
+      this.delegation.shadow?.close();
       this.retire(this.delegation.id);
+    }
     this.delegation = next;
   }
   private retire(id: string) {
@@ -360,10 +370,23 @@ export class LiveDelegation {
       case "response.created":
         this.responseTrigger.started(delegation.input.turnId);
         delegation.hasTools = false;
+        // Every path that reaches the backend passes here, with the text it saw.
+        if (delegation.text.trim())
+          delegation.shadow ??= this.ports.shadow?.({
+            text: delegation.text,
+            wasPlaying: delegation.input.wasPlaying,
+            interrupted: this.player.playback?.interrupted ?? false,
+          });
         return;
       case "response.output_item.done": {
         const item = event.item as Record<string, unknown> | undefined;
         if (item?.type === "function_call") {
+          delegation.shadow?.decided(
+            backendAction(
+              String(item.name ?? ""),
+              typeof item.arguments === "string" ? item.arguments : "{}",
+            ),
+          );
           delegation.hasTools = true;
           void this.call(
             delegation,
@@ -376,6 +399,7 @@ export class LiveDelegation {
       }
       case "response.output_text.delta":
         if (typeof event.delta === "string") {
+          delegation.shadow?.decided("question");
           delegation.answer = (delegation.answer + event.delta).slice(0, 64000);
           if (!delegation.engaged && !delegation.ignored)
             this.engage(delegation, delegation.text);
@@ -733,6 +757,7 @@ export class LiveDelegation {
   }
   close() {
     this.closed = true;
+    this.delegation?.shadow?.close();
     this.responseTrigger.close();
     this.waiting?.cancel();
     this.waiting = undefined;

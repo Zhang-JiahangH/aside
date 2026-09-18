@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { QuestionTelemetry } from "../../backend/src/question-service.js";
+import { jevModel, type ShadowRecord } from "../../backend/src/jev-shadow.js";
 import type { Env } from "./env.js";
 import { HttpError, json } from "./http.js";
 import { readDailyStats } from "./stats.js";
@@ -11,6 +12,38 @@ export const RETENTION_DAYS = 90;
  * Records what one question spent. Never blocks or fails an answer: the ledger
  * is for reconciliation, so a D1 hiccup costs a row, not a reply.
  */
+/** One shadow comparison. Evidence only, so a failed write is dropped silently. */
+export async function recordJevShadow(
+  env: Pick<Env, "DB">,
+  entry: ShadowRecord,
+) {
+  const now = new Date();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO jev_shadow(id,ts,day,model,status,jev_ms,jev,confidence,backend,backend_ms,agree,characters,han,was_playing)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        now.getTime(),
+        now.toISOString().slice(0, 10),
+        jevModel,
+        entry.status,
+        Math.round(entry.jevMs),
+        entry.jev ?? null,
+        entry.confidence ?? null,
+        entry.backend ?? null,
+        entry.backendMs === undefined ? null : Math.round(entry.backendMs),
+        entry.jev && entry.backend ? Number(entry.jev === entry.backend) : null,
+        entry.characters,
+        Number(entry.han),
+        Number(entry.wasPlaying),
+      )
+      .run();
+  } catch (error) {
+    console.warn("Aside Jev shadow record dropped", { error: String(error) });
+  }
+}
 export async function recordQuestionUsage(
   env: Pick<Env, "DB">,
   entry: {

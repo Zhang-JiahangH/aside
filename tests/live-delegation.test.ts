@@ -43,6 +43,7 @@ function setup(debug = false, limit = 30) {
   const events: LiveControlEvent[] = [];
   const sent: Record<string, any>[] = [];
   const costs: unknown[] = [];
+  const shadowed: { text: string; interrupted: boolean; decided: string[]; closed: boolean }[] = [];
   const delegation = new LiveDelegation(
     state(),
     analysis,
@@ -58,6 +59,14 @@ function setup(debug = false, limit = 30) {
         };
       },
       telemetry: (totals) => costs.push(totals),
+      shadow: ({ text, interrupted }) => {
+        const entry = { text, interrupted, decided: [] as string[], closed: false };
+        shadowed.push(entry);
+        return {
+          decided: (action) => entry.decided.push(action),
+          close: () => (entry.closed = true),
+        };
+      },
     },
     debug,
     limit,
@@ -107,7 +116,7 @@ function setup(debug = false, limit = 30) {
   let sequence = 0;
   const ack = (decisionId: string, applied = true, patch: Partial<LivePlayerState> = {}) =>
     delegation.update(state({ sequence: ++sequence, ...patch }), { decisionId, applied });
-  return { delegation, events, sent, costs, advance, speak, delegate, backend, call, decisions, engages, outputs, ack };
+  return { delegation, events, sent, costs, shadowed, advance, speak, delegate, backend, call, decisions, engages, outputs, ack };
 }
 
 test("a podcast lookup engages the browser and returns passages over the sideband", async () => {
@@ -621,4 +630,20 @@ test("the tool call cap ends the session with an explicit error", async () => {
   await flush();
   assert.equal(s.events.at(-1)?.type, "error");
   assert.equal(s.sent.filter((e) => e.type === "response.item.create").length, 2);
+});
+
+test("the shadow classifier hears each utterance the backend sees and its first decision, and changes nothing", async () => {
+  const s = setup();
+  s.speak("Honey, what should we have for dinner?");
+  s.delegate();
+  assert.equal(s.shadowed.length, 0, "only once the backend has started on it");
+  s.backend({ type: "response.created" });
+  s.backend({ type: "response.created" });
+  assert.equal(s.shadowed.length, 1, "once per utterance");
+  assert.equal(s.shadowed[0].text, "Honey, what should we have for dinner?");
+  s.call("ignore_input", {});
+  await flush();
+  assert.deepEqual(s.shadowed[0].decided, ["ignore"]);
+  assert.equal(s.decisions().at(-1)?.result.action, "ignore", "the backend's decision stands");
+  s.delegation.close();
 });

@@ -11,7 +11,8 @@ import {
   type LiveRequest,
 } from "@aside/engine/contracts";
 import { LiveControl } from "../../backend/src/live-control.js";
-import { recordQuestionUsage } from "./usage.js";
+import { recordJevShadow, recordQuestionUsage } from "./usage.js";
+import { createJevShadow } from "../../backend/src/jev-shadow.js";
 import { fetchWebSocketUpgrade } from "../../backend/src/websocket-upgrade.js";
 import {
   liveSessionExpired,
@@ -139,6 +140,21 @@ export class LiveSupervisor extends DurableObject<Env> {
               }),
             ),
           policy.intentCalls,
+          this.env.OPEN_ROUTER_API_KEY
+            ? createJevShadow(
+                this.env.OPEN_ROUTER_API_KEY,
+                (entry) =>
+                  this.ctx.waitUntil(recordJevShadow(this.env, entry)),
+                {
+                  fetch: (input, init) => fetch(input, init),
+                  now: Date.now,
+                  after: (ms, run) => {
+                    const timer = setTimeout(run, ms);
+                    return () => clearTimeout(timer);
+                  },
+                },
+              )
+            : undefined,
         );
       }
       await this.ctx.storage.put("state", state);

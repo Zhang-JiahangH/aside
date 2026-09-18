@@ -7,6 +7,7 @@ import {
 } from "@aside/engine/contracts";
 import { LiveDelegation } from "./live-delegation.js";
 import type { QuestionTelemetry } from "./question-service.js";
+import type { JevShadow } from "./jev-shadow.js";
 
 /** One NDJSON subscription for one Live session, shared by both server adapters. */
 export class LiveControl {
@@ -24,6 +25,7 @@ export class LiveControl {
     send: (event: Record<string, unknown>) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
     callLimit = 30,
+    shadow?: JevShadow,
   ) {
     this.delegation = new LiveDelegation(
       control.player,
@@ -37,6 +39,7 @@ export class LiveControl {
           return () => clearTimeout(timer);
         },
         telemetry,
+        shadow,
       },
       control.debug,
       callLimit,

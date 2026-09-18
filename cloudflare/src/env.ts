@@ -23,6 +23,8 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   OPENAI_API_KEY?: string;
+  /** Enables the Jev shadow evaluation beside voice decisions; unset turns it off. */
+  OPEN_ROUTER_API_KEY?: string;
   ASIDE_BACKEND_MODEL?: string;
   /** Application lifetime for authenticated Live sessions, in seconds (120–3600). */
   ASIDE_LIVE_ACCOUNT_SESSION_SECONDS?: string;

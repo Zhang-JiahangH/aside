@@ -588,6 +588,9 @@ export default {
       env.DB.prepare("DELETE FROM question_usage WHERE ts<?").bind(
         Date.now() - RETENTION_DAYS * 86400000,
       ),
+      env.DB.prepare("DELETE FROM jev_shadow WHERE ts<?").bind(
+        Date.now() - RETENTION_DAYS * 86400000,
+      ),
       env.DB.prepare(
         "DELETE FROM budgets WHERE bucket LIKE 'burst:%' AND CAST(substr(bucket,7,instr(substr(bucket,7),':')-1) AS INTEGER)<?",
       ).bind(Math.floor(Date.now() / 60000) - 5),
