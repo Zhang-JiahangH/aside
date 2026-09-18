@@ -11,6 +11,43 @@ Current requirement-by-requirement evidence and open gates:
 regressions, older native evidence, production observations and outstanding device
 or product decisions; the historical records below remain dated evidence.
 
+## Native UI — 2026-09-18, compact question tools
+
+Source `2f7466b` replaces the stacked idle voice heading, text field and recording
+row with a compact question toolbar. Drafts survive closing the composer; sending
+clears them, and microphone status/Stop remain visible while typing. The hold target
+stays in place as capture guidance appears. Library headings now scroll with their
+items; the options sheet keeps Done visible while its content scrolls. These fix
+observed failures at the maximum accessibility text size on an iPhone SE.
+
+Native build 42 passes both platforms' unique typed submission, manual recording
+with an actual new question/reply, ten-second manual hold, explicit resume, slide
+cancellation, foreground pause and microphone-off controls above the keyboard.
+The preceding build 40 passes actual RTC continuation and completed-answer replay
+suppression with the same voice callbacks. Local tests: **425 passed**; types and
+[full CI](https://github.com/qiz029/aside/actions/runs/35328473929) pass. Supplier
+responses are fixture data; no real model or email was used for this update.
+
+**iPhone Release 43** is signed, installed and launched over the existing local
+network pairing. Device information confirms native version 43. API is
+`https://asidefm.com`, fixture mode and OTA are off, and the existing profile
+contains the user's phone. An initially disconnected development tunnel was
+successfully opened; the device does not need reconnecting for this installation.
+
+**[Android 20](https://expo.dev/accounts/jiahangzhang/projects/aside/builds/3af84051-5f8f-4436-b02d-4c6a56b56392)**
+is ready for internal distribution. The APK retains certificate
+`a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f`,
+upgrades version 19, and passes real catalogue, transcript and Account checks
+against `https://asidefm.com`. Native version 20 is confirmed after installation;
+fixture mode and OTA are off. [Download APK](https://expo.dev/artifacts/eas/cTxZdyzfiibeT3SlAMTAVqJO7IAAhuYemV8qeLWTXNU.apk).
+This smoke performs no model, transcription or email request.
+
+Evidence: [compact UI verification](mobile-evidence/compact-ui-2026-09-18.json),
+[design review](mobile-design.md), and [current acceptance index](mobile-current-acceptance.md).
+The backend remains `f559178` / Worker `bb4dd397-dcf6-49d1-8921-1c062ac179db`.
+Web product behavior is unchanged. Supplier audio boundaries and the remaining
+physical-device/signing gates below remain open; PR #29 stays a draft.
+
 ## Current backend — 2026-09-18, stale tool follow-up correction
 
 Source `f559178` closes a separate application-owned race: a pending playback
