@@ -39,8 +39,8 @@ export function errorMessage(raw: string, locale: string) {
     ],
     [
       /Voice session time limit reached|语音连接已断开/i,
-      "语音会话已结束，按住即可重新提问，或继续听节目。",
-      "The voice session ended. Hold to ask again, or continue listening.",
+      "语音会话已结束。请重新开启语音，或继续听节目。",
+      "The voice session ended. Start voice again, or continue listening.",
     ],
     [
       /语音连接中断|Voice disconnected/i,
@@ -67,5 +67,7 @@ export function errorMessage(raw: string, locale: string) {
   if (match) return match[zh ? 1 : 2];
   const cause = raw.replace(/^Error: /, "").replace(/。可以继续听节目.*$/, "");
   // Bilingual native errors already carry an English cause after the slash.
-  return !zh && cause.includes(" / ") ? cause.split(" / ").at(-1)! : cause;
+  return cause.includes(" / ")
+    ? cause.split(" / ")[zh ? 0 : cause.split(" / ").length - 1]!
+    : cause;
 }

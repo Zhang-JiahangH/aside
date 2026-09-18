@@ -7,6 +7,12 @@ appId: com.asidefm.app.dev
 - tapOn:
     id: episode-mobile-sample
     waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: player-options
+- tapOn:
+    id: followup-0
+- tapOn:
+    id: close-player-options
 - longPressOn:
     id: hold-to-talk
 - extendedWaitUntil:
@@ -35,3 +41,10 @@ appId: com.asidefm.app.dev
     timeout: 10000
 - assertVisible: A short answer
 - takeScreenshot: voice-explicit-resume
+
+- tapOn:
+    id: player-options
+- tapOn:
+    id: followup-3000
+- tapOn:
+    id: close-player-options

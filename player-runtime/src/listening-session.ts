@@ -37,6 +37,7 @@ import type {
   VoiceStatus,
 } from "./ports";
 import { systemClock, type RuntimeClock } from "./runtime-clock";
+import { withAbortTimeout } from "./abort-timeout";
 export type { VoicePort, VoiceFactory } from "./ports";
 export type ListeningMode = "auto" | "manual" | "off";
 export interface SessionOptions {
@@ -44,6 +45,8 @@ export interface SessionOptions {
   playerConfig?: Partial<PlayerConfig>;
   mode?: ListeningMode;
   followupMs?: number;
+  /** Mobile opt-in; Web retains explicit spoken resume until it adopts native playout evidence. */
+  spokenResume?: "quiet" | "verified";
   clock?: RuntimeClock;
   voiceFactory: VoiceFactory;
 }
@@ -106,6 +109,7 @@ export class ListeningSession {
   private lifecycle?: VoiceLifecycleConfig;
   private configured = false;
   private customWait: boolean;
+  private spokenResume: "quiet" | "verified";
   private error = "";
   private events: string[] = [];
   private debugRecognition: boolean;
@@ -149,6 +153,7 @@ export class ListeningSession {
     this.makeVoice = options.voiceFactory;
     this.mode = options.mode ?? "auto";
     this.customWait = options.followupMs !== undefined;
+    this.spokenResume = options.spokenResume ?? "quiet";
     this.conversation = new Conversation(
       {
         playback: () => this.playback,
@@ -169,6 +174,7 @@ export class ListeningSession {
       },
       backend,
       this.clock,
+      options.spokenResume,
     );
     this.view = this.snapshot();
     if (options.followupMs !== undefined)
@@ -567,7 +573,7 @@ export class ListeningSession {
   private engageInput() {
     if (!this.episode?.analysis) return;
     const atMs = this.input?.positionMs ?? this.audio.positionMs;
-    void this.settle();
+    const quiet = this.settle();
     // Do not begin a new Conversation turn: this is the accepted result of the
     // input already in flight. Keep its delegation and cancellation identity.
     if (!this.playback.interruption || this.playback.mode !== "listening") {
@@ -580,7 +586,21 @@ export class ListeningSession {
     if (!this.inputSpeaking) this.dispatch({ type: "user_end" });
     this.answerWindow = true;
     this.discardInterruptedOutput = false;
-    this.voice?.mute(false);
+    if (this.spokenResume === "verified") {
+      const input = this.input,
+        generation = this.voiceGeneration;
+      void quiet
+        .then(() => {
+          if (
+            this.answerWindow &&
+            this.input === input &&
+            this.voiceGeneration === generation &&
+            !this.playback.resumeRequested
+          )
+            this.voice?.mute(false);
+        })
+        .catch((error) => this.setError(String(error)));
+    } else this.voice?.mute(false);
     this.startHeartbeat();
     this.sendContext(true);
   }
@@ -611,10 +631,24 @@ export class ListeningSession {
       return false;
     this.controlVersion++;
     this.cancelManual();
+    if (this.spokenResume === "verified") {
+      this.silenceVoice();
+      this.spokenReply = undefined;
+    }
     this.beginInput("text");
     this.interrupt();
     this.dispatch({ type: "user_end" });
-    if (speak) this.conversation.firstQuestion(text.trim(), true);
+    if (speak && this.spokenResume === "verified") {
+      this.voice?.append(
+        "thinking",
+        `Latest actual user utterance (typed): ${text.trim()}`,
+      );
+      this.voice?.append(
+        "instructions",
+        "The app is handling this typed question. Wait silently for its backend answer and do not delegate it again.",
+      );
+      this.conversation.submitText(text.trim(), true);
+    } else if (speak) this.conversation.firstQuestion(text.trim(), true);
     else this.conversation.submitText(text.trim());
     return true;
   }
@@ -781,6 +815,13 @@ export class ListeningSession {
     );
   }
   start() {
+    if (
+      this.spokenResume === "verified" &&
+      this.episode &&
+      !this.playback.interruption &&
+      this.playback.positionMs >= Math.max(0, this.episode.durationMs - 250)
+    )
+      this.seek(0);
     this.active = true;
     this.setError("");
     if (this.mode === "auto") void this.connect();
@@ -1002,6 +1043,18 @@ export class ListeningSession {
       void this.connect();
     this.publish();
   }
+  /** Explicit native microphone consent; enabling conversation need not move playback. */
+  async enableContinuous() {
+    if (this.mode !== "auto") this.setListeningMode("auto");
+    this.active = true;
+    try {
+      await this.connect();
+    } catch (error) {
+      this.setError(String(error));
+      throw error;
+    }
+    this.publish();
+  }
   private get serverVoice() {
     return (
       this.mode === "auto" &&
@@ -1048,10 +1101,11 @@ export class ListeningSession {
     this.controlUpdates = this.controlUpdates
       .then(async () => {
         if (abort.signal.aborted) return;
-        await this.backend.updateControl!(
-          episodeId,
-          update,
-          AbortSignal.any([abort.signal, AbortSignal.timeout(5000)]),
+        await withAbortTimeout(
+          abort.signal,
+          5000,
+          (signal) => this.backend.updateControl!(episodeId, update, signal),
+          this.clock,
         );
       })
       .catch((error) => {
@@ -1502,6 +1556,10 @@ export class ListeningSession {
           if (this.conversation.liveReplyId === this.spokenReply?.decisionId)
             this.reportSpoken(active ? "speaking" : "quiet");
         },
+        onOutputDrained: () => {
+          if (valid() && acceptsInput() && this.playback.interruption)
+            this.conversation.outputDrained();
+        },
         onTranscript: (role, text, timing) => {
           if (this.serverVoice && role === "user") {
             if (valid() && this.debugRecognition)
@@ -1535,7 +1593,11 @@ export class ListeningSession {
             if (
               this.serverVoice &&
               role === "assistant" &&
-              this.conversation.liveReplyId
+              this.conversation.liveReplyId &&
+              !(
+                this.spokenResume === "verified" &&
+                this.input?.source === "text"
+              )
             ) {
               this.liveTranscript.append(text, timing);
               this.reconcileLiveTranscript();
@@ -1548,6 +1610,16 @@ export class ListeningSession {
             this.attend();
             this.conversation.delegate(id);
           }
+        },
+        onInterruption: () => {
+          if (!valid()) return;
+          // Cancel playback intent before releasing the duplex lease, so its
+          // category restoration cannot restart audio after a call or unplug.
+          this.audio.pause();
+          this.stop();
+          this.setError(
+            "音频已被系统中断，请主动继续播放 / Audio was interrupted. Tap play when ready.",
+          );
         },
         onError: (message) => {
           if (!valid()) return;

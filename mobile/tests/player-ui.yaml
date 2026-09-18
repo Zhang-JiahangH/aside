@@ -1,0 +1,56 @@
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: public-library
+- tapOn:
+    id: episode-mobile-sample
+- takeScreenshot: player-compact
+- tapOn:
+    id: question
+- inputText: "Can you explain the last sentence?"
+- assertVisible:
+    id: send-question
+- takeScreenshot: player-keyboard
+- eraseText
+- hideKeyboard
+- tapOn:
+    id: player-options
+- assertVisible: Resume after answers
+- tapOn:
+    id: followup-8000
+- takeScreenshot: player-options
+- tapOn:
+    id: close-player-options
+- tapOn:
+    id: back-library
+- tapOn:
+    id: tab-account
+- scrollUntilVisible:
+    element:
+      id: locale-zh
+    direction: DOWN
+- tapOn:
+    id: locale-zh
+- tapOn:
+    id: tab-library
+- tapOn:
+    id: continue-last
+- takeScreenshot: player-chinese
+- tapOn:
+    id: player-options
+- assertVisible: 回答后继续听
+- tapOn:
+    id: followup-3000
+- tapOn:
+    id: close-player-options
+- tapOn:
+    id: back-library
+- tapOn:
+    id: tab-account
+- scrollUntilVisible:
+    element:
+      id: locale-en
+    direction: DOWN
+- tapOn:
+    id: locale-en
