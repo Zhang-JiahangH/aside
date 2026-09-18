@@ -2913,6 +2913,43 @@ test("native interruption cancels a mobile answer and never resumes or reopens t
   assert.equal(s.session.getSnapshot().resumeSeconds, null);
 });
 
+test("mobile lock-screen playback after background never reopens continuous capture", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true, "verified");
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  assert.equal(s.voiceCount, 1);
+  s.session.background();
+  assert.equal(s.audio.playing, true, "native podcast keeps playing");
+  assert.equal(s.session.getSnapshot().listeningMode, "manual");
+  assert.equal(s.session.getSnapshot().liveStatus, "off");
+  s.session.stop(); // lock-screen pause
+  s.session.start(); // lock-screen play
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.voiceCount, 1);
+  assert.equal(s.session.getSnapshot().liveStatus, "off");
+  await s.session.enableContinuous(); // explicit foreground consent
+  await flush();
+  assert.equal(s.voiceCount, 2);
+  assert.equal(s.session.getSnapshot().listeningActive, true);
+});
+
+test("backgrounding a mobile answer preserves its anchor for a microphone-free system resume", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  const anchor = s.session.checkpoint().resumeMs;
+  s.session.background();
+  assert.equal(s.audio.playing, false);
+  s.session.start();
+  s.clock.advance(1);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, anchor);
+  assert.equal(s.session.getSnapshot().liveStatus, "off");
+  assert.equal(s.voiceCount, 1);
+});
+
 test("mobile resumes only after the final answer's native playout and follow-up window", async (t) => {
   const s = await mobileSpoken();
   t.after(() => s.session.dispose());

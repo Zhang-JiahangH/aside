@@ -935,6 +935,10 @@ export class ListeningSession {
   }
   background() {
     this.audioTick();
+    // A later lock-screen Play is playback consent only. Mobile must require
+    // a fresh explicit voice action after leaving the foreground.
+    if (this.spokenResume === "verified" && this.mode === "auto")
+      this.mode = "manual";
     if (this.playback.mode !== "playing") this.stop();
     else {
       this.cancelWork();
