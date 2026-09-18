@@ -62,6 +62,16 @@ Live's single unlabelled audio stream cannot yet separate that speech from an
 unfinished admitted answer. This probe is intentionally separate from the
 after-completion duplicate-suppression assertion in `continuous.mjs`.
 
+`phone-call.mjs EVIDENCE_FILE emulator-ID` runs after Android `continuous.mjs`
+while that session remains connected. Supply `PORT`, `RTC_PORT` and optionally
+`ADB`. It admits a synthetic ten-second reply, injects a GSM call into the Android
+emulator, and confirms Android telephony reached RINGING and AudioService released
+the actual recorder. It then cancels the call and reopens the app: microphone and
+programme stay off beyond the default follow-up window, the anchor and submitted
+question survive, and the supplier session is released. It refuses physical device
+IDs and never places a real phone call. This tests Android's system-focus path;
+it does not establish physical headset routing or iOS telephony behavior.
+
 For a long local acceptance session, `VOICE_SESSION_SECONDS=600 TRIAL_DAILY_LIMITS=false` prevents synthetic provider traffic exhausting the fixture's daily pool. Production authorization/concurrency still executes, and normal quota coverage remains in Worker tests. Close voice or background the app before deliberately terminating an older binary. Current builds also journal and clean up their own abandoned lease on restart.
 
 - `voice-history.yaml`: use an empty checkpoint and `QUESTION_DELAY_MS=15000` to verify a recognized question appears before the answer, survives background cancellation, and restores after restart. Require the user-role bubble rather than the composer's similarly named accessibility label.

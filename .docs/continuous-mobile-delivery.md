@@ -6,7 +6,44 @@ The compatibility PR #28 is a baseline, not completion of this goal.
 User scope correction: do not change Web behavior. Shared runtime extensions must
 be opt-in for mobile and preserve the existing Web policy and tests.
 
-## Current backend — 2026-09-18, main `25e1621`
+## Current backend — 2026-09-18, stale tool follow-up correction
+
+Source `f559178` closes a separate application-owned race: a pending playback
+tool could finish after a manual playback change, a new utterance or session close,
+then admit its old follow-up and request another backend response. All three cases
+failed before the correction. Mobile now rechecks the original delegation, input
+and playback version after the acknowledgement. It settles an outstanding tool
+result without reopening its answer or sending a stale `response.create`.
+Current mobile tools and replacement questions still work; Web behavior is retained.
+
+425 tests, type/boundary checks, the Web/mobile Cloudflare sideband regressions
+and [full CI](https://github.com/qiz029/aside/actions/runs/35324139889) pass. The
+Cloudflare mobile scenario cancels a real pending NDJSON decision, observes its
+sideband tool result without a continuation, then completes a new question.
+
+Additional Android system acceptance now passes on the existing build-38 fixture:
+an emulator GSM incoming call interrupts an audible ten-second synthetic answer.
+Android telephony confirms RINGING; AudioService shows the native recorder active
+before the call and released afterwards. Returning to the app leaves the microphone
+off and the programme paused beyond the normal follow-up window, preserves the
+anchor and question, and releases the supplier session. `phone-call.mjs` repeats
+this test and refuses physical device IDs. Native source is unchanged; its fixture
+server was `7ed30db`. This validates Android system interruption, not iOS telephony
+or physical headset routes.
+
+Remote main was still `25e1621`; the preceding deployment author/version matched
+our `62fe977a` publication. Worker `bb4dd397-dcf6-49d1-8921-1c062ac179db` now includes
+the stale-tool correction, retaining the media container and Secrets. Four auth
+smoke checks pass; iPhone 39 / Android 19 need no rebuild. No real model, email
+or telephone call was made. Evidence:
+[stale tools and Android interruption](mobile-evidence/continuous-stale-tools-2026-09-18.json).
+
+Unlabelled overlapping supplier speech remains a distinct limitation. The user
+has been asked whether to retain Live with this boundary or change the answer
+audio channel to obtain per-answer isolation. That architectural choice is pending;
+the goal and draft PR remain open.
+
+## Previous backend — 2026-09-18, main `25e1621`
 
 Rebased the mobile branch onto `25e1621` without conflicts, preserving main's
 Jev shadow evaluation and deployment documentation. Runtime source `7ed30db`

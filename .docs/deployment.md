@@ -530,3 +530,5 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 该版本还修复了同一问题产生两份后端措辞、Live 只朗读后一份时，移动端完成判断滞留在第一份文字的问题。只在完整候选文字与输出字幕吻合后更新原有回答元数据；原生端仍核对实际播放与音频队列排空。额外的问答轮次和播放工具调用继续拒绝。
 
 验证：421 项本地测试、类型/边界检查、Cloudflare Web/mobile 语音链路和 [完整 CI](https://github.com/qiz029/aside/actions/runs/35323289839) 通过；双端模拟器复用既有 build 38 验证成功，发布后 4 项登录路由/Bearer/Origin 检查通过。iPhone 39、Android 19 无需重装。此次验证未发邮件或调用真实模型。详细证据见 [移动端交付记录](continuous-mobile-delivery.md)。PR #29 仍为 draft；后续从 main 单独部署仍会移除未合并的移动端后端能力，发布前需继续核对作者、版本与源码。
+
+后续修正：`f559178` 阻止移动端的旧工具回执在手动操作、新问题或关闭会话之后重新打开旧回答、补发后台请求。425 项测试、类型检查、Cloudflare sideband 回归及 [CI](https://github.com/qiz029/aside/actions/runs/35324139889) 通过。确认 main 仍为 `25e1621`、线上前序作者/版本为本任务的 `62fe977a` 后，发布 Worker `bb4dd397-dcf6-49d1-8921-1c062ac179db`（保留 Container 与 Secrets），4 项鉴权烟测通过。既有手机版本可直接使用此修复，无新增模型或邮件调用。单路供应商音频的重叠回答边界仍单独记录，不以此修复宣称解决。
