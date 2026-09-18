@@ -472,3 +472,17 @@ node scripts/admin-usage.mjs --days 30 --json
 发布与核对：`npm run check` 与 333 项单元测试通过（新增 1 项英文卡片用例，`/zh` 用例补了图片断言）；hero 链接在本地浏览器截图核对了英文浅色桌面、中文深色桌面与 390 宽手机，无横向溢出。发布前确认线上是队友 06:06Z 的 `a19fefb7`（#31），与 origin/main `de79fb1` 一致，本次提交直接快进到 main（`57f8c5f`）。生产 Worker `de4575a6-72b4-4476-bfa5-e8730c54bbf4`（`--containers-rollout=none`，保留现有 Container）。正式域名 `/` 的 `og:image` 与 `twitter:image` 指向 `og-image.png`，`/zh` 指向 `og-image-zh.png`；两张图均 200 `image/png`，线上 `og-image.png` 的 SHA-1 与本地一致；首页引用 `index-Bt5O4Hj6.js`、`index-jraiRU-3.css`，bundle 内含 Product Hunt 链接；`/api/health`、`/robots.txt`、`/sitemap.xml`、`/llms.txt` 均 200；`npm run test:mobile-service` 4 项通过。
 
 未验证：LinkedIn 等平台会缓存旧预览，需在 Post Inspector 重新抓取后才会显示新图，本次未做；生产页面上的 hero 链接未用浏览器再截图，只核对了 bundle 内容。
+
+## 语音回答后自动续播、播放即监听、人声立即暂停、登录后进入我的空间（2026-09-18）
+
+**自动续播。** #20 起 Live 语音回答后必须说"继续"才恢复节目，因为当时只能靠静音猜测回答是否结束，而 Live 会在查询时停顿。Responses 委派之后后端有了完成信号：`answered` 事件新增 `final`（同一响应里还有工具调用时为 `false`）。浏览器端在 `engage` 后关闭续播窗口，收到最终 `answered` 才打开；此时若语音尚未出声，还要等回答音频播完。之后在续播等待内无人说话就恢复节目。默认等待由 3 秒改为 2 秒（`ASIDE_AUTO_RESUME_MS`，生产读取 Worker 默认值），已朗读的回答不再套用长回答的 8 秒阅读等待。没有完成信号的路径保持原样：服务端直接推送的 `decision: answer` 仍然按住；被新话语取代的委派不会发出 `answered`，因此也不会自动续播。与 #33 的交叉：插话打断回答后仍保持安静（忽略的插话不续播），但这个"按住"只到听众下一个被接受的问题为止，那次回答结束后照常自动续播；用户点"先别继续"的按住不受影响。
+
+**播放即监听。** 从首页或节目库进入时麦克风默认关闭，需要点"开启麦克风"。现在该按钮已删除：每个节目第一次播放时申请麦克风，访客先完成试用验证再开启监听（节目此时已在播放，开启监听会立即连接语音）。拒绝麦克风只提示一次并继续播放，换节目后才会再次询问；关闭验证弹窗则下次播放再提供。
+
+**人声立即暂停。** 本地语音检测到有人说话时，节目原先压低到 15% 音量等待后端判断，现在直接停止。它仍是软让步：播放状态不变；后端判定为旁人闲聊（`ignore`）或 2.5 秒内没有任何识别结果时自动接着播；判定为提问则转为正式打断，位置就是开口的那一刻。等待从说话结束算起，长问题不会被节目盖住；检测器卡住时最多停 30 秒。
+
+**登录后进入我的空间。** 邮箱验证码登录成功后跳转 `/space`，不再弹出个人资料；正在收听某期节目时留在原页面。Google 回调同样跳转 `/space`，只有从个人资料发起的"关联 Google"才回到个人资料。
+
+发布与核对：`npm run check`、342 项单元测试、Cloudflare 集成 50 项通过；浏览器用例中语音、账号、试用、麦克风入口、收听控制、VAD 共 34 项通过（含 #33 的新用例）。全量浏览器运行有两项失败，均与本次改动无关：`player.spec.ts` 的 native WebRTC 用例在改动前的代码上同样失败；`public-samples.spec.ts` 期望 6 条英文示例，而本地后端有 12 条节目数据。发布前确认线上是队友 07:04Z 的 `020ab76c`（#33），与 origin/main `bc951fd` 一致，本分支已变基其上并解决了 `answered` 处理处的冲突（保留 #33 的打断判定，并传入 `final`），快进到 main（`67ab9e3`）。生产 Worker `01d95882-37eb-47ef-97de-7022cf246053`（`--containers-rollout=none`，保留现有 Container）。线上 `/api/health` 的 `autoResumeMs` 为 2000；首页引用 `index-DN2bg9Ls.js`，bundle 内已无"Enable microphone"，含人声暂停逻辑与 `/space` 跳转；`/`、`/zh`、`/space`、两张分享图、`/robots.txt`、`/sitemap.xml`、`/llms.txt` 均 200；`npm run test:mobile-service` 4 项通过。
+
+未验证：生产环境真人麦克风端到端（自动续播的时机、外放时人声暂停是否被节目自身的声音误触发、iPad）；Google 登录回调只有集成测试覆盖。取证：调试日志中的 `Podcast stopped for speech`、`Podcast continued`、`Backend delegated answer`。
