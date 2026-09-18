@@ -522,3 +522,18 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 ```
 
 采用门槛（建议）：数百句真实数据上，置信度 ≥ 0.6 的一致率 ≥ 98%，`jev_ms` p95 < 400ms，非 `ok` 比例 < 1%；达标后也只让它接管"忽略"与播放控制，并始终保留后端模型兜底。
+
+## Jev 抢先决定忽略、暂停与继续（2026-09-18）
+
+决定：产品负责人在影子表仍为 0 行（上线后 7 小时无语音流量）时决定不再等影子数据，直接让 Jev 与后端模型并行、并抢先决定。依据只有离线评测：当天重跑 `npm run eval:jev` 为 73/78，p50 205ms、p95 372ms，置信度 ≥ 0.6 保留 65 句全对；5 个错判里 3 个是把播放中的短问题判成"忽略"，置信度最高 0.54。因此门槛定为 0.7（`jevActConfidence`，覆盖 59/78）。
+
+行为：后端模型仍对每句话做判断，Jev 不替代它，也不省后端调用。Jev 的回答先到且置信度 ≥ 0.7 时，`LiveDelegation.actEarly` 立即执行"忽略"（播客继续）、"暂停"或"继续"；后端随后的判断以它自己的为准：同样的忽略不再重复下发，暂停与继续复用已上报的执行结果，判为提问则照常 engage，把刚恢复的播客重新停下并作答。不抢先的情形：后端已先做出判断、用户还在继续说（Jev 看到的是半句话）、有未确认的播放决定、"调整播放"（Jev 不给参数）与"提问"。Jev 超时或失败时行为与此前完全一样。`jev_shadow.acted`（迁移 `0009`）标记 Jev 抢先执行的行，`acted = 1 AND agree = 0` 即用户看到被后端收回的次数：
+
+```
+npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --command \
+  "SELECT jev, COUNT(*) n, SUM(acted) acted, SUM(acted AND agree = 0) taken_back, ROUND(AVG(jev_ms)) jev_ms, ROUND(AVG(backend_ms)) backend_ms FROM jev_shadow WHERE status = 'ok' GROUP BY jev"
+```
+
+发布与核对：`npm run check`、354 项单元测试（新增协调器 4 项、Jev 模块 1 项、收听会话 1 项"先忽略后被 engage 推翻"）、Cloudflare 集成 50 项通过。迁移 `0009_jev_acted.sql` 已应用到生产 D1。发布前线上是另一位队友 08:28Z 从草稿 PR #29 部署的 `bb4dd397`（已含 Jev 影子提交，外加其未合并的移动端后端改动）；经产品负责人确认后部署 main（`401b649`），生产 Worker `40a69570-361e-4286-88a4-819a361e97ad`（`--containers-rollout=none`），首页引用 `index-ByL8DSq6.js`（前端无改动）。PR #29 的未合并改动第三次不在线上，需要他变基到 main 后重新部署。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过。
+
+未验证：生产上仍没有语音会话经过 Jev，Worker 到 OpenRouter 的调用、线上延迟和抢先路径都未经线上证实；被推翻的忽略可能丢掉 Live 在此之前缓冲的回答开头，真实听感未测。
