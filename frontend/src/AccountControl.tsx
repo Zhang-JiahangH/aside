@@ -122,8 +122,15 @@ export function AccountControl({
       }));
       setAlias(next.user.alias);
       setDescription(next.user.description);
-      setView("profile");
+      setView("closed");
       await onAuthChanged();
+      // Signing in leads to the listener's own space, not to a profile form.
+      // Someone who signs in beside an open episode stays with it.
+      const listening =
+        location.pathname.startsWith("/episodes/") ||
+        new URLSearchParams(location.search).has("episode");
+      if (location.pathname !== "/space" && !listening)
+        location.assign("/space");
     });
   }
   async function save(event: FormEvent) {

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test("email sign-in opens an editable profile and sign-out returns to guest", async ({
+test("email sign-in lands in My Space, where the profile is editable, and sign-out returns to guest", async ({
   page,
 }) => {
   let user: {
@@ -74,10 +74,14 @@ test("email sign-in opens an editable profile and sign-out returns to guest", as
   await page.getByRole("button", { name: "发送验证码" }).click();
   await page.getByLabel("邮件验证码").fill("12345678");
   await page.getByRole("button", { name: "验证并登录" }).click();
-  await expect(page.getByRole("dialog", { name: "个人资料" })).toBeVisible();
+  // Signing in leads to My Space, not to a profile form.
+  await expect(page).toHaveURL(/\/space$/);
+  await expect(page.getByRole("dialog", { name: "个人资料" })).toHaveCount(0);
+  await page.getByRole("button", { name: "编辑个人资料" }).click();
   await page.getByLabel("昵称").fill("History listener");
   await page.getByLabel("介绍").fill("I listen to history podcasts.");
   await page.getByRole("button", { name: "保存资料" }).click();
+  await page.goto("/");
   await expect(page.getByRole("link", { name: "我的空间" })).toBeVisible();
   const enterSpace = page.getByRole("link", {
     name: "Enter My Space",

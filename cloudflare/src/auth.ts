@@ -427,7 +427,11 @@ async function googleCallback(request: Request, env: Env) {
   await claimVisitor(env, used.visitor_id, user.id);
   const response = new Response(null, {
     status: 302,
-    headers: { Location: `${env.APP_ORIGIN}/?profile=1` },
+    // Linking Google started in the profile and returns there; signing in
+    // lands in the listener's space.
+    headers: {
+      Location: `${env.APP_ORIGIN}${used.link_user_id ? "/?profile=1" : "/space"}`,
+    },
   });
   response.headers.append(
     "Set-Cookie",

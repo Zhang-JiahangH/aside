@@ -469,7 +469,7 @@ test("Google callback validates state and links a verified email to one account"
     },
   );
   assert.equal(callback.status, 302, await callback.clone().text());
-  assert.equal(callback.headers.get("location"), origin + "/?profile=1");
+  assert.equal(callback.headers.get("location"), origin + "/space");
   const cookie = callback.headers
     .get("set-cookie")
     .match(/aside_auth=[a-f0-9]{64}/)?.[0];
