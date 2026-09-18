@@ -47,6 +47,8 @@ export interface SessionOptions {
   followupMs?: number;
   /** Mobile opt-in; Web retains explicit spoken resume until it adopts native playout evidence. */
   spokenResume?: "quiet" | "verified";
+  /** Mobile Responses delegation owns its transcript window on the server. */
+  liveContext?: "client" | "server";
   clock?: RuntimeClock;
   voiceFactory: VoiceFactory;
 }
@@ -110,6 +112,7 @@ export class ListeningSession {
   private configured = false;
   private customWait: boolean;
   private spokenResume: "quiet" | "verified";
+  private liveContext: "client" | "server";
   private error = "";
   private events: string[] = [];
   private debugRecognition: boolean;
@@ -154,6 +157,7 @@ export class ListeningSession {
     this.mode = options.mode ?? "auto";
     this.customWait = options.followupMs !== undefined;
     this.spokenResume = options.spokenResume ?? "quiet";
+    this.liveContext = options.liveContext ?? "client";
     this.conversation = new Conversation(
       {
         playback: () => this.playback,
@@ -790,6 +794,11 @@ export class ListeningSession {
   }
   private sendContext(force = false) {
     if (force) this.syncControl();
+    // The sideband already updates Responses' transcript window from the
+    // acknowledged playhead. Reinjecting programme text into GPT-Live creates
+    // a second context owner and can flood its audio timeline in passage gaps.
+    // Keep the client path for manual questions and the existing Web policy.
+    if (this.serverVoice && this.liveContext === "server") return;
     if (!this.episode?.analysis) return;
     const state = this.playback;
     const passages = this.episode.analysis.passages;

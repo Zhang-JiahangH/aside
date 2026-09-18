@@ -101,6 +101,7 @@ function setup(
   debugRecognition = false,
   server = false,
   spokenResume: "quiet" | "verified" = "quiet",
+  liveContext: "client" | "server" = "client",
 ) {
   const clock = new Clock();
   const audio = {
@@ -266,6 +267,7 @@ function setup(
     playerConfig,
     clock,
     spokenResume,
+    liveContext,
     voiceFactory(_mic, _config, cb, remote) {
       createLive = () => remote.create("mock");
       voiceCount++;
@@ -365,6 +367,63 @@ function setup(
     },
   };
 }
+
+test("mobile delegates live context to the server across transcript gaps and player actions", async (t) => {
+  const s = setup(
+    "auto",
+    undefined,
+    undefined,
+    false,
+    true,
+    "verified",
+    "server",
+  );
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  // Reproduce native status callbacks in a gap between transcript passages.
+  // Previously undefined was compared with the stored -1 sentinel, appending
+  // the same programme text to GPT-Live on every 250 ms tick during speech.
+  for (let i = 0; i < 20; i++) {
+    s.audio.positionMs += 250;
+    s.clock.advance(250);
+    s.session.audioTick();
+    await flush();
+  }
+  s.session.seek(42000);
+  await flush();
+  assert.deepEqual(
+    s.commands.filter((c) => c.startsWith("thinking:")),
+    [],
+  );
+  assert.ok(
+    s.updates.length >= 5,
+    "backend still receives the moving playhead",
+  );
+  assert.equal(s.serverState.positionMs, 42000);
+  assert.equal(s.serverState.wasPlaying, false);
+  await s.session.dispose();
+});
+
+test("client context remains the default for Web and manual questions", async (t) => {
+  for (const [mode, owner] of [
+    ["auto", "client"],
+    ["manual", "server"],
+  ] as const) {
+    const s = setup(mode, undefined, undefined, false, true, "verified", owner);
+    t.after(() => s.session.dispose());
+    s.session.start();
+    if (mode === "manual") await s.session.beginManual();
+    await flush();
+    s.callbacks.onReady();
+    assert.ok(
+      s.commands.some(
+        (c) => c.startsWith("thinking:") && c.includes("已听原文"),
+      ),
+    );
+    await s.session.dispose();
+  }
+});
 
 test("loading a checkpoint publishes only its complete state to persistence subscribers", () => {
   const s = setup();

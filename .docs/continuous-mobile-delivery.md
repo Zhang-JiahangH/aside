@@ -134,12 +134,39 @@ delegation or backend question execution for that attempt. The logged character
 count describes only the first fragment, not the complete utterance.
 
 Diagnostic build 28 is signed and installed on the same physical iPhone, using
-`https://asidefm.com` with the test flag off. Awaiting one bounded user reproduction.
+`https://asidefm.com` with the test flag off. The user reproduced intermittent
+failure with the iPhone's built-in speaker. One trace recognized the complete
+question, admitted a backend answer and rendered native PCM; that answer still
+explained the wrong term. Another trace contained incomplete recognized phrases
+and repeated `wait_for_input` results without an admitted answer. This is not a
+successful release acceptance.
 Temporary device-local instrumentation records transcript events,
 control events and native/RTC counters; no login credential is recorded. This
 diagnostic source is retained only in `/tmp` and removed from the repository
 after bundling. The cause and final physical acceptance remain unverified. Do not
 mark continuous voice ready or distribute build 28.
+
+### Context-flood reproduction and mobile-only correction
+
+The build-28 trace exposed duplicate programme-context appends at native player
+status cadence. During a gap between transcript passages, `current?.startMs` was
+`undefined` while the remembered sentinel was `-1`, so every 250 ms tick appended
+the same programme text to Live. The backend already maintains Responses'
+transcript window from acknowledged player state.
+
+A new runtime regression reproduced 20 duplicate appends during a five-second
+gap. Mobile now opts into `liveContext: "server"`: automatic Responses sessions
+use that single context owner and still synchronize playhead, seek and pause.
+Manual context and Web's default client policy retain their existing behavior.
+The reproduction failed before this change and passes after it. All 380 root
+tests, type checks and the merged Cloudflare sideband regression pass.
+
+Upstream PR #31 has been merged into this branch. Its missed-delegation fallback
+is visible in production, including the unsuccessful physical trace. Adding a
+fallback alone therefore does not establish that the full question was heard or
+answered. Removing duplicate context is a verified defect correction; its effect
+on physical speech recognition and answer quality still needs a bounded device
+comparison. Do not treat it as proof that the intermittent failure is fixed.
 
 ### Additional fixture evidence
 

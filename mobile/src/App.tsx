@@ -115,6 +115,7 @@ function Main() {
     const session = new ListeningSession(audio, api, {
       mode: "manual",
       spokenResume: "verified",
+      liveContext: "server",
       voiceFactory: nativeVoiceFactory(coordinator),
     });
     const sync = new CheckpointSync(
