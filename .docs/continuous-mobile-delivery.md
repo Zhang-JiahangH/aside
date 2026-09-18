@@ -6,7 +6,42 @@ The compatibility PR #28 is a baseline, not completion of this goal.
 User scope correction: do not change Web behavior. Shared runtime extensions must
 be opt-in for mobile and preserve the existing Web policy and tests.
 
-## Current candidate — 2026-09-18, iPhone 37 / Android 18
+## Current candidate — 2026-09-18, iPhone 39 / Android 19
+
+Source `b685f13` integrates main through `6164f99`, including the decision-wait
+expiry and continuation diagnostics. Unclassified brief input no longer strands
+the follow-up window. Mobile retains its native-completion and accepted-answer
+blockers, speech ducking, explicit microphone enablement and 3/8-second policy.
+Two added regressions show that input expiry cannot bypass unconfirmed native
+playout. All 406 local tests, type/boundary checks, the affected 23 Web voice
+scenarios and [CI](https://github.com/qiz029/aside/actions/runs/35320848578) pass.
+Web product source matches upstream. Earlier full-browser coverage is recorded
+below; only the affected voice scenarios were rerun for this final merge.
+
+Both native build-38 fixtures pass actual RTC/native output, completed-answer
+replay rejection, ignored speech and anchored follow-ups. The long-answer waits
+were observed at 8,050 ms on iOS and 8,233 ms on Android (200 ms sampling).
+Normal iPhone 39 is signed, installed and launched, with native/Expo build numbers
+verified. Android 19 retains the fixed release certificate, upgrades 18 and passes
+read-only real catalogue/transcript/Account checks. Both use production API and
+embedded JS with test mode, OTA and temporary diagnostic helpers off.
+[Android 19 installation](https://expo.dev/accounts/jiahangzhang/projects/aside/builds/18115024-dfe0-4a7e-8671-4b38389d64ad).
+Evidence: [latest candidate verification](mobile-evidence/continuous-noise-2026-09-18.json).
+
+Before publishing, the deployment author/version was checked against the known
+upstream `6c57ab56` deployment. Worker `3cc34209-2d82-4e88-8c5e-a0dedc7beda5` now
+contains both that upstream fix and the mobile backend policy; read-only
+authentication smoke passes and the media image is retained. A future deployment
+from main alone can still remove the unmerged mobile backend changes. PR #29's
+source and this deployment must be considered together until integration.
+
+The unfinished-answer duplicate supplier audio limitation remains unresolved;
+see the build-34 probe below. Physical natural continuation, local barge-in quality,
+headset/call handling and the visible iOS lock-screen card remain user acceptance.
+Paid-account Ad Hoc/TestFlight signing remains pending. No agent-paid model or
+email request was made in this turn.
+
+## Previous candidate — 2026-09-18, iPhone 37 / Android 18
 
 Integrated main through `4d8003f` in `5dbcfe2`, including backend `answered.final`,
 Web's quiet continuation policy and the temporary barge-in hold. Mobile explicitly
