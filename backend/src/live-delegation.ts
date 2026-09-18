@@ -61,6 +61,7 @@ export class LiveDelegation {
   private inputStartMs?: number;
   private delegation?: Delegation;
   private responseTrigger: LiveResponseTrigger;
+  private inputEventId?: string;
   private retiredDelegations = new Set<string>();
   private waiting?: {
     decisionId: string;
@@ -110,10 +111,14 @@ export class LiveDelegation {
         console.error("Aside voice supplier error", {
           error: JSON.stringify(event.error ?? event).slice(0, 400),
         });
-        this.responseTrigger.reject(
-          (event.error as { client_event_id?: unknown } | undefined)
-            ?.client_event_id,
-        );
+        const eventId = (
+          event.error as { client_event_id?: unknown } | undefined
+        )?.client_event_id;
+        if (this.inputEventId && eventId === this.inputEventId)
+          this.fail(
+            "Voice input could not be delivered. Please reconnect the microphone and try again.",
+          );
+        else this.responseTrigger.reject(eventId);
         return;
     }
   }
@@ -193,10 +198,34 @@ export class LiveDelegation {
       this.replaceDelegation(this.startDelegation(`local:${eventId}`));
     this.delegation!.waitingForInput = false;
     this.delegation!.ignored = false;
+    this.delegation!.answer = "";
+    this.inputEventId = crypto.randomUUID();
+    const { assistant, ...playback } = this.player;
+    // Explicit requests must carry the observed words, not rely on Live having
+    // already prepared a user turn. Microphone words remain untrusted user data.
+    this.ports.send({
+      type: "response.item.create",
+      event_id: this.inputEventId,
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: JSON.stringify({
+              voiceInput: { turnId: this.input!.turnId, text: this.text },
+              player: this.delegation!.input,
+              conversation: { playback, assistant },
+            }),
+          },
+        ],
+      },
+    });
     console.log("Aside voice delegation fallback requested", {
       characters: this.text.length,
       version: this.player.version,
       eventId,
+      inputEventId: this.inputEventId,
     });
     this.ports.emit({
       type: "classifying",
@@ -654,6 +683,7 @@ export class LiveDelegation {
       this.resetUtterance();
       if (this.delegation) this.retire(this.delegation.id);
       this.delegation = undefined;
+      this.inputEventId = undefined;
       this.responseTrigger.reset();
     }
     this.player = player;
@@ -708,6 +738,7 @@ export class LiveDelegation {
     this.contextTimer?.();
     this.contextTimer = undefined;
     this.delegation = undefined;
+    this.inputEventId = undefined;
     this.resetUtterance();
     this.fragments.clear();
     this.retiredDelegations.clear();

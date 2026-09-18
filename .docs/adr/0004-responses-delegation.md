@@ -33,3 +33,13 @@ GPT-Live 文档把逐片段处理定位为"投机查询、护栏、界面更新"
 这只是保证后台有机会判断，不直接决定回应或放行音频：旁人聊天仍由 `ignore_input` 忽略，后台输出答案或查询文稿才 `engage`，播放器工具仍经 NDJSON 和执行回报。请求被拒绝、10 秒没有开始事件、或后台明确失败都会输出错误，避免一直停在“听到了但没反馈”。日志新增 `Aside voice delegation fallback requested`，包含事件 ID 和字符数，不记录用户原话。
 
 接口依据：[Live sideband `response.create`](https://developers.openai.com/api/reference/resources/live/sideband-websocket#response.create) 支持主动请求 Responses 后台响应，以及继续工具调用。此次回归用确定性工具事件和静音合成 WebRTC 覆盖不委派、正常委派竞争、等待更多输入、忽略旁人、播放控制及对话历史；真实供应商和 iPad 麦克风效果仍需上线后验证。
+
+### 显式请求必须带上转写输入
+
+后续《狂人日记》生产日志显示兜底已发出、后台也已启动，但多轮均调用 `wait_for_input`。上一版只发 `response.create`，没有把应用收到的转写显式传给后台。真实 GPT-Live 对照中，去掉转写输入时后台返回“没有新的用户请求”；先提交相同问题的转写后，后台返回了《狂人日记》的解释。
+
+兜底现在先用 `response.item.create` 发送 `role: "user"` 的 `voiceInput` 快照，再发送 `response.create`。快照包含累计转写、话语 ID、开口时播放器状态及当前可听回答/播放状态。相同话语 ID 表示片段修订，仍按环境语音判断，不视为显式文字提问，也不重复已执行动作。正常 Live 委派不额外注入。输入提交被拒绝时明确报错。接口依据：[向后台队列添加用户输入](https://developers.openai.com/api/docs/guides/live-delegation#accept-typed-input)。
+
+回归模型只能从实际发出的 `response.item.create` 读取兜底输入；不能再从测试的转写变量直接取得问题，否则会掩盖“应用听到了、模型没收到”的缺陷。
+
+真实供应商验证使用临时鉴权 Cloudflare 预览，密钥留在 Worker 内，以 GPT-Live 主 WebSocket 执行生产协调器：完整问题得到中文解释，旁人聊天调用 `ignore_input`，调速调用 `control_podcast`。另将合成中文音频按实时节奏输入，实际收到转写与非静音中文回复；该轮较早的片段触发了一句澄清，并非直接内容解释。输出只测量、不播放。此探针未覆盖 iPad 麦克风与生产 sideband 传输；后者由线上事件及 Cloudflare 集成测试覆盖。
