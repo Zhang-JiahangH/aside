@@ -18,6 +18,7 @@ import { z } from "zod";
 import type { QuestionTelemetry } from "./question-service.js";
 import { delegationInstructions } from "./dialogue-policy.js";
 import { LiveResponseTrigger } from "./live-response-trigger.js";
+import { SpokenAnswerVariants } from "./spoken-answer-variants.js";
 
 interface Ports {
   /** Push to the browser's NDJSON control stream. */
@@ -83,6 +84,7 @@ export class LiveDelegation {
   private contextTimer?: () => void;
   private conversationKey = "";
   private answeredInput?: { turnId: string; text: string };
+  private answerVariants?: SpokenAnswerVariants;
   constructor(
     private player: LivePlayerState,
     private analysis: Analysis,
@@ -112,6 +114,10 @@ export class LiveDelegation {
     switch (event.type) {
       case "session.input_transcript.delta":
         this.transcript(event);
+        return;
+      case "session.output_transcript.delta":
+        if (typeof event.delta === "string" && this.canObserveVariants())
+          this.answerVariants?.observe(event.delta);
         return;
       case "session.delegation.created":
         this.created(event);
@@ -288,6 +294,7 @@ export class LiveDelegation {
     this.text = this.separators = "";
     this.input = undefined;
     this.inputStartMs = undefined;
+    this.answerVariants = undefined;
   }
   /** Which utterance an event belongs to, so the browser can attribute Live captions. */
   private marker(delegation?: Delegation) {
@@ -327,6 +334,7 @@ export class LiveDelegation {
     const id = delegation?.id ?? crypto.randomUUID();
     if (this.retiredDelegations.has(id)) return;
     if (this.mobile && this.alreadyAnswered()) {
+      if (this.canObserveVariants()) this.answerVariants?.start(id);
       this.retire(id);
       return;
     }
@@ -360,11 +368,16 @@ export class LiveDelegation {
       const response = event.response as Record<string, any> | undefined;
       if (response?.usage) this.record(response);
     }
-    if (id && this.retiredDelegations.has(id)) return;
+    if (id && this.retiredDelegations.has(id) && !this.answerVariants?.has(id))
+      return;
     if (this.mobile && this.alreadyAnswered()) {
-      if (id) this.retire(id);
+      if (id) {
+        if (this.canObserveVariants()) this.answerVariants?.receive(id, event);
+        this.retire(id);
+      }
       return;
     }
+    if (id && this.retiredDelegations.has(id)) return;
     const starting = !this.delegation || (id && this.delegation.id !== id);
     const delegation =
       this.delegation ??
@@ -420,6 +433,7 @@ export class LiveDelegation {
       case "response.completed":
       case "response.done": {
         if (delegation.answer.trim() && delegation.engaged) {
+          const answer = delegation.answer;
           console.log("Aside voice delegated answer", {
             characters: delegation.answer.length,
             sources: delegation.sources.length,
@@ -437,6 +451,16 @@ export class LiveDelegation {
               turnId: delegation.input.turnId,
               text: delegation.text,
             };
+            this.answerVariants = new SpokenAnswerVariants(
+              {
+                type: "answered",
+                decisionId: delegation.engaged,
+                answer,
+                sources: delegation.sources,
+                final: true,
+              },
+              (event) => this.ports.emit(event),
+            );
             this.retire(delegation.id);
           }
         } else if (!delegation.engaged && !delegation.ignored) {
@@ -483,6 +507,16 @@ export class LiveDelegation {
     return (
       this.answeredInput?.turnId === this.input?.turnId &&
       this.answeredInput?.text === this.text
+    );
+  }
+  private canObserveVariants() {
+    if (!this.mobile || !this.alreadyAnswered()) return false;
+    const assistant = this.player.assistant;
+    return (
+      !assistant ||
+      (assistant.decisionId === this.delegation?.engaged &&
+        assistant.state !== "finished" &&
+        assistant.state !== "interrupted")
     );
   }
   private engage(delegation: Delegation, text: string) {

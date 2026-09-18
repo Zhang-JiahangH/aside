@@ -2792,6 +2792,10 @@ test(`${client ?? "Web"}: Live sideband executes tools and recovers a missing de
       sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "duplicate-d2", target: "responses" } }));
       backend({ type: "response.output_text.delta", delta: "Repeated explanation" }, "duplicate-d2");
       backend({ type: "response.completed", response: {} }, "duplicate-d2");
+      sideband.send(JSON.stringify({ type: "session.output_transcript.delta", delta: "Repeated explanation" }));
+      const variant = await next("answered");
+      assert.equal(variant.decisionId, engage.decisionId, "the revised formulation belongs to the original admitted turn");
+      assert.equal(variant.answer, "Repeated explanation");
     }
     const spokenPlayer = { ...update.player, sequence: 2, revision: 2, wasPlaying: false, audibleSource: "none",
       playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 900 },
@@ -2809,7 +2813,7 @@ test(`${client ?? "Web"}: Live sideband executes tools and recovers a missing de
     functionCall("c3", "resume_podcast", {}, "d3");
     const resume = await next("decision");
     assert.equal(received.filter(e => e.type === "engage").length, 1);
-    assert.equal(received.filter(e => e.type === "answered").length, 1);
+    assert.equal(received.filter(e => e.type === "answered").length, client === "mobile" ? 2 : 1);
     assert.equal(resume.result.action, "resume");
     assert.equal((await a.request(path, "PUT", { sessionId, player: { ...spokenPlayer, sequence: 3, revision: 3, wasPlaying: true, audibleSource: "podcast", playback: { mode: "playing", interrupted: false } }, acknowledgement: { decisionId: resume.decisionId, applied: true } })).status, 200);
     const resumed = await waitForControl(() => toolReturns().find(r => r.callId === "c3"));

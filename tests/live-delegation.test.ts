@@ -676,6 +676,66 @@ for (const mobile of [false, true])
     s.delegation.close();
   });
 
+for (const captionsFirst of [false, true])
+  test(`mobile corrects completion metadata only for a completed variant corroborated by output captions (${captionsFirst})`, async () => {
+    const s = setup(false, 30, true);
+    s.speak("What is a novelist?");
+    s.delegate("first");
+    s.backend({ type: "response.output_text.delta", delta: "A novelist writes novels." });
+    s.backend({ type: "response.completed", response: {} });
+    const first = s.events.find(e => e.type === "answered")!;
+    const variant = "A novelist is a writer of novels.";
+    const caption = () => s.delegation.receive({ type: "session.output_transcript.delta", delta: variant });
+    s.delegate("variant");
+    s.backend({ type: "response.created", response: {} });
+    s.backend({ type: "response.output_text.delta", delta: variant });
+    if (captionsFirst) caption();
+    assert.equal(s.events.filter(e => e.type === "answered").length, 1, "partial metadata or captions alone cannot change completion");
+    s.backend({ type: "response.completed", response: {} });
+    if (!captionsFirst) {
+      assert.equal(s.events.filter(e => e.type === "answered").length, 1, "an unspoken alternative remains ignored");
+      caption();
+    }
+    assert.deepEqual(s.events.filter(e => e.type === "answered"), [first, { ...first, answer: variant }]);
+    assert.equal(s.engages().length, 1, "the question, audio window and anchor are never reopened");
+    assert.equal(s.decisions().length, 0);
+    assert.equal(s.sent.length, 0, "observing an already-running response cannot create another paid request");
+    caption();
+    assert.equal(s.events.filter(e => e.type === "answered").length, 2, "the same variant is reported once");
+    s.delegation.close();
+  });
+
+for (const invalidation of ["tool", "failed", "new-input", "manual", "finished", "interrupted"])
+  test(`mobile does not use a replacement's completion metadata after ${invalidation}`, async () => {
+    const s = setup(false, 30, true);
+    s.speak("What is a novelist?");
+    s.delegate("first");
+    s.backend({ type: "response.output_text.delta", delta: "A novelist writes novels." });
+    s.backend({ type: "response.completed", response: {} });
+    const first = s.engages()[0];
+    s.delegate("variant");
+    s.backend({ type: "response.created", response: {} });
+    const variant = "A novelist is a writer of novels.";
+    s.backend({ type: "response.output_text.delta", delta: variant });
+    if (invalidation === "tool") s.call("resume_podcast", {});
+    s.backend({ type: invalidation === "failed" ? "response.failed" : "response.completed", response: {} });
+    if (invalidation === "new-input") s.speak("And a poet?");
+    if (invalidation === "manual") s.ack(first.decisionId, true, { version: 1 });
+    if (invalidation === "finished" || invalidation === "interrupted")
+      s.ack(first.decisionId, true, { assistant: { decisionId: first.decisionId, state: invalidation, text: "A novelist writes novels." } });
+    s.delegation.receive({ type: "session.output_transcript.delta", delta: variant });
+    if (invalidation === "new-input" || invalidation === "manual") {
+      s.backend({ type: "response.output_text.delta", delta: "A stale continuation" }, "variant");
+      s.call("resume_podcast", {});
+      await flush();
+    }
+    assert.equal(s.events.filter(e => e.type === "answered").length, 1);
+    assert.equal(s.engages().length, 1);
+    assert.equal(s.decisions().length, 0, "duplicate tools remain suppressed");
+    assert.equal(s.events.some(e => e.type === "error"), false, "a failed rejected response cannot end the active conversation");
+    s.delegation.close();
+  });
+
 test("the tool call cap ends the session with an explicit error", async () => {
   const s = setup(false, 2);
   s.speak("Louder");

@@ -149,7 +149,7 @@ mf = new Miniflare(
         if (action.action === "status")
           return Response.json(await rtc({ action: "status" }));
         if (
-          !["question", "duplicate", "ignore", "resume"].includes(action.action)
+          !["question", "variant", "duplicate", "ignore", "resume"].includes(action.action)
         )
           return Response.json(
             { error: "Unknown fixture action" },
@@ -177,6 +177,24 @@ mf = new Miniflare(
             type: "delegation",
           },
         });
+        if (action.action === "variant") {
+          // Real device pattern: two complete backend formulations, one spoken
+          // reply. The second cannot re-admit the question or replace its anchor.
+          response({ type: "response.created", response: {} });
+          response({ type: "response.output_text.delta", delta: "An earlier unspoken formulation of this answer." });
+          response({ type: "response.completed", response: {} });
+          await new Promise(resolve => setTimeout(resolve, 150));
+          const variantId = `${delegation}-variant`;
+          send({ type: "session.delegation.created", delegation: { id: variantId, target: "responses" } });
+          for (const event of [
+            { type: "response.created", response: {} },
+            { type: "response.output_text.delta", delta: answer },
+            { type: "response.completed", response: {} },
+          ]) send({ type: "response.event", delegation_id: variantId, event });
+          const evidence = await rtc({ action: "answer", text: answer, duration: 2 });
+          send({ type: "session.output_transcript.delta", delta: answer });
+          return Response.json({ ok: true, delegation, ...evidence });
+        }
         if (action.action === "duplicate") {
           response({ type: "response.created", response: {} });
           response({ type: "response.output_text.delta", delta: answer });

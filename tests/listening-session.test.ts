@@ -2847,8 +2847,44 @@ async function mobileSpoken() {
     s.callbacks.onOutput(false);
     if (drain) s.callbacks.onOutputDrained?.();
   };
-  return { ...s, answer, hear };
+  return { ...s, answer, hear, decisionId };
 }
+
+for (const metadataLast of [false, true])
+  test(`a corroborated spoken formulation keeps one mobile turn and waits for native drain (${metadataLast})`, async (t) => {
+    const s = await mobileSpoken();
+    t.after(() => s.session.dispose());
+    const anchor = s.session.checkpoint().resumeMs;
+    s.answer("A biography is a life story.");
+    const spoken = "A biography tells the story of another person's life.";
+    s.hear(spoken, false);
+    const confirm = () => s.push({ type: "answered", decisionId: s.decisionId, answer: spoken, sources: [], final: true });
+    if (!metadataLast) confirm();
+    s.clock.advance(10000);
+    await flush();
+    assert.equal(s.audio.playing, false);
+    assert.equal(s.session.getSnapshot().resumeSeconds, null, "metadata never substitutes for native drain");
+    s.callbacks.onOutputDrained?.();
+    if (metadataLast) {
+      assert.equal(s.session.getSnapshot().resumeSeconds, null, "unmatched speech cannot resume");
+      confirm();
+    }
+    assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+    assert.equal(s.session.checkpoint().resumeMs, anchor);
+    assert.deepEqual(s.session.checkpoint().history.map(({ role, text }) => [role, text]), [
+      ["user", "What is a biography?"], ["assistant", spoken],
+    ]);
+    s.clock.advance(3000);
+    await flush();
+    assert.equal(s.audio.playing, true);
+    assert.equal(s.audio.positionMs, anchor);
+    assert.equal(s.session.getSnapshot().listeningActive, true);
+    confirm();
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "A late duplicate must stay muted.");
+    assert.equal(s.session.checkpoint().history.length, 2);
+    assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+  });
 
 test("mobile reports a verified answer as finished and closes its audio window before a late replay", async (t) => {
   for (const metadataLast of [false, true]) {

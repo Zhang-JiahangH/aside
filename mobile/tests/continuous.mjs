@@ -69,7 +69,7 @@ try {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      action: "question",
+      action: process.env.VARIANT === "1" ? "variant" : "question",
       sessionId,
       text: question,
       answer,

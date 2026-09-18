@@ -1,3 +1,5 @@
+import { normalizeSpokenText, matchesSpokenText } from "@aside/engine/core";
+
 /**
  * Live has no semantic audio-done event. Mobile may resume only after the
  * backend's complete answer was heard AND the native playout queue drained.
@@ -9,22 +11,11 @@ export class SpokenCompletion {
   private heard = "";
   private started = false;
   private drained = false;
-  private normalize(value: string) {
-    return (
-      value
-        .normalize("NFKC")
-        .toLocaleLowerCase("en-US")
-        .match(
-          /\p{N}+(?:[.,]\p{N}+)*|\p{Script=Han}|(?:(?!\p{Script=Han})[\p{L}\p{M}])+/gu,
-        )
-        ?.join(" ") ?? ""
-    );
-  }
   answer(value: string) {
-    this.expected = this.normalize(value);
+    this.expected = normalizeSpokenText(value);
   }
   transcript(value: string) {
-    this.heard = this.normalize(value);
+    this.heard = normalizeSpokenText(value);
   }
   outputStarted() {
     this.started = true;
@@ -37,10 +28,7 @@ export class SpokenCompletion {
     return (
       this.started &&
       this.drained &&
-      !!this.expected &&
-      (this.expected.length < 20
-        ? this.heard === this.expected
-        : this.heard.endsWith(this.expected))
+      matchesSpokenText(this.heard, this.expected)
     );
   }
 }
