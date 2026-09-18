@@ -43,8 +43,12 @@ interface ConversationHost {
   changed(): void;
   log(message: string): void;
 }
-/** Longest wait for the backend to decide on heard input before silence counts again. */
-export const pendingDecisionMs = 5000;
+/**
+ * Longest wait for the backend to decide on heard input before silence counts
+ * again. The follow-up wait still runs after it, so a real question has both
+ * (four seconds by default) to engage; measured engages take 1.2 to 2.7.
+ */
+export const pendingDecisionMs = 2000;
 /** Owns a question turn from input through cancellation, answer and follow-up. */
 export class Conversation {
   private turns: Turn[] = [];

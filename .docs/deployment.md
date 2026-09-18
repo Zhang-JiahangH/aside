@@ -496,3 +496,5 @@ node scripts/admin-usage.mjs --days 30 --json
 发布与核对：`npm run check`、343 项单元测试通过（新增 1 项：回答后的无转写噪音不再困住节目），语音、VAD、收听控制浏览器用例 28 项通过。发布前线上仍是上一节的 `01d95882`，origin/main 无新提交，快进到 main（`37758dd`）。生产 Worker `b123b79e-69be-4397-9b0e-ccd0e9fa2b4d`（`--containers-rollout=none`）。首页引用 `index-CvYvYDIF.js`，bundle 含新逻辑；`/api/health` 200；`npm run test:mobile-service` 4 项通过。
 
 未验证：这是否就是线上那次不续播的原因。若仍不续播，打开 `?debug` 的语音诊断，读 `autoResume.blockedBy`。外放时回答的回声触发 #33 的插话打断会得到 `held after barge-in`，那是另一条路径，本次未改。
+
+后续调整（同日）：等待判断的过期时间由 5 秒改为 2 秒（`pendingDecisionMs`）。过期后仍要再过续播等待才恢复节目，真实提问合计有 4 秒完成接管；探针实测接管在说完后 1.2 到 2.7 秒。若接管晚于 4 秒，节目会先恢复再被正式打断。343 项单元测试与 23 项语音浏览器用例通过。
