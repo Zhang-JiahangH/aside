@@ -168,6 +168,23 @@ answered. Removing duplicate context is a verified defect correction; its effect
 on physical speech recognition and answer quality still needs a bounded device
 comparison. Do not treat it as proof that the intermittent failure is fixed.
 
+### Physical build-30 comparison
+
+The user confirmed that built-in-speaker questions now work after installing
+diagnostic build 30. Its trace contains no client programme-context appends and
+shows a complete short definition question, backend admission and rendered native
+answer PCM. The captured session closed normally with supplier-reported Live
+usage of 89 seconds. This was the user's existing test; the agent made no new
+paid model call. Raw device transcripts remain outside the repository.
+
+This closes the observed speaker-input/no-answer blocker for that bounded test.
+It does not prove universal intent accuracy: the trace also contains an ambiguous
+spoken continuation interpreted as more explanation (an explicit playback request
+subsequently resumed the programme), and two backend answer events for one input.
+Track these provider/delegation quality cases separately; do not claim all real
+conversation behaviors were verified. Current source CI passes:
+https://github.com/qiz029/aside/actions/runs/35314729307.
+
 ### Additional fixture evidence
 
 Both platforms completed 30 actual minutes of background native playback: iOS

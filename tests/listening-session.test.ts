@@ -410,7 +410,15 @@ test("client context remains the default for Web and manual questions", async (t
     ["auto", "client"],
     ["manual", "server"],
   ] as const) {
-    const s = setup(mode, undefined, undefined, false, true, "verified", owner);
+    const s = setup(
+      mode,
+      undefined,
+      undefined,
+      false,
+      mode === "auto",
+      "verified",
+      owner,
+    );
     t.after(() => s.session.dispose());
     s.session.start();
     if (mode === "manual") await s.session.beginManual();
