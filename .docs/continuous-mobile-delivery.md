@@ -6,6 +6,49 @@ The compatibility PR #28 is a baseline, not completion of this goal.
 User scope correction: do not change Web behavior. Shared runtime extensions must
 be opt-in for mobile and preserve the existing Web policy and tests.
 
+## Current candidate — 2026-09-18
+
+Mobile now explicitly requests its conversation policy. Responses receives the
+initial observed player state and subsequent interruption/assistant transitions,
+even when the paused playhead stays within one passage. Native progress ticks and
+streaming caption fragments do not resend this context. After the admitted answer's
+captions match and native playout drains, the client reports `finished` and closes
+that answer's audio window. A later admitted question opens its own window.
+
+A second delegation for the same already-answered input cannot re-engage, append a
+second answer or execute player tools. New utterances and new fragments after
+wait/ignore remain eligible. Already-started supplier work can still incur usage;
+the guard does not claim to cancel that work, and its usage stays in the ledger.
+
+The branch incorporates upstream PR #32 (`d726765`), including explicit transcript
+input before a missed-delegation request. Merge conflict resolution retains both
+the upstream input assertion and isolated Web/mobile control-stream coverage.
+Web source matches upstream; the new conversation policy is mobile-only.
+All 21 Web voice regressions pass after the merge.
+
+Verification: 390 local tests, type/module-boundary checks, both Cloudflare control
+paths and [source CI](https://github.com/qiz029/aside/actions/runs/35317294850) pass.
+Both native simulators pass actual RTC playback with a deliberately repeated
+delegation/audio after completion, then genuine follow-ups on the original anchor,
+ignored speech and the eight-second long-answer wait. This test uses deterministic
+external model output and does not establish natural-language intent accuracy.
+It also does not prove suppression of supplier audio that overlaps an unfinished
+admitted answer. Agent-paid model calls remain zero.
+
+Normal iPhone Release 33 is signed and installed, with production API and no test
+mode or temporary diagnostic helper. Native and Expo build numbers both read 33.
+The phone was locked, so automatic launch was refused. Local iOS commands now
+regenerate native configuration before building, preventing a stale native plist
+version. Android EAS 16 is built with the existing production signing key and
+production API, test mode and OTA off. Its APK upgraded the production package
+on the emulator, then passed read-only real catalogue/transcript/Account checks.
+[Android build 16](https://expo.dev/accounts/jiahangzhang/projects/aside/builds/4b56aa15-5df6-46f7-9d4c-390907ffb945).
+Evidence: [current state](mobile-evidence/continuous-state-2026-09-18.json).
+
+Remaining physical acceptance: natural continuation intent, overlapping supplier
+reply behavior, headset/call interruption and the visible iOS lock-screen card.
+Paid-account Ad Hoc/TestFlight signing remains pending account approval.
+
 ## Required acceptance evidence
 
 - [ ] iOS and Android: enable automatic mode once, stream microphone input while

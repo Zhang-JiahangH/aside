@@ -12,6 +12,14 @@ account restoration to fail before voice is exercised. Use Xcode's signing step
 instead of signing only the outer app afterwards. This does not require paid
 Apple distribution signing.
 
+The local `ios` and `ios:device` commands regenerate native configuration before
+building. Supply an increasing `BUILD_NUMBER` for acceptance packages. When using
+`xcodebuild` directly, first run `expo prebuild --platform ios --no-install` with
+the same `APP_VARIANT`, `BUILD_NUMBER`, API and test-mode environment. Expo writes
+`CFBundleVersion` into the native plist: `CURRENT_PROJECT_VERSION` alone does not
+replace a stale generated value. Verify the built app's native version as well as
+`EXConstants.bundle/app.config` before installing or distributing it.
+
 ```sh
 maestro --device DEVICE test -e EMAIL=fresh@example.com mobile/tests/smoke.yaml
 maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice.yaml
@@ -30,7 +38,7 @@ maestro --device DEVICE test -e EMAIL=voice-fresh@example.com mobile/tests/voice
 - `background-start.yaml`: open the 31-minute silent AAC fixture and put the app in the background.
 - `locked-start.yaml`: restart that fixture at its transcript anchor and lock the device. Retain the exact lock timestamp. Wait at least 30 real minutes, then inspect native media state / lock controls and reopen with `background-finish.yaml`. A playing icon alone is insufficient: verify actual position exceeds 30 minutes.
 - `voice-resume.yaml` / `voice-capture.yaml`: focused manual-mode checks for an already signed-in app. `voice-resume` explicitly selects manual continuation, verifies the hold survives completed output, then restores the default three-second preference. Silence alone never completes a spoken answer. The manual-mode idle timer releases an unused connection without resuming playback.
-- `continuous.mjs ios|android DEVICE`: launch through Maestro, enable conversation, and drive a unique question through the actual Worker control stream and native RTC output. Assert microphone RTP, rendered answer activity, drained PCM before countdown, semantic continuation, retained microphone, visible question/answer and no overlap with podcast playback. Set `EXTENDED=1` to also exercise ignored speech, continuous follow-ups on one anchor and the long-answer eight-second wait. `PORT` and `MAESTRO` select the fixture and executable. Evidence defaults to `/tmp/aside-continuous-PLATFORM-native.json`.
+- `continuous.mjs ios|android DEVICE`: launch through Maestro, enable conversation, and drive a unique question through the actual Worker control stream and native RTC output. Assert microphone RTP, rendered answer activity, drained PCM before countdown, semantic continuation, retained microphone, visible question/answer and no overlap with podcast playback. Inject a second delegation and real PCM after verified completion; it must not reopen the reply or enter history. Native diagnostics retain `lastDrain`, the measured playout state before the completed answer's gate closes. Set `EXTENDED=1` to also exercise ignored speech, continuous follow-ups on one anchor and the long-answer eight-second wait. `PORT` and `MAESTRO` select the fixture and executable. Evidence defaults to `/tmp/aside-continuous-PLATFORM-native.json`.
 - `player-ui.yaml`: keyboard/composer, playback options, Chinese/English and restoring the default preference. Run separately in light/dark and at small screen / enlarged text sizes; inspect screenshots for clipping and hierarchy.
 
 For a long local acceptance session, `VOICE_SESSION_SECONDS=600 TRIAL_DAILY_LIMITS=false` prevents synthetic provider traffic exhausting the fixture's daily pool. Production authorization/concurrency still executes, and normal quota coverage remains in Worker tests. Close voice or background the app before deliberately terminating an older binary. Current builds also journal and clean up their own abandoned lease on restart.
