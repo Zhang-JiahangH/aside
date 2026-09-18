@@ -16,7 +16,9 @@ const analysis: Analysis = {
   speakers: [],
   voice: "masculine",
   voiceReason: "",
-  passages: [],
+  passages: [
+    { id: "a", startMs: 0, endMs: 20000, text: "First passage", speaker: "host" },
+  ],
   anchors: [],
 };
 const player = {
@@ -31,142 +33,50 @@ const player = {
 const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 };
-
-test("early-response clients receive admission then completion on NDJSON; old clients retain the single-result contract", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
-  for (const earlyResponse of [true, false]) {
-    let disposed = 0;
-    let finish!: () => void;
-    const events: LiveControlEvent[] = [];
-    const c = new LiveControl(
-      "session",
-      { player, debug: false, earlyResponse },
-      analysis,
-      [],
-      {
-        answer: async (
-          _analysis,
-          q,
-          _signal,
-          _progress,
-          _telemetry,
-          _preview,
-          accept,
-        ) => {
-          assert.equal(!!accept, earlyResponse);
-          if (accept) assert.equal(accept(), true);
-          await new Promise<void>((resolve) => {
-            finish = resolve;
-          });
-          return {
-            action: "answer",
-            revision: q.revision,
-            answer: "The answer",
-            tools: [],
-            sources: [],
-          };
-        },
-      },
-      () => {},
-      undefined,
-      30,
-      () => {
-        disposed++;
-      },
-    );
-    const reading = readLiveControl(c.subscribe(), (e) => events.push(e));
-    c.receive({
-      type: "session.input_transcript.delta",
-      delta: "Why?",
-      start_ms: 0,
-      end_ms: 100,
-    });
-    t.mock.timers.tick(160);
-    await flush();
-    const early = events.find((e) => e.type === "decision");
-    assert.equal(!!early, earlyResponse);
-    if (early)
-      c.update({
-        sessionId: "session",
-        player: { ...player, sequence: 1, revision: 1 },
-        acknowledgement: { decisionId: early.decisionId, applied: true },
-      });
-    finish();
-    await flush();
-    assert.equal(events.at(-1)?.type, earlyResponse ? "answer" : "decision");
-    c.close();
-    c.close();
-    assert.equal(disposed, 1);
-    await reading;
-  }
+const functionCall = (name: string, args: unknown, call_id = "call") => ({
+  type: "response.event",
+  delegation_id: "d",
+  event: {
+    type: "response.output_item.done",
+    item: { type: "function_call", call_id, name, arguments: JSON.stringify(args) },
+  },
 });
 
-test("a longer session admits more than 30 intent calls while retaining its configured cap", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
-  let calls = 0;
+test("a longer session admits more than 30 tool calls while retaining its configured cap", async () => {
+  const sent: Record<string, unknown>[] = [];
   const c = new LiveControl(
     "long-session",
     { player, debug: false },
     analysis,
-    [],
-    {
-      answer: async (_a, q) => {
-        calls++;
-        return {
-          action: "ignore",
-          revision: q.revision,
-          answer: "",
-          sources: [],
-          tools: [],
-        };
-      },
-    },
-    () => {},
+    (event) => sent.push(event),
     undefined,
     32,
   );
-  t.after(() => c.close());
   const reading = assert.rejects(
     readLiveControl(c.subscribe(), () => {}),
-    /intent limit/,
+    /tool call limit/,
   );
   for (let i = 0; i < 33; i++) {
-    c.receive({
-      type: "session.input_transcript.delta",
-      delta: `Background speech ${i}`,
-      start_ms: i * 2000,
-      end_ms: i * 2000 + 100,
-    });
-    t.mock.timers.tick(160);
+    c.receive(functionCall("get_passage", { atMs: 1000 }, `c${i}`));
     await flush();
   }
   await reading;
-  assert.equal(calls, 32);
+  assert.equal(
+    sent.filter((e) => e.type === "response.item.create").length,
+    32,
+  );
+  c.close();
 });
 
-test("one authenticated session stream carries multiple decisions, heartbeat and graceful close", async (t) => {
+test("one authenticated session stream carries decisions, heartbeat and graceful close", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
-  const calls: string[] = [],
-    events: LiveControlEvent[] = [],
-    notes: string[] = [];
+  const events: LiveControlEvent[] = [];
+  const sent: Record<string, unknown>[] = [];
   const c = new LiveControl(
     "session",
     { player, debug: true },
     analysis,
-    [],
-    {
-      answer: async (_a, q) => {
-        calls.push(q.history.at(-1)!.text);
-        return {
-          action: "ignore",
-          revision: q.revision,
-          answer: "",
-          tools: [],
-          sources: [],
-        };
-      },
-    },
-    (text) => notes.push(text),
+    (event) => sent.push(event),
   );
   const response = c.subscribe();
   const reading = readLiveControl(response, (event) => events.push(event));
@@ -182,72 +92,77 @@ test("one authenticated session stream carries multiple decisions, heartbeat and
     start_ms: 0,
     end_ms: 100,
   });
-  t.mock.timers.tick(160);
+  c.receive({
+    type: "session.delegation.created",
+    delegation: { id: "d", target: "responses" },
+  });
+  c.receive(functionCall("ignore_input", {}, "c1"));
   await flush();
   c.receive({
     type: "session.input_transcript.delta",
-    delta: "Other speech",
+    delta: "What was that?",
     start_ms: 2000,
     end_ms: 2100,
   });
-  t.mock.timers.tick(160);
+  c.receive({
+    type: "session.delegation.created",
+    delegation: { id: "d2", target: "responses" },
+  });
+  c.receive({
+    type: "response.event",
+    delegation_id: "d2",
+    event: { type: "response.output_text.delta", delta: "That was the host." },
+  });
   await flush();
   t.mock.timers.tick(15000);
   await flush();
   c.close();
   await reading;
-  assert.deepEqual(calls, ["Dinner plans", "Other speech"]);
-  assert.equal(events.filter((e) => e.type === "decision").length, 2);
+  assert.deepEqual(
+    events.filter((e) => e.type === "observing").map((e) => e.text),
+    ["Dinner plans", "What was that?"],
+  );
+  assert.equal(events.filter((e) => e.type === "decision").length, 1);
+  assert.equal(events.filter((e) => e.type === "engage").length, 1);
   assert.ok(events.some((e) => e.type === "heartbeat"));
   assert.equal(events.at(-1)?.type, "closed");
   assert.equal(c.update({ sessionId: "session", player }), false);
-  assert.deepEqual(notes, []);
+  assert.deepEqual(
+    sent.map((e) => e.type),
+    ["response.item.create", "response.create"],
+  );
 });
 
-test("disconnect cancels in-flight work and no transcript is processed before subscription", async (t) => {
+test("a report pending at disconnect resolves as rejected and nothing runs before subscription", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
-  let signal: AbortSignal | undefined;
+  const sent: Record<string, unknown>[] = [];
   const c = new LiveControl(
     "session",
     { player, debug: false },
     analysis,
-    [],
-    {
-      answer: async (_a, _q, s) => {
-        signal = s;
-        return new Promise(() => {});
-      },
-    },
-    () => {},
+    (event) => sent.push(event),
   );
-  c.receive({ type: "session.input_transcript.delta", delta: "before" });
-  t.mock.timers.tick(160);
-  assert.equal(signal, undefined);
-  const response = c.subscribe();
-  c.receive({ type: "session.input_transcript.delta", delta: "during" });
-  t.mock.timers.tick(160);
+  // Events before any browser subscription are still supplier truth; the
+  // pause decision has nowhere to go and must not block the tool result forever.
+  c.receive(functionCall("control_podcast", { commands: [{ type: "pause" }] }));
   await flush();
-  assert.equal((signal as AbortSignal | undefined)?.aborted, false);
+  assert.equal(sent.length, 0);
+  const response = c.subscribe();
   await response.body!.cancel();
-  assert.equal((signal as AbortSignal | undefined)?.aborted, true);
+  await flush();
+  // The stream is gone and the session with it: the pending command resolves
+  // rather than leaking, and nothing is sent to a supplier we are leaving.
+  assert.equal(sent.length, 0);
   c.close();
   assert.equal(c.subscribe().status, 409);
+  c.receive(functionCall("get_passage", { atMs: 1000 }, "late"));
+  await flush();
+  assert.equal(sent.length, 0, "a closed control executes nothing");
 });
 
 test("sideband loss is an explicit stream error and a stalled tab has a bounded queue", async () => {
   const make = () =>
-    new LiveControl(
-      "session",
-      { player, debug: false },
-      analysis,
-      [],
-      {
-        answer: async () => {
-          throw Error("unexpected");
-        },
-      },
-      () => {},
-    );
+    new LiveControl("session", { player, debug: false }, analysis, () => {});
   const c = make(),
     response = c.subscribe();
   c.close("Sideband disconnected");
@@ -267,97 +182,93 @@ test("sideband loss is an explicit stream error and a stalled tab has a bounded 
 
 test("NDJSON parser handles split UTF-8, multiple results, malformed frames and early EOF", async () => {
   const encoder = new TextEncoder();
-  const bytes = encoder.encode(
-    '{"type":"observing","version":0,"text":"你好"}\n{"type":"closed"}',
-  );
-  const response = new Response(
-    new ReadableStream({
-      start(c) {
-        for (const byte of bytes) c.enqueue(new Uint8Array([byte]));
-        c.close();
-      },
-    }),
-    { headers: { "Content-Type": "application/x-ndjson" } },
-  );
+  const chunks = [
+    '{"type":"ready","sessionId":"s"}\n{"type":"observing","version":0,"text":"你',
+    '好"}\n{"type":"heartbeat"}\n',
+  ];
   const events: LiveControlEvent[] = [];
-  await readLiveControl(response, (e) => events.push(e));
-  assert.deepEqual(events, [
-    { type: "observing", version: 0, text: "你好" },
-    { type: "closed" },
-  ]);
-  await assert.rejects(
-    readLiveControl(new Response("{}"), () => {}),
-    /unavailable/,
-  );
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        const bytes = encoder.encode(chunk);
+        controller.enqueue(bytes.slice(0, 5));
+        controller.enqueue(bytes.slice(5));
+      }
+      controller.close();
+    },
+  });
   await assert.rejects(
     readLiveControl(
-      Response.json({ error: "Denied" }, { status: 403 }),
+      new Response(stream, {
+        headers: { "Content-Type": "application/x-ndjson" },
+      }),
+      (e) => events.push(e),
+    ),
+    /disconnected/,
+  );
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["ready", "observing", "heartbeat"],
+  );
+  assert.equal(events[1].type === "observing" && events[1].text, "你好");
+  await assert.rejects(
+    readLiveControl(
+      new Response('{"type":"bogus"}\n', {
+        headers: { "Content-Type": "application/x-ndjson" },
+      }),
       () => {},
     ),
-    /Denied/,
   );
-  for (const body of [
-    '{"type":"heartbeat"}\n',
-    '{"type":"unknown"}\n',
-    "x".repeat(128001),
-  ])
-    await assert.rejects(
-      readLiveControl(
-        new Response(body, {
-          headers: { "Content-Type": "application/x-ndjson" },
-        }),
-        () => {},
-      ),
-    );
+  await assert.rejects(
+    readLiveControl(new Response("{}", { status: 500 }), () => {}),
+    /Voice control connection failed/,
+  );
 });
 
-test("Node sideband authenticates, receives transcript frames and reports connection loss", async () => {
-  const socket = new EventEmitter() as WebSocket;
-  const sent: string[] = [],
-    received: unknown[] = [];
-  let closed = 0;
-  socket.send = (value: unknown) => {
-    sent.push(String(value));
-  };
-  socket.close = () => {
-    closed++;
-  };
-  const connecting = attachLiveSideband(
-    "test-key",
-    "session/a",
-    (e) => received.push(e),
-    () => {
-      closed++;
-    },
-    (url, options) => {
-      assert.match(url, /session%2Fa\/attach$/);
-      assert.equal(options.headers?.Authorization, "Bearer test-key");
-      return socket;
-    },
-  );
-  socket.emit("open");
-  const port = await connecting;
-  socket.emit(
-    "message",
-    Buffer.from('{"type":"session.input_transcript.delta","delta":"Stop"}'),
-  );
-  socket.emit("message", Buffer.from("bad JSON"));
-  port.send("test");
-  port.close();
-  socket.emit("close");
-  assert.equal(received.length, 1);
-  assert.deepEqual(sent, ["test"]);
-  assert.equal(closed, 2);
-  for (const event of ["close", "error"]) {
-    const failed = new EventEmitter() as WebSocket;
-    const connect = attachLiveSideband(
-      "test",
-      "failed",
-      () => {},
-      () => {},
-      () => failed,
-    );
-    failed.emit(event, Error("failed"));
-    await assert.rejects(connect);
+test("sideband adapter parses frames, forwards close and fails on handshake errors", async () => {
+  class FakeSocket extends EventEmitter {
+    sent: string[] = [];
+    send(text: string) {
+      this.sent.push(text);
+    }
+    close() {
+      this.emit("close");
+    }
   }
+  const fake = new FakeSocket();
+  const received: Record<string, unknown>[] = [];
+  let closed = 0;
+  const pending = attachLiveSideband(
+    "key",
+    "session-id",
+    (event) => received.push(event),
+    () => closed++,
+    (url, options) => {
+      assert.equal(url, "wss://api.openai.com/v1/live/sessions/session-id/attach");
+      assert.equal(
+        (options.headers as Record<string, string>).Authorization,
+        "Bearer key",
+      );
+      return fake as unknown as WebSocket;
+    },
+  );
+  fake.emit("open");
+  const sideband = await pending;
+  fake.emit("message", Buffer.from('{"type":"session.started"}'));
+  fake.emit("message", Buffer.from("not json"));
+  sideband.send("hello");
+  sideband.close();
+  assert.deepEqual(received, [{ type: "session.started" }]);
+  assert.deepEqual(fake.sent, ["hello"]);
+  assert.equal(closed, 1);
+  const failing = new FakeSocket();
+  const rejected = attachLiveSideband(
+    "key",
+    "s",
+    () => {},
+    () => {},
+    () => failing as unknown as WebSocket,
+  );
+  failing.emit("error", Error("refused"));
+  await assert.rejects(rejected, /refused/);
 });

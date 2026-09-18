@@ -21,6 +21,7 @@ import { createPlayerConfig } from "@aside/engine/player";
 import { streamedResponse } from "../fixtures/streamed-response.ts";
 let mf, db, bucket;
 let networkCalls = [];
+const liveCreations = [];
 let acknowledgeClose = true;
 let attachGone = false;
 let attachBroken = false;
@@ -180,6 +181,7 @@ before(async () => {
           return new Response("upstream error", { status: 500 });
         if (request.url.endsWith("/live/sessions")) {
           if (rejectLive) return new Response("Invalid SDP", { status: 400 });
+          liveCreations.push(await request.json());
           return Response.json({
             session: { id: crypto.randomUUID() },
             transport: { sdp: "test-answer" },
@@ -2686,23 +2688,29 @@ test("the worker serves indexable pages, a live sitemap and real 404s", async ()
 });
 
 
-test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream without question requests", async () => {
+test("Live sideband executes delegated tool calls on one owner-bound NDJSON stream without question requests", async () => {
   const a = await visitor(), b = await visitor();
   await seed("control-public", "seed", true);
   await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, { "cf-connecting-ip": testerIp });
   const { createPlayerConfig } = await import("../../engine/src/player.ts");
   const player = { version: 0, sequence: 0, revision: 1, positionMs: 1000, wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig() };
-  const requests = [];
-  liveReply = async body => {
-    const context = JSON.parse(body.input[0].content); requests.push(context);
-    return Response.json({ id: crypto.randomUUID(), output_text: "", output: [{ type: "function_call", call_id: crypto.randomUUID(), name: "control_podcast", arguments: JSON.stringify({ commands: [{ type: "pause" }] }) }] });
-  };
+  liveReply = async () => { throw Error("the server must not call the Responses API itself under delegation"); };
   let reader, sessionId;
+  const toolReturns = () => controlEvents.filter(e => e.type === "response.item.create").map(e => ({ callId: e.item.call_id, output: JSON.parse(e.item.output) }));
   try {
+    const before = liveCreations.length, callsBefore = networkCalls.length;
     const created = await a.request("/api/episodes/control-public/live", "POST", { sdp: "offer", atMs: 1000, control: { player, debug: true } }, { "cf-connecting-ip": testerIp });
     assert.equal(created.status, 200, await created.clone().text());
     const live = await created.json(); sessionId = live.session.id;
     assert.equal(live.control, true);
+    const session = liveCreations[before].session;
+    assert.equal(session.delegation.type, "responses", "server control runs Responses delegation");
+    assert.equal(session.delegation.responses.model, "gpt-5.6-luna");
+    assert.deepEqual(session.delegation.responses.reasoning, { effort: "low" });
+    assert.equal(session.delegation.responses.service_tier, "priority");
+    assert.equal(session.delegation.responses.tools.some(t => t.type === "web_search"), false, "trial delegation has no web search");
+    assert.match(session.delegation.responses.instructions, /playheadMs 1000/);
+    assert.match(session.instructions, /MUST delegate/);
     const path = `/api/episodes/control-public/live-control?sessionId=${sessionId}`;
     assert.equal((await b.request(path)).status, 404, "another visitor cannot subscribe to this session");
     const stream = await a.request(path);
@@ -2725,52 +2733,62 @@ test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream w
     assert.equal((await a.request(path)).status, 409, "second subscriber cannot duplicate commands");
     // A completed upgrade must outlive the five-second handshake timeout.
     await new Promise(resolve => setTimeout(resolve, 5500));
-    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Could you lower that a bit?", start_ms: 0, end_ms: 200 }));
+    const sideband = sidebands.get(sessionId);
+    const backend = (event, delegation_id = "d1") => sideband.send(JSON.stringify({ type: "response.event", delegation_id, event }));
+    const functionCall = (call_id, name, args) => backend({ type: "response.output_item.done", item: { type: "function_call", call_id, name, arguments: JSON.stringify(args) } });
+    sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Could you lower that a bit?", start_ms: 0, end_ms: 200 }));
+    assert.equal((await next("observing")).text, "Could you lower that a bit?");
+    sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d1", target: "responses" } }));
+    await next("classifying");
+    functionCall("c1", "control_podcast", { commands: [{ type: "set_volume", volume: 0.5 }] });
     const first = await next("decision");
     assert.equal(first.result.action, "player_control");
-    assert.equal(requests.length, 1, "sideband alone invokes the backend model");
     assert.equal(first.player.positionMs, 1000);
-    const update = { sessionId, player: { ...player, sequence: 1, revision: 2, wasPlaying: false, audibleSource: "none" }, acknowledgement: { decisionId: first.decisionId, applied: true } };
+    assert.equal(toolReturns().length, 0, "the tool result waits for the client's report");
+    const update = { sessionId, player: { ...player, sequence: 1, revision: 2, config: { ...player.config, volume: 0.5 } }, acknowledgement: { decisionId: first.decisionId, applied: true } };
     assert.equal((await b.request(path, "PUT", update)).status, 404);
     assert.equal((await a.request(path, "PUT", update)).status, 200);
-    sidebands.get(sessionId).send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "duplicate", target: "client" } }));
-    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Pause again", start_ms: 2500, end_ms: 2800 }));
-    const second = await next("decision");
-    assert.notEqual(second.decisionId, first.decisionId);
-    assert.equal(second.result.revision, 2);
-    assert.equal(requests.length, 2);
-    assert.deepEqual(requests[1].conversation.recentActions[0].commands, [{ type: "pause" }]);
-    assert.equal((await a.request(path, "PUT", { ...update, player: { ...update.player, sequence: 2 }, acknowledgement: { decisionId: second.decisionId, applied: true } })).status, 200);
-    liveReply = async body => {
-      requests.push(JSON.parse(body.input[0].content));
-      return Response.json({ id: crypto.randomUUID(), output_text: "A draft explanation", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "A draft explanation", annotations: [] }] }] });
-    };
-    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "What does that mean?", start_ms: 5000, end_ms: 5300 }));
-    const answer = await next("decision");
-    assert.equal(answer.result.action, "answer");
-    const spokenPlayer = { ...update.player, sequence: 3, revision: 3,
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(toolReturns().map(r => r.callId), ["c1"]);
+    assert.equal(toolReturns()[0].output.accepted, true);
+    assert.equal(toolReturns()[0].output.player.volume, 0.5);
+    assert.equal(controlEvents.filter(e => e.type === "response.create").length, 1, "continuation follows the tool result");
+    // A lookup means the backend is answering: the client yields and the voice model speaks.
+    sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "What does that mean?", start_ms: 5000, end_ms: 5300 }));
+    sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d2", target: "responses" } }));
+    functionCall("c2", "search_podcast", { query: "seed" });
+    const engage = await next("engage");
+    assert.equal(engage.text, "What does that mean?");
+    assert.equal(engage.revision, 2);
+    assert.equal(toolReturns().at(-1).callId, "c2");
+    backend({ type: "response.output_text.delta", delta: "A draft explanation" }, "d2");
+    backend({ type: "response.completed", response: { model: "gpt-5.6-luna", service_tier: "priority", usage: { input_tokens: 1200, input_tokens_details: { cached_tokens: 500 }, output_tokens: 40, output_tokens_details: { reasoning_tokens: 10 } } } }, "d2");
+    const answered = await next("answered");
+    assert.equal(answered.decisionId, engage.decisionId);
+    assert.equal(answered.answer, "A draft explanation");
+    const spokenPlayer = { ...update.player, sequence: 2, revision: 2, wasPlaying: false, audibleSource: "none",
       playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 900 },
-      assistant: { decisionId: answer.decisionId, text: "Shall I resume the podcast?", state: "quiet" },
+      assistant: { decisionId: engage.decisionId, text: "A draft explanation", state: "quiet" },
     };
-    assert.equal((await a.request(path, "PUT", { sessionId, player: spokenPlayer, acknowledgement: { decisionId: answer.decisionId, applied: true } })).status, 200);
-    liveReply = async body => {
-      const context = JSON.parse(body.input[0].content); requests.push(context);
-      assert.deepEqual(context.history.slice(-2), [{ role: "assistant", text: "Shall I resume the podcast?" }, { role: "user", text: "Yes" }]);
-      assert.equal(context.conversation.playback.playback.interrupted, true);
-      assert.equal(context.conversation.assistant.state, "quiet");
-      return Response.json({ id: crypto.randomUUID(), output: [{ type: "function_call", call_id: "resume", name: "resume_podcast", arguments: "{}" }] });
-    };
-    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Yes", start_ms: 8000, end_ms: 8100 }));
-    const resuming = await next("classifying");
-    assert.equal(resuming.conversation.history.at(-2).text, "Shall I resume the podcast?");
+    assert.equal((await a.request(path, "PUT", { sessionId, player: spokenPlayer, acknowledgement: { decisionId: engage.decisionId, applied: true } })).status, 200);
+    // Resume goes through the client and reports back before the tool result.
+    sideband.send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Yes", start_ms: 8000, end_ms: 8100 }));
+    sideband.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "d3", target: "responses" } }));
+    functionCall("c3", "resume_podcast", {});
     const resume = await next("decision");
     assert.equal(resume.result.action, "resume");
-    assert.equal((await a.request(path, "PUT", { sessionId, player: { ...spokenPlayer, sequence: 4, revision: 4, wasPlaying: true, audibleSource: "podcast", playback: { mode: "playing", interrupted: false } }, acknowledgement: { decisionId: resume.decisionId, applied: true } })).status, 200);
+    assert.equal((await a.request(path, "PUT", { sessionId, player: { ...spokenPlayer, sequence: 3, revision: 3, wasPlaying: true, audibleSource: "podcast", playback: { mode: "playing", interrupted: false } }, acknowledgement: { decisionId: resume.decisionId, applied: true } })).status, 200);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(toolReturns().at(-1).output.accepted, true);
+    assert.equal(toolReturns().at(-1).output.player.playback, "playing");
+    const usage = await db.prepare("SELECT model, tiers, input_tokens, reasoning_tokens FROM question_usage WHERE owner_id=? ORDER BY ts DESC LIMIT 1").bind(a.id).all();
+    assert.deepEqual(usage.results[0], { model: "gpt-5.6-luna", tiers: "priority", input_tokens: 1200, reasoning_tokens: 10 }, "delegated cost is ledgered from the supplier's usage");
     const rows = await db.prepare("SELECT bucket FROM budgets WHERE bucket=?").bind(`trial:${new Date().toISOString().slice(0, 10)}:question:${a.id}`).all();
     assert.equal(rows.results.length, 0, "allowlisted control sessions do not consume public quota per fragment");
     assert.equal(networkCalls.some(p => p.includes("live-control")), false);
-    sidebands.get(sessionId).send(JSON.stringify({ type: "session.closed" }));
-    sidebands.get(sessionId).close(1000, "session ended");
+    assert.equal(networkCalls.slice(callsBefore).filter(p => p.endsWith("/responses")).length, 0, "no direct Responses calls under delegation");
+    sideband.send(JSON.stringify({ type: "session.closed" }));
+    sideband.close(1000, "session ended");
     assert.equal((await next("closed")).type, "closed", "normal supplier closure is not a transport error");
   } finally {
     liveReply = undefined;

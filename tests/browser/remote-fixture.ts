@@ -15,7 +15,7 @@ wav.writeUInt16LE(2, 32);
 wav.writeUInt16LE(16, 34);
 wav.write("data", 36);
 wav.writeUInt32LE(wav.length - 44, 40);
-const episodes: Episode[] = ["a", "b"].map((id) => ({
+export const episodes: Episode[] = ["a", "b"].map((id) => ({
   id: `remote-${id}`,
   title: `Remote sample ${id}`,
   durationMs: 60000,

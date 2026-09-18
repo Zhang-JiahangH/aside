@@ -77,7 +77,7 @@ test("OpenAI adapter maps question input, tool output, citations and cancellatio
     previous_response_id: undefined,
     tools: [],
     max_output_tokens: 10000,
-    reasoning: { effort: "medium" },
+    reasoning: { effort: "low" },
     service_tier: "priority",
     parallel_tool_calls: false,
   });
@@ -114,7 +114,8 @@ test("the fast admission round uses required tools and low reasoning while ordin
   await provider.reply({ instructions: "Answer", tools: [], toolResults: [] });
   assert.deepEqual(bodies[0].reasoning, { effort: "low" });
   assert.equal(bodies[0].tool_choice, "required");
-  assert.deepEqual(bodies[1].reasoning, { effort: "medium" });
+  // Ordinary answers use the provider's configured effort, now low.
+  assert.deepEqual(bodies[1].reasoning, { effort: "low" });
   assert.equal(bodies[1].tool_choice, undefined);
 });
 

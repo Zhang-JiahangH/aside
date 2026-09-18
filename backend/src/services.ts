@@ -15,6 +15,8 @@ export interface VoiceProvider {
     analysis: Analysis,
     atMs: number,
     history?: Turn[],
+    /** Present under server voice control: the session delegates to the question model. */
+    control?: { trial: boolean },
   ): Promise<LiveResult>;
 }
 export interface BackendServices {

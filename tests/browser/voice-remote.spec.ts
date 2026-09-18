@@ -1,23 +1,22 @@
 import { test, expect, type Page } from "@playwright/test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mockPlayer } from "./remote-fixture";
-import { LiveIntent } from "../../backend/src/live-intent";
-import { QuestionService } from "../../backend/src/question-service";
-import type {
-  LiveControlEvent,
-  QuestionRequest,
-  QuestionResult,
-} from "@aside/engine/contracts";
+import { mockPlayer, episodes } from "./remote-fixture";
+import {
+  FakeDelegatedLive,
+  defaultDecision,
+  type BackendDecision,
+} from "./delegation-fixture";
+import type { LiveControlEvent } from "@aside/engine/contracts";
 
 test.use({ locale: "en-US", launchOptions: { args: ["--mute-audio"] } });
 async function setupRemote(
   page: Page,
   debug = false,
   respond?: (
-    q: QuestionRequest,
-    accept: () => boolean,
-  ) => QuestionResult | Promise<QuestionResult>,
+    text: string,
+    turn: number,
+  ) => BackendDecision | Promise<BackendDecision>,
   acknowledgeClose = true,
   origin = "",
 ) {
@@ -25,13 +24,13 @@ async function setupRemote(
   let transcriptions = 0,
     questionRequests = 0,
     timeline = 0;
-  const inputs: any[] = [],
-    errors: string[] = [],
-    acknowledgements: any[] = [];
-  let intent: LiveIntent;
+  const errors: string[] = [],
+    acknowledgements: any[] = [],
+    updates: any[] = [];
+  let live: FakeDelegatedLive;
   let emitted = Promise.resolve();
   page.on("pageerror", (error) => errors.push(error.message));
-  page.on("close", () => intent?.close());
+  page.on("close", () => live?.close());
   const emit = (event: LiveControlEvent) => {
     emitted = emitted
       .then(() =>
@@ -81,8 +80,9 @@ async function setupRemote(
   });
   await page.route("**/api/episodes/*/live-control", (route) => {
     const update = route.request().postDataJSON();
+    updates.push(update);
     if (update.acknowledgement) acknowledgements.push(update.acknowledgement);
-    intent.update(update.player, update.acknowledgement);
+    live.update(update.player, update.acknowledgement);
     return route.fulfill({ json: { ok: true } });
   });
   await page.addInitScript(() => {
@@ -144,50 +144,14 @@ async function setupRemote(
   await page.route("**/api/episodes/*/live", async (route) => {
     const { sdp, control } = route.request().postDataJSON();
     expect(control).toBeTruthy();
-    intent = new LiveIntent(
+    // This substitutes only the backend model behind GPT-Live's delegation.
+    // Tool execution, state and acknowledgement handling use the production
+    // server coordinator; it never receives browser captions.
+    live = new FakeDelegatedLive(
       control.player,
-      [],
-      {
-        // This substitutes only the model. Scheduling and state/ack handling use
-        // the production server coordinator; it never receives browser captions.
-        answer: async (q, _signal, accept) => {
-          inputs.push(q);
-          if (respond) return respond(q, accept);
-          const text = q.history.at(-1)!.text.toLowerCase();
-          const commands =
-            text.includes("dinner") ||
-            text.includes("don't") ||
-            text.includes("honey")
-              ? undefined
-              : text.includes("slower")
-                ? [{ type: "adjust_rate", direction: "slower" }]
-                : text.includes("resume")
-                  ? [{ type: "play" }]
-                  : text.includes("pause") || text.includes("wait")
-                    ? [{ type: "pause" }]
-                    : undefined;
-          return {
-            revision: q.revision,
-            answer: "",
-            sources: [],
-            tools: [],
-            ...(commands
-              ? {
-                  action: "player_control",
-                  commandId: crypto.randomUUID(),
-                  commands,
-                }
-              : { action: "ignore" }),
-          } as any;
-        },
-        emit,
-        context: () => {},
-        now: Date.now,
-        after: (ms, run) => {
-          const timer = setTimeout(run, ms);
-          return () => clearTimeout(timer);
-        },
-      },
+      episodes[0].analysis!,
+      emit,
+      respond ?? defaultDecision,
       debug,
     );
     const answer = await page.evaluate(
@@ -260,17 +224,23 @@ async function setupRemote(
         start_ms: timeline + i * 100,
         end_ms: timeline + (i + 1) * 100,
       };
-      intent.receive(event);
+      live.receive(event);
       if (captions)
         await page.evaluate(
           (e) => (window as any).remoteChannel.send(JSON.stringify(e)),
           event,
         );
     }
+    // GPT-Live delegates once the utterance carries words; punctuation alone never does.
+    const text = deltas.join("");
+    if (/[\p{L}\p{N}]/u.test(text)) void live.delegate(text);
   };
   return {
     audio,
-    inputs,
+    get utterances() {
+      return live.utterances;
+    },
+    updates,
     errors,
     speak,
     async expire() {
@@ -340,88 +310,6 @@ async function setupRemote(
   };
 }
 
-test("the voice can respond while its full backend answer remains unresolved", async ({
-  page,
-}) => {
-  let finish!: () => void;
-  let answerReady = false;
-  const phases: string[] = [];
-  const service = new QuestionService({
-    reply: async (input) => {
-      if (input.toolChoice === "required") {
-        phases.push("admission");
-        return {
-          id: "admitted",
-          answer: "",
-          calls: [{ id: "accept", name: "accept_question", arguments: "{}" }],
-          sources: [],
-          searchedWeb: false,
-        };
-      }
-      phases.push("answer");
-      await new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      answerReady = true;
-      return {
-        id: "answer",
-        answer: "Here is the explanation.",
-        calls: [],
-        sources: [],
-        searchedWeb: false,
-      };
-    },
-  });
-  const s = await setupRemote(page, true, (q, accept) =>
-    service.answer(
-      {
-        version: "1",
-        source: "demo",
-        summary: "",
-        hostStyle: "",
-        speakers: [],
-        voice: "feminine",
-        voiceReason: "test",
-        anchors: [],
-        passages: [],
-      },
-      q,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      accept,
-    ),
-  );
-  await page.locator(".debug-toggle").click();
-  await s.speak(["Why is he called Ah Q?"]);
-  await expect.poll(() => s.acknowledgements.length).toBe(1);
-  expect(phases).toEqual(["admission", "answer"]);
-  expect(answerReady).toBe(false);
-  await s.reply("Let me think about that.");
-  await expect(page.locator(".message.assistant p")).toHaveText(
-    "Let me think about that.",
-  );
-  expect(
-    answerReady,
-    "the full answer is deliberately held until speech is observable",
-  ).toBe(false);
-  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
-  finish();
-  await expect.poll(() => answerReady).toBe(true);
-  await s.reply(" Here is the explanation.");
-  await expect(page.locator(".message p")).toHaveText([
-    "Why is he called Ah Q?",
-    "Let me think about that. Here is the explanation.",
-  ]);
-  expect(
-    s.acknowledgements.length,
-    "completion cannot start a duplicate turn",
-  ).toBe(1);
-  expect(s.questionRequests()).toBe(0);
-  expect(s.errors).toEqual([]);
-});
-
 test("an interrupted reply and early progress stay on opposite sides of the new question", async ({
   page,
 }) => {
@@ -429,15 +317,11 @@ test("an interrupted reply and early progress stay on opposite sides of the new 
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const s = await setupRemote(page, true, async (q) => {
-    if (q.history.at(-1)!.text.includes("为什么")) await pending;
-    return {
-      action: "answer",
-      revision: q.revision,
-      answer: "Explanation",
-      sources: [],
-      tools: [],
-    };
+  // The backend behind the delegation is held for the second question, so
+  // its early caption arrives before the turn is engaged.
+  const s = await setupRemote(page, true, async (text) => {
+    if (text.includes("为什么")) await pending;
+    return { answer: "Explanation" };
   });
   await page.locator(".debug-toggle").click();
   await s.speak(["讲讲阿Q正传"]);
@@ -471,7 +355,7 @@ test("an interrupted reply and early progress stay on opposite sides of the new 
     page.locator(".message.assistant .message-content p"),
   ).toHaveText("上一条回答");
   await s.speak(["阿Q为什么叫阿Q？"]);
-  await expect.poll(() => s.inputs.length).toBe(2);
+  await expect.poll(() => s.utterances.length).toBe(2);
   await caption("我来查一下。", 6000);
   // Let the caption reach the UI while the backend is deliberately held.
   await page.waitForTimeout(200);
@@ -508,20 +392,13 @@ test("an interrupted reply and early progress stay on opposite sides of the new 
 test("a progress sentence, thinking pause and ignored bystander speech keep the podcast paused until requested", async ({
   page,
 }) => {
-  const s = await setupRemote(page, true, (q) => {
-    const text = q.history.at(-1)!.text;
-    return {
-      action: text.includes("dinner")
-        ? "ignore"
-        : text.includes("resume")
-          ? "resume"
-          : "answer",
-      revision: q.revision,
-      answer: "The actual explanation",
-      sources: [],
-      tools: [],
-    };
-  });
+  const s = await setupRemote(page, true, (text) =>
+    text.includes("dinner")
+      ? { ignore: true }
+      : text.includes("resume")
+        ? { resume: true }
+        : { answer: "The actual explanation" },
+  );
   await page.locator(".debug-toggle").click();
   await s.speak(["Can you explain that?"]);
   await expect.poll(() => s.acknowledgements.length).toBe(1);
@@ -531,8 +408,11 @@ test("a progress sentence, thinking pause and ignored bystander speech keep the 
   await page.waitForTimeout(4000);
   expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
   await s.speak(["Honey, what should we have for dinner?"]);
-  await expect.poll(() => s.inputs.length).toBe(2);
-  expect(s.inputs[1].conversation?.assistant?.state).toBe("quiet");
+  await expect.poll(() => s.utterances.length).toBe(2);
+  expect(
+    s.updates.some((u) => u.player.assistant?.state === "quiet"),
+    "the quiet spoken reply was reported to the server",
+  ).toBe(true);
   await s.reply(" Here is what I found.");
   await expect
     .poll(
@@ -557,12 +437,8 @@ test("a progress sentence, thinking pause and ignored bystander speech keep the 
 test("expiry during a spoken answer clears Answering and leaves podcast resume usable", async ({
   page,
 }) => {
-  const s = await setupRemote(page, true, (q) => ({
-    action: "answer",
-    revision: q.revision,
+  const s = await setupRemote(page, true, () => ({
     answer: "A draft answer",
-    sources: [],
-    tools: [],
   }));
   await page.locator(".debug-toggle").click();
   await s.speak(["What does that mean?"]);
@@ -685,20 +561,13 @@ test("late punctuation and bystander recognition do not swallow an answer queued
 }) => {
   const prefix = "因为这些名目都不合，";
   const tail = "作者就用了正传。";
-  const s = await setupRemote(page, true, (q) => {
-    const latest = q.history.at(-1)!.text;
-    return {
-      action: latest.includes("Honey")
-        ? "ignore"
-        : latest.includes("continue")
-          ? "resume"
-          : "answer",
-      revision: q.revision,
-      answer: prefix + tail,
-      sources: [],
-      tools: [],
-    };
-  });
+  const s = await setupRemote(page, true, (latest) =>
+    latest.includes("Honey")
+      ? { ignore: true }
+      : latest.includes("continue")
+        ? { resume: true }
+        : { answer: prefix + tail },
+  );
   await page.locator(".debug-toggle").click();
   await s.speak(["那为什么是正传呢"]);
   await expect.poll(() => s.acknowledgements.length).toBe(1);
@@ -706,7 +575,7 @@ test("late punctuation and bystander recognition do not swallow an answer queued
   await s.speak(['？"}']);
   // A real but unrelated utterance can be observed while the answer is queued.
   await s.speak(["Honey, what's for dinner?"]);
-  await expect.poll(() => s.inputs.length).toBe(2);
+  await expect.poll(() => s.utterances.length).toBe(2);
   await s.reply(tail, prefix);
   await page.locator(".debug-toggle").click();
   await expect(page.getByRole("log")).toContainText(prefix + tail);
@@ -714,17 +583,9 @@ test("late punctuation and bystander recognition do not swallow an answer queued
   await s.speak(['？"}']);
   await s.speak(["OK, continue"]);
   await expect.poll(() => s.acknowledgements.length).toBe(2);
-  expect(
-    s.inputs.every((q) => /[\p{L}\p{N}]/u.test(q.history.at(-1)!.text)),
-  ).toBe(true);
-  expect(
-    s.inputs.filter((q) => !q.history.at(-1)!.text.includes("Honey")),
-  ).toHaveLength(2);
-  expect(s.inputs.at(-1)!.history.slice(-3)).toEqual([
-    { role: "user", text: "那为什么是正传呢" },
-    { role: "assistant", text: prefix + tail },
-    { role: "user", text: "OK, continue" },
-  ]);
+  expect(s.utterances.every((t) => /[\p{L}\p{N}]/u.test(t))).toBe(true);
+  expect(s.utterances.filter((t) => !t.includes("Honey"))).toHaveLength(2);
+  expect(s.utterances.at(-1)).toBe("OK, continue");
   await expect
     .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
     .toBe(false);
@@ -827,7 +688,7 @@ for (const width of [1440, 320]) {
     const soft = await scale();
     await input(0.12);
     await expect.poll(scale).toBeGreaterThan(soft + 0.25);
-    expect(s.inputs).toHaveLength(0);
+    expect(s.utterances).toHaveLength(0);
     expect(s.questionRequests()).toBe(0);
     expect(s.transcriptions()).toBe(0);
     expect(
@@ -921,7 +782,7 @@ test("debug separates browser captions, sideband reception and backend classific
   await expect
     .poll(async () => (await recognition())?.submittedText)
     .toBe("Honey, what's for dinner?");
-  await expect.poll(() => s.inputs.length).toBe(1);
+  await expect.poll(() => s.utterances.length).toBe(1);
   expect(s.questionRequests()).toBe(0);
   expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(false);
   await page.locator(".debug-toggle").click();
@@ -938,8 +799,7 @@ test("sideband alone pauses through pushed NDJSON without browser transcript, VA
   await expect
     .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
     .toBe(true);
-  expect(s.inputs).toHaveLength(1);
-  expect(s.inputs[0].history.at(-1).text).toBe("Wait wait!");
+  expect(s.utterances).toEqual(["Wait wait!"]);
   expect(s.questionRequests()).toBe(0);
   expect(s.transcriptions()).toBe(0);
   await expect.poll(() => s.acknowledgements.length).toBe(1);
@@ -956,7 +816,7 @@ test("one stream handles rate, bystander speech, pause and resume without fronte
     .toBe(0.9);
   expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(false);
   await s.speak(["Honey, what should we have for dinner?"]);
-  await expect.poll(() => s.inputs.length).toBe(2);
+  await expect.poll(() => s.utterances.length).toBe(2);
   expect(
     await s.audio.evaluate((a: HTMLAudioElement) => ({
       paused: a.paused,
@@ -986,26 +846,13 @@ for (const scenario of [
   test(`a spoken yes follows the actual offer: ${scenario.action}`, async ({
     page,
   }) => {
-    let turn = 0;
-    const s = await setupRemote(page, true, (q) => {
-      turn++;
-      if (turn === 2) {
-        expect(q.history.at(-2)).toEqual({
-          role: "assistant",
-          text: scenario.offer,
-        });
-        expect(q.history.at(-1)?.text).toBe("Yes");
-        expect(q.conversation?.assistant?.state).toBe("quiet");
-        expect(q.conversation?.playback.playback?.interrupted).toBe(true);
-      }
-      return {
-        action: turn === 1 ? "answer" : scenario.action,
-        revision: q.revision,
-        answer: "A draft, not the spoken wording",
-        sources: [],
-        tools: [],
-      };
-    });
+    // The offer and the "Yes" live in GPT-Live's own conversation now; the
+    // backend behind it decides by turn, and the server sees only the outcome.
+    const s = await setupRemote(page, true, (_text, turn) =>
+      turn === 1 || scenario.action === "answer"
+        ? { answer: "A draft, not the spoken wording" }
+        : { resume: true },
+    );
     await page.locator(".debug-toggle").click();
     await s.speak(["What does that mean?"]);
     await expect.poll(() => s.acknowledgements.length).toBe(1);
@@ -1013,6 +860,14 @@ for (const scenario of [
       .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
       .toBe(true);
     await s.reply(scenario.offer);
+    expect(
+      s.updates.some(
+        (u) =>
+          u.player.assistant?.text === scenario.offer &&
+          u.player.playback?.interrupted === true,
+      ),
+      "the spoken offer and interruption were reported to the server",
+    ).toBe(true);
     await s.speak(["Yes"]);
     await expect.poll(() => s.acknowledgements.length).toBe(2);
     await expect

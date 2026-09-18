@@ -1492,6 +1492,57 @@ test("a pushed answer pauses only when accepted and mixed questions never submit
   s.session.dispose();
 });
 
+test("a delegated engage pauses the podcast, opens the reply window without client text, and records the answer's sources", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  const decisionId = crypto.randomUUID();
+  s.push({
+    type: "engage",
+    version: s.serverState.version,
+    revision: s.serverState.revision,
+    decisionId,
+    player: { ...s.serverState, source: "voice", turnId: "server-turn" },
+    text: "What is a biography?",
+  });
+  await flush();
+  assert.equal(s.audio.playing, false, "the backend is answering: hard yield");
+  assert.equal(s.commands.some((c) => c.startsWith("commentary:")), false, "the voice speaks the backend's answer itself");
+  assert.ok(s.commands.includes("mute:false"), "the reply audio window opens");
+  assert.equal(s.updates.at(-1)?.acknowledgement?.decisionId, decisionId);
+  assert.equal(s.updates.at(-1)?.acknowledgement?.applied, true);
+  assert.equal(s.updates.at(-1)?.player.assistant?.state, "queued");
+  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "What is a biography?");
+  assert.equal(s.requests.length, 0, "no frontend question request");
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "A biography is a life story.",
+    sources: [{ text: "A biography tells someone else's life story.", startMs: 20000 }],
+  });
+  await flush();
+  assert.equal(s.session.getSnapshot().sources.length, 1);
+  // The spoken words arrive as the voice transcript, not as client text.
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "A biography is a life story.");
+  s.callbacks.onOutput(false);
+  await flush();
+  assert.equal(s.session.getSnapshot().history.at(-1)?.role, "assistant");
+  assert.equal(s.audio.playing, false, "quiet output is not permission to resume");
+  const stale = {
+    type: "engage" as const,
+    version: s.serverState.version + 5,
+    revision: s.serverState.revision,
+    decisionId: crypto.randomUUID(),
+    player: { ...s.serverState, source: "voice" as const, turnId: "later" },
+    text: "stale",
+  };
+  s.push(stale);
+  await flush();
+  assert.equal(s.updates.at(-1)?.acknowledgement?.applied, false);
+  s.session.dispose();
+});
+
 test("an ignored server interpretation cannot resume the podcast after voice output goes quiet", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();

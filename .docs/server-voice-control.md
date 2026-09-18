@@ -1,5 +1,7 @@
 # 服务端语音控制
 
+> 2026-09-18：意图判断改由 GPT-Live 的 Responses 委派完成，服务端只执行后台模型的函数调用，见 [ADR 0004](adr/0004-responses-delegation.md)。下文"后端逐片段判断"的段落已被取代；协议、让位与诊断部分仍然有效，并新增 `engage` / `answered` 事件。
+
 ## 同一段对话中的播放器工具
 
 对话和播放器操作使用同一个 `QuestionService` 模型与工具集合。用户无需切换模式，也不需要说出“播客”或固定命令；模型结合连续对话决定回答、使用播放器工具，或静默等待/忽略旁人聊天。文字输入也经过模型，不再用“继续”的正则表达式跳过对话理解。
@@ -12,28 +14,36 @@
 
 短确认和最后一段回答回报可能交错；新增上下文会让基于旧历史的未处理决定失效并重新判断。同一句输入最多因上下文更新重试一次，避免持续的助手转录让中断请求一直失效或反复判断旁人聊天；用户追加的新内容仍会继续判断。已处理的输入不会因助手输出更新而再次执行。诊断面板可查看实际输出和最近一次模型看到的对话上下文，原文仅在显式 debug 模式下进入诊断帧。
 
-自动模式开启后，音频通过 WebRTC 从浏览器送到 GPT-Live。后端在返回 SDP 前附加 sideband，并在浏览器打开控制流后持续解释 `session.input_transcript.delta`。浏览器字幕、本地 VAD 和 `session.delegation.created` 都不是意图判断的开关。参考 [OpenAI server-side controls](https://developers.openai.com/api/docs/guides/voice-server-controls) 和 [transcript fragments](https://developers.openai.com/api/docs/guides/live-delegation#react-to-transcript-fragments)。
+自动模式开启后，音频通过 WebRTC 从浏览器送到 GPT-Live。会话以 Responses 委派创建：Live 自己判断用户说完并把对话交给后台 luna，后台的函数调用和文本以 `response.event` 回到后端 sideband。节目检索（get_passage、search_podcast）在后端直接执行；播放器操作（control_podcast、resume_podcast）经 NDJSON 推给浏览器，收到执行回报后才作为函数结果交回；ignore_input、wait_for_input 立即回报。后台一旦查节目或开始输出文本，后端推 `engage`，浏览器硬让位并打开回答音频窗口，Live 自己把答案说出来；答案完成后推 `answered` 携带文本与来源。浏览器字幕、本地 VAD 都不是意图判断的开关。参考 [OpenAI delegation and tools](https://developers.openai.com/api/docs/guides/live-delegation) 和 [server-side controls](https://developers.openai.com/api/docs/guides/voice-server-controls)。
 
-Workers 的 sideband 握手限时 5 秒，但收到升级响应后必须清除定时器。`fetch` 的取消信号在 WebSocket 升级后仍关联连接，直接使用 `AbortSignal.timeout(5000)` 会在约 5 秒时切断已经建立的连接。集成测试在握手后等待超过该期限，再验证连续两条 NDJSON 决策。
+Workers 的 sideband 握手限时 5 秒，但收到升级响应后必须清除定时器。`fetch` 的取消信号在 WebSocket 升级后仍关联连接，直接使用 `AbortSignal.timeout(5000)` 会在约 5 秒时切断已经建立的连接。集成测试在握手后等待超过该期限，再验证工具回报链路。
 
-在带 `?debug` 的页面打开 Developer details，可查看独立的诊断工作区：浏览器听到的文本、后端收到的文本、后端正在判断的文本，以及麦克风和 NDJSON 状态。连接原始信息和播放器事件默认折叠；工作区内部滚动，底部播放器保持可用。关闭面板恢复字幕和对话。面板本身不会启动麦克风或播放音频。
+在带 `?debug` 的页面打开 Developer details，可查看独立的诊断工作区：浏览器听到的文本、后端收到的文本，以及麦克风和 NDJSON 状态。连接原始信息和播放器事件默认折叠；工作区内部滚动，底部播放器保持可用。关闭面板恢复字幕和对话。面板本身不会启动麦克风或播放音频。
 
 ```mermaid
 sequenceDiagram
   participant Browser as 浏览器
   participant Live as GPT-Live
   participant Server as 后端
+  participant Luna as luna（由 Live 调用）
   Browser->>Server: POST /live（SDP、播放器状态）
-  Server->>Live: 创建会话并附加 sideband
+  Server->>Live: 创建会话（Responses 委派）并附加 sideband
   Server-->>Browser: SDP、sessionId、control:true
   Browser->>Server: GET /live-control?sessionId=…
   Server-->>Browser: NDJSON ready（保持连接）
   Browser->>Live: WebRTC 麦克风音频
-  Live->>Server: 实时识别片段
-  Server->>Server: 合并片段、异步判断对象与意图
+  Live->>Server: 识别片段（observing）
+  Live->>Luna: 判定说完，委派（classifying）
+  Luna->>Server: function_call search_podcast
+  Server-->>Browser: NDJSON engage（硬让位、开回答窗口）
+  Server->>Live: response.item.create + response.create
+  Luna->>Live: 答案文本
+  Live-->>Browser: 语音答案（WebRTC）
+  Server-->>Browser: NDJSON answered（文本与来源）
+  Luna->>Server: function_call control_podcast
   Server-->>Browser: NDJSON decision
-  Browser->>Browser: 校验版本并执行播放器操作
-  Browser->>Server: PUT /live-control（执行回报、新状态）
+  Browser->>Server: PUT /live-control（执行回报）
+  Server->>Live: 函数结果（是否执行、观测到的播放状态）
 ```
 
 所有 URL 都在 `/api/episodes/:id` 下。文字问答、按住说话以及连接尚未就绪时的首句 WAV 转写仍使用已有接口；正常实时遥控不会逐句请求 `/question`。冷启动录音路径仍需等录音结束，不代表实时路径延迟。
@@ -47,7 +57,8 @@ sequenceDiagram
 - `ready`：会话通道就绪，之后才启用 Live 麦克风输入。
 - `observing`、`classifying`：后端已收到片段、已开始判断；仅 `debug:true` 带诊断原文。
 - `decision`：`decisionId`、`version`、输入时的 `player` 快照、被接受的 `text` 和原有 `QuestionResult`。`ignore`、`wait` 不携带原文，不暂停播放；`classifying` 起播客轻微降音（软让位），`ignore` 后回升，`wait` 由保持超时回升，见[播放器让位](player-controls.md#让位软让位与硬让位)。
-- `decision.answerPending:true`：问题已被接受，允许 Live 接话，完整答案仍在准备。后续 `answer` 事件携带同一 `decisionId`，只补充仍有效的这一轮；完整答案不会占用下一轮意图判断的槽位。
+- `engage`：后台开始回答（查节目或输出文本）。携带 `decisionId`、`version`、`revision`、输入时的 `player` 快照与被接受的 `text`。浏览器淡出暂停、打开回答音频窗口并回报；答案由 Live 自己说出，客户端不再 append commentary。
+- `answered`：`decisionId`、后台答案 `answer` 与 `sources`，用于引用与诊断；对话历史仍来自 Live 的实际输出字幕。
 - `heartbeat`：15 秒一次。
 - `error`、`closed`：明确终止通道，前端关闭语音并提示重新连接，保留播放器可用。判断调用失败时，原因只写入服务端日志（`wrangler tail` 中的 `Aside voice intent classification failed`，含 reason、是否超时、第几次判断），前端只区分三种安全文案：试用会话已结束（120 秒上限或 AI 关闭）、判断超时（15 秒）、其它失败。
 
@@ -57,17 +68,13 @@ Cloudflare 通过已认证身份选择对应的 LiveSupervisor，再核对节目
 
 ## 调度和生命周期
 
-### 连接时预热判断上下文
+轮次边界由 GPT-Live 判断。识别片段仍逐条进入后端，只用于 `observing` 诊断、`engage` 的用户原文，以及一条本地快速暂停：当前话语只是"等一下 / 等等 / wait / hold on / pause"这类完整暂停词时立即推 pause 决定，后台随后的相同 pause 调用复用该执行结果，不暂停两次；话语继续增长则不再命中。片段间隔超过 1.2 秒形成新输入快照。
 
-带 `earlyResponse:true` 的会话在创建 Live 音频连接的同时，为判断模型建立独立 Responses WebSocket，并发送 `response.create` / `generate:false`。规则、工具定义、当前已听内容及已有对话先成为服务端基线；预热不生成回答，不调用播放器工具，也不阻塞麦克风连接。参见 [OpenAI WebSocket 预热协议](https://developers.openai.com/api/docs/guides/websocket-mode#connect-and-create-responses)。
+此前为旧的逐片段判断实现的连接预热（`backend/src/response-preload.ts`、`responses-*.ts`）在委派模式下不再被调用：Live 自己维护到 Responses 的持久连接。模块与测试暂留，可在确认不再回退后删除。
 
-预热完成后，判断通过 `previous_response_id` 引用基线，只追加发生变化的上下文字段及新增历史。若原历史已被截断或修改，则发送替换历史；最新播放位置、当前片段、实际输出和用户话语始终覆盖旧状态。规则和工具仍按 API 要求随请求声明。每次判断从同一基线分支，作废的判断不会混入用户实际对话。基线占一个固定 lane；最多三个判断 lane 供已取消请求排空和后续请求使用，不无限创建 lane。事实回答沿已接受的 response ID 在独立 HTTP 路径继续，保持与意图判断并行。
+后台的函数调用按顺序执行，同一时刻最多一个播放器决定等待回报；回报超时 10 秒后向后台回报"未执行"，会话继续。手动操作使版本号变化时，取消等待中的回报并丢弃当前话语。每个会话最多执行 `intentCalls` 次工具调用（账号会话为时长秒数除以 4），超出即明确报错并关闭控制流。
 
-预热未完成、握手失败、缓存失效或连接中断时，当前请求回退为携带完整最新上下文的原 HTTP 调用。所有状态按语音会话隔离，断麦、创建失败、sideband 或 NDJSON 关闭都会释放预热连接。生产日志 `Aside voice model preload` 的 `ready`（含准备耗时）、`used`、`fallback` 和 `unavailable`（仅原因分类及错误码） 可与 `Aside voice decision.modelMs` 对照；这些时间不等于设备真正开始出声的时间。
-
-首个含文字或数字的片段启动 160ms 合并窗口，不等 VAD speech-end，也不等待 delegation。每个会话最多一个模型判断在途；途中更新的文本在后续判断中合并。文本发生变化或手动操作使结果过期时丢弃旧决定。`ignore` 和 `wait` 都允许后来追加的内容再次判断；不能因为先听到旁人聊天就丢弃随后的控制语句。
-
-纯空白、标点和符号片段不单独形成发言，不触发 observing/classifying，也不会撤销已排队的回答。分隔符保留到同一输入的后续文字中，例如独立的空格或分片数字 `0` / `.` / `5`；新一轮开始时清空上轮尾部符号。前端收到识别通知时，只关闭已经结束的回答窗口，不会因为声音尚未开始就把排队中的回答静音。
+后台指令里的"已听文稿窗口"随播放位置刷新：当前段落变化时经 sideband 发 `session.update`，至多每 3 秒一次。后台每次响应的 usage 从 `response.completed` 记入问答账本，服务端不再自己调用 Responses API。
 
 ### Web 回答音频缓冲
 

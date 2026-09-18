@@ -11,7 +11,10 @@ import {
 import {
   hostPerspective,
   playerInteractionInstructions,
+  liveVoiceInstructions,
+  delegationInstructions,
 } from "./dialogue-policy.js";
+import { questionTools } from "./question-tools.js";
 
 export class LiveCreationRejected extends Error {}
 
@@ -25,8 +28,15 @@ export class LiveCreationRejected extends Error {}
 const OUTPUT_TOKENS = 10000;
 /** Anonymous trial turns are rate limited per day, but still get room to reason. */
 const TRIAL_OUTPUT_TOKENS = 6000;
-/** Spoken answers are short; effort buys better tool and intent decisions. */
-const REASONING_EFFORT = "medium" as const;
+/**
+ * Spoken answers are short and a listener is waiting mid-episode. The ledger
+ * showed `medium` spending 200-380 reasoning tokens per answer, several seconds
+ * on a voice turn. `low` is the tier OpenAI recommends for latency-sensitive
+ * tool use; `none` is documented as unsuited to multi-step tool calls, which
+ * this loop still makes. Omitting the field would not disable reasoning: the
+ * gpt-5.6 family defaults to `medium`.
+ */
+const REASONING_EFFORT = "low" as const;
 /**
  * Fast mode. `"fast"` and `"priority"` are documented as identical, and the
  * pinned SDK's union has only the latter, so this spelling is the one that type
@@ -46,6 +56,8 @@ export class InteractiveProvider implements QuestionModel {
     readonly model = "gpt-5.6-luna",
     readonly trial = false,
     private connectResponses?: ConnectResponses,
+    /** Benchmarks compare tiers; production keeps the default. */
+    readonly effort: NonNullable<OpenAI.Reasoning["effort"]> = REASONING_EFFORT,
   ) {
     this.client = new OpenAI({ apiKey: key, maxRetries: 0, timeout: 90000 });
   }
@@ -91,7 +103,7 @@ export class InteractiveProvider implements QuestionModel {
         ? request.tools.filter((tool) => tool.type !== "web_search")
         : request.tools,
       max_output_tokens: this.trial ? TRIAL_OUTPUT_TOKENS : OUTPUT_TOKENS,
-      reasoning: { effort: request.reasoningEffort ?? REASONING_EFFORT },
+      reasoning: { effort: request.reasoningEffort ?? this.effort },
       ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
       service_tier: SERVICE_TIER,
       parallel_tool_calls: false,
@@ -210,12 +222,44 @@ export class InteractiveProvider implements QuestionModel {
     );
     return result.text;
   }
+  /**
+   * Under server voice control the session runs Responses delegation: GPT-Live
+   * decides when to hand a turn to this provider's question model, speaks the
+   * result itself, and the server executes the function calls over the
+   * sideband. Other clients keep client delegation.
+   */
   async createLive(
     sdp: string,
     a: Analysis,
     atMs: number,
     history: Turn[] = [],
+    control?: { trial: boolean },
   ) {
+    const delegation = control
+      ? {
+          type: "responses",
+          responses: {
+            model: this.model,
+            instructions: delegationInstructions(a, atMs),
+            tools: questionTools.filter((tool) => tool.type !== "web_search"),
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            max_output_tokens: control.trial ? TRIAL_OUTPUT_TOKENS : OUTPUT_TOKENS,
+            reasoning: { effort: this.effort },
+            service_tier: SERVICE_TIER,
+          },
+        }
+      : { type: "client" };
+    const instructions = control
+      ? liveVoiceInstructions +
+        " Speaking style of the podcast host, for tone only: " +
+        a.hostStyle
+      : hostPerspective +
+        playerInteractionInstructions +
+        "Wait silently at startup. Do not greet or answer old history. Listen during podcast playback, but do not speak over it. Ignore speech addressed to other people. Delegate addressed playback requests and substantive questions as soon as the actionable intent is clear, even while the user continues speaking. Remain silent while the app classifies or executes the request; the app controls whether playback pauses. If the app says a local recording is being handled, wait for its backend result instead of duplicating it. Determine spoken reply language ONLY from the latest actual user utterance or their explicit language request. English questions MUST receive spoken English answers; Chinese questions receive Chinese answers. Host style, metadata, control messages, summaries and previous assistant replies do not determine reply language. Preserve the language and concise length of backend answers instead of translating or expanding them. For simple questions use 2-3 short spoken sentences; expand only when asked or needed. No markdown, lists, greetings, repeated questions or automatic follow-up invitations. Let the app manage playback and follow-up waiting. Delegate factual questions and all playback requests (including rate, volume, mute, pause, seek and repeat) to the backend. Remain available for follow-ups. Never interpret silence as permission to resume. If a lookup takes time give at most one brief concrete progress update. Host style: " +
+        a.hostStyle +
+        " Initial playhead ms: " +
+        atMs;
     const response = await fetch("https://api.openai.com/v1/live/sessions", {
       method: "POST",
       headers: {
@@ -235,17 +279,11 @@ export class InteractiveProvider implements QuestionModel {
               },
             ],
           })),
-          delegation: { type: "client" },
+          delegation,
           audio: {
             output: { voice: a.voice === "feminine" ? "gleam" : "meridian" },
           },
-          instructions:
-            hostPerspective +
-            playerInteractionInstructions +
-            "Wait silently at startup. Do not greet or answer old history. Listen during podcast playback, but do not speak over it. Ignore speech addressed to other people. Delegate addressed playback requests and substantive questions as soon as the actionable intent is clear, even while the user continues speaking. Remain silent until the app accepts an addressed question; the app controls whether playback pauses. Once the app reports that the spoken turn is accepted, you may acknowledge briefly while the backend prepares its answer. Wait for backend facts before explaining, and do not invent a lookup or fill pauses repeatedly. If the app says a local recording is being handled, wait for its backend result instead of duplicating it. Determine spoken reply language ONLY from the latest actual user utterance or their explicit language request. English questions MUST receive spoken English answers; Chinese questions receive Chinese answers. Host style, metadata, control messages, summaries and previous assistant replies do not determine reply language. Preserve the language and concise length of backend answers instead of translating or expanding them. For simple questions use 2-3 short spoken sentences; expand only when asked or needed. No markdown, lists, greetings, repeated questions or automatic follow-up invitations. Let the app manage playback and follow-up waiting. Delegate factual questions and all playback requests (including rate, volume, mute, pause, seek and repeat) to the backend. Remain available for follow-ups. Never interpret silence as permission to resume. If a lookup takes time give at most one brief concrete progress update. Host style: " +
-            a.hostStyle +
-            " Initial playhead ms: " +
-            atMs,
+          instructions,
         },
         transport: { type: "webrtc", sdp },
       }),

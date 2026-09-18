@@ -130,43 +130,29 @@ test("local server attaches sideband before returning Live and streams server de
     analysis,
   });
   let receive!: (event: Record<string, unknown>) => void;
-  let modelCalls = 0,
-    attached = false;
+  let attached = false,
+    liveControl: unknown;
+  const sent: Record<string, unknown>[] = [];
   const app = createApp(
     store,
     fakeServices({
       voice: {
         transcribeQuestion: unused,
-        createLive: async () => ({
-          session: { id: "session" },
-          transport: { sdp: "answer" },
-        }),
+        createLive: async (_sdp, _analysis, _atMs, _history, control) => {
+          liveControl = control;
+          return {
+            session: { id: "session" },
+            transport: { sdp: "answer" },
+          };
+        },
         attachLive: async (_id, callback) => {
           receive = callback;
           attached = true;
-          return { send() {}, close() {} };
-        },
-      },
-      questions: {
-        answer: async (_analysis, q, _signal, _progress, telemetry) => {
-          modelCalls++;
-          telemetry?.({
-            rounds: 1,
-            tiers: [],
-            inputTokens: 1,
-            cachedInputTokens: 0,
-            outputTokens: 1,
-            reasoningTokens: 0,
-          });
-          // Let the controller publish this result before ending its stream.
-          // A fixed 300 ms close can beat the debounce on a loaded build host.
-          setImmediate(() => receive({ type: "session.closed" }));
           return {
-            revision: q.revision,
-            action: "ignore",
-            answer: "",
-            sources: [],
-            tools: [],
+            send(text) {
+              sent.push(JSON.parse(text));
+            },
+            close() {},
           };
         },
       },
@@ -210,11 +196,28 @@ test("local server attaches sideband before returning Live and streams server de
     );
     // inject resolves only after the response stream ends. The simulated Live
     // emits independently while that single HTTP response remains open.
-    const input = setTimeout(
-      () =>
-        receive({ type: "session.input_transcript.delta", delta: "Dinner?" }),
-      30,
-    );
+    const input = setTimeout(() => {
+      receive({ type: "session.input_transcript.delta", delta: "Dinner?" });
+      receive({
+        type: "session.delegation.created",
+        delegation: { id: "d1", target: "responses" },
+      });
+      receive({
+        type: "response.event",
+        delegation_id: "d1",
+        event: {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            call_id: "c1",
+            name: "ignore_input",
+            arguments: "{}",
+          },
+        },
+      });
+      // Let the controller publish this result before ending its stream.
+      setTimeout(() => receive({ type: "session.closed" }), 200);
+    }, 30);
     const end = setTimeout(() => receive({ type: "session.closed" }), 5000);
     const stream = await reading;
     clearTimeout(input);
@@ -230,7 +233,12 @@ test("local server attaches sideband before returning Live and streams server de
       "ignore",
     );
     assert.equal(events.at(-1).type, "closed");
-    assert.equal(modelCalls, 1);
+    assert.deepEqual(liveControl, { trial: false });
+    assert.deepEqual(
+      sent.map((e) => e.type),
+      ["response.item.create", "response.create"],
+      "the tool result returns over the sideband",
+    );
   } finally {
     await app.close();
     store.close();

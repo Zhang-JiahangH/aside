@@ -1,19 +1,16 @@
-import type { Analysis, Turn } from "@aside/engine/core";
+import type { Analysis } from "@aside/engine/core";
 import {
   liveControlEventSchema,
   type LiveControlEvent,
   type LiveControlUpdate,
   type LiveRequest,
 } from "@aside/engine/contracts";
-import { LiveIntent } from "./live-intent.js";
-import type {
-  QuestionAnswerer,
-  QuestionTelemetry,
-} from "./question-service.js";
+import { LiveDelegation } from "./live-delegation.js";
+import type { QuestionTelemetry } from "./question-service.js";
 
 /** One NDJSON subscription for one Live session, shared by both server adapters. */
 export class LiveControl {
-  private intent: LiveIntent;
+  private delegation: LiveDelegation;
   private sink?: ReadableStreamDefaultController<Uint8Array>;
   private connected = false;
   private closed = false;
@@ -23,37 +20,26 @@ export class LiveControl {
     private sessionId: string,
     control: NonNullable<LiveRequest["control"]>,
     analysis: Analysis,
-    history: Turn[],
-    questions: QuestionAnswerer,
-    context: (text: string) => void,
+    /** Delivers a client event to GPT-Live over the session's sideband. */
+    send: (event: Record<string, unknown>) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
-    intentLimit = 30,
-    private disposeQuestions?: () => void,
+    callLimit = 30,
   ) {
-    this.intent = new LiveIntent(
+    this.delegation = new LiveDelegation(
       control.player,
-      history,
+      analysis,
       {
-        answer: (data, signal, onAccept) =>
-          questions.answer(
-            analysis,
-            data,
-            signal,
-            undefined,
-            telemetry,
-            undefined,
-            control.earlyResponse ? onAccept : undefined,
-          ),
         emit: (event) => this.emit(event),
-        context,
+        send,
         now: Date.now,
         after: (ms, run) => {
           const timer = setTimeout(run, ms);
           return () => clearTimeout(timer);
         },
+        telemetry,
       },
       control.debug,
-      intentLimit,
+      callLimit,
     );
   }
   private eventTypes = new Set<string>();
@@ -61,19 +47,24 @@ export class LiveControl {
     // Event names only: which supplier signals accompany an utterance that
     // produced no transcript (speech detected, or nothing at all).
     const type = typeof event.type === "string" ? event.type : "unknown";
+    const nested =
+      type === "response.event" &&
+      typeof (event.event as { type?: unknown } | undefined)?.type === "string"
+        ? `${type}/${(event.event as { type: string }).type}`
+        : type;
     // Audio frames arrive five times a second; once per session is enough.
     const repeating =
-      type.endsWith(".delta") ||
-      type.endsWith(".append") ||
-      type.endsWith(".appended") ||
-      type === "session.usage.updated";
-    if (!repeating || !this.eventTypes.has(type))
+      nested.endsWith(".delta") ||
+      nested.endsWith(".append") ||
+      nested.endsWith(".appended") ||
+      nested === "session.usage.updated";
+    if (!repeating || !this.eventTypes.has(nested))
       console.log("Aside voice sideband event", {
-        type,
+        type: nested,
         subscribed: !!this.sink,
       });
-    this.eventTypes.add(type);
-    if (this.sink && !this.closed) this.intent.receive(event);
+    this.eventTypes.add(nested);
+    if (!this.closed) this.delegation.receive(event);
   }
   update(data: LiveControlUpdate) {
     if (this.closed || data.sessionId !== this.sessionId) {
@@ -83,7 +74,7 @@ export class LiveControl {
       });
       return false;
     }
-    this.intent.update(data.player, data.acknowledgement);
+    this.delegation.update(data.player, data.acknowledgement);
     return true;
   }
   subscribe(): Response {
@@ -141,8 +132,7 @@ export class LiveControl {
     if (error) this.emit({ type: "error", error });
     if (this.closed) return;
     this.closed = true;
-    this.intent.close();
-    this.disposeQuestions?.();
+    this.delegation.close();
     clearInterval(this.heartbeat);
     this.sink?.enqueue(this.encoder.encode('{"type":"closed"}\n'));
     this.sink?.close();
