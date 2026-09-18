@@ -116,6 +116,18 @@ export interface SeoHead {
   jsonLd: unknown;
 }
 
+/** The card image carries a headline, so it follows the page language too. */
+const cardImages: Record<SeoLocale, { url: string; alt: string }> = {
+  en: {
+    url: `${SITE}/og-image.png`,
+    alt: "Aside — a podcast player you can talk back to",
+  },
+  zh: {
+    url: `${SITE}/og-image-zh.png`,
+    alt: "Aside — 可以插话的播客播放器",
+  },
+};
+
 export function seoHead(head: SeoHead): string {
   const lines = [
     `<title>${escapeHtml(head.title)}</title>`,
@@ -129,14 +141,19 @@ export function seoHead(head: SeoHead): string {
       `<link rel="alternate" hreflang="${escapeHtml(alternate.hreflang)}" href="${escapeHtml(alternate.href)}" />`,
     );
   const zh = head.locale === "zh";
+  const card = cardImages[head.locale];
   lines.push(
     `<meta property="og:title" content="${escapeHtml(head.title)}" />`,
     `<meta property="og:description" content="${escapeHtml(head.description)}" />`,
     `<meta property="og:url" content="${escapeHtml(head.canonical ?? SITE + "/")}" />`,
     `<meta property="og:locale" content="${zh ? "zh_CN" : "en_US"}" />`,
     `<meta property="og:locale:alternate" content="${zh ? "en_US" : "zh_CN"}" />`,
+    `<meta property="og:image" content="${card.url}" />`,
+    `<meta property="og:image:alt" content="${escapeHtml(card.alt)}" />`,
     `<meta name="twitter:title" content="${escapeHtml(head.title)}" />`,
     `<meta name="twitter:description" content="${escapeHtml(head.description)}" />`,
+    `<meta name="twitter:image" content="${card.url}" />`,
+    `<meta name="twitter:image:alt" content="${escapeHtml(card.alt)}" />`,
     `<script type="application/ld+json">${jsonScript(head.jsonLd)}</script>`,
   );
   return lines.join("\n    ");

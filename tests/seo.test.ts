@@ -59,6 +59,20 @@ test("seoHead emits one canonical, language alternates and escaped text", () => 
   assert.match(head, /hreflang="en"/);
   assert.ok(!head.includes("<script>alert"), "title must be escaped");
   assert.match(head, /og:locale" content="zh_CN"/);
+  assert.match(head, /og:image" content="https:\/\/asidefm\.com\/og-image-zh\.png"/);
+  assert.match(head, /twitter:image" content="https:\/\/asidefm\.com\/og-image-zh\.png"/);
+});
+
+test("seoHead pairs the English page with the English card image", () => {
+  const head = seoHead({
+    title: "Aside",
+    description: "d",
+    robots: "index, follow",
+    locale: "en",
+    jsonLd: {},
+  });
+  assert.match(head, /og:image" content="https:\/\/asidefm\.com\/og-image\.png"/);
+  assert.match(head, /twitter:image" content="https:\/\/asidefm\.com\/og-image\.png"/);
 });
 
 test("inject swaps both shell regions and survives a shell without markers", () => {

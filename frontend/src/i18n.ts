@@ -61,6 +61,17 @@ const spaceTitles: Record<Locale, string> = {
   zh: "我的空间 · Aside",
   en: "Your space · Aside",
 };
+/** Mirrors `cardImages` in cloudflare/src/seo-html.ts. */
+const cardImages: Record<Locale, { url: string; alt: string }> = {
+  zh: {
+    url: "https://asidefm.com/og-image-zh.png",
+    alt: "Aside — 可以插话的播客播放器",
+  },
+  en: {
+    url: "https://asidefm.com/og-image.png",
+    alt: "Aside — a podcast player you can talk back to",
+  },
+};
 const indexRobots =
   "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1";
 function setMeta(selector: string, content: string) {
@@ -94,6 +105,10 @@ function updateDocument() {
   setMeta('meta[property="og:locale:alternate"]', zh ? "en_US" : "zh_CN");
   setMeta('meta[name="twitter:title"]', titles[locale]);
   setMeta('meta[name="twitter:description"]', descriptions[locale]);
+  setMeta('meta[property="og:image"]', cardImages[locale].url);
+  setMeta('meta[property="og:image:alt"]', cardImages[locale].alt);
+  setMeta('meta[name="twitter:image"]', cardImages[locale].url);
+  setMeta('meta[name="twitter:image:alt"]', cardImages[locale].alt);
   setMeta(
     'meta[name="robots"]',
     privatePage ? "noindex, nofollow" : indexRobots,

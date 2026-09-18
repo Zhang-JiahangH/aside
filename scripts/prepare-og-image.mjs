@@ -3,11 +3,25 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
-// Renders the 1200x630 Open Graph / Twitter card image into frontend/public.
-// Re-run after brand or headline changes: npm run prepare:og
+// Renders the 1200x630 Open Graph / Twitter card images into frontend/public,
+// one per interface language: a link preview has to read in the language of the
+// title beside it. Re-run after brand or headline changes: npm run prepare:og
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const target = resolve(root, "frontend/public/og-image.png");
+const cards = [
+  {
+    file: "og-image.png",
+    lang: "en",
+    heading: "Follow your curiosity,<br /><em>ask anytime.</em>",
+    sub: "Interrupt a podcast. Ask out loud. Keep listening.",
+  },
+  {
+    file: "og-image-zh.png",
+    lang: "zh-CN",
+    heading: "听到好奇的地方，<br /><em>随时插话。</em>",
+    sub: "用语音打断播客，随口提问，接着听。",
+  },
+];
 
 const mark = `<svg viewBox="0 0 100 100" width="58" height="58" aria-hidden="true"><g fill="#73777d">
   <circle cx="50" cy="23" r="12"/>
@@ -23,8 +37,8 @@ const bars = Array.from(
   (_, index) => `<i style="height:${10 + ((index * 17 + 7) % 41)}px"></i>`,
 ).join("");
 
-const html = `<!doctype html>
-<html lang="zh-CN">
+const html = (card) => `<!doctype html>
+<html lang="${card.lang}">
   <head>
     <meta charset="utf-8" />
     <style>
@@ -100,8 +114,8 @@ const html = `<!doctype html>
     <span class="orbit orbit-b"></span>
     <div class="brand">Aside ${mark}</div>
     <div>
-      <h1>听到好奇的地方，<br /><em>随时插话。</em></h1>
-      <p class="sub">Interrupt a podcast. Ask out loud. Keep listening.</p>
+      <h1>${card.heading}</h1>
+      <p class="sub">${card.sub}</p>
     </div>
     <div class="foot">
       <span class="site">asidefm.com</span>
@@ -116,10 +130,13 @@ try {
     viewport: { width: 1200, height: 630 },
     deviceScaleFactor: 1,
   });
-  await page.setContent(html, { waitUntil: "load" });
-  await mkdir(dirname(target), { recursive: true });
-  await page.screenshot({ path: target });
+  for (const card of cards) {
+    const target = resolve(root, "frontend/public", card.file);
+    await page.setContent(html(card), { waitUntil: "load" });
+    await mkdir(dirname(target), { recursive: true });
+    await page.screenshot({ path: target });
+    console.log(`wrote ${target}`);
+  }
 } finally {
   await browser.close();
 }
-console.log(`wrote ${target}`);
