@@ -14,6 +14,15 @@ silence does **not** resume playback. The listener explicitly resumes by voice
 or with the Continue control. The shared runtime also applies this hold policy
 to native spoken answers.
 
+This describes the current implementation, not the intended product contract.
+The intended listening loop includes an automatic follow-up wait (3 seconds,
+at least 8 seconds for a long answer, with a persistent manual hold option).
+That timer still exists, but `engageLive()` and the spoken branch of
+`consumeResult()` call `hold()`, while `scheduleFollowup()` requires `!held`.
+Automatic resume after spoken answers is therefore an implementation/product
+gap. Removing the hold alone would revive premature resume during thinking or
+tool gaps; completion needs a reliable model-and-playback condition first.
+
 ## Compatibility and changes
 
 - Native remains manual hold-to-talk: M4A transcription, `/question`, then Live
@@ -74,6 +83,8 @@ listening while the episode plays, pausing for conversation and retaining input
 when playback resumes requires native input, control-stream and audio-session
 work. The pause/resume policy and the lifetime of microphone capture are separate
 decisions; this compatibility patch does not deliver that hands-free experience.
+The 60-second idle release in this patch belongs to the manual native adapter;
+it must not be reused as a reason to close continuous listening between questions.
 
 The existing Android recvonly transport limitation remains: the realistic RTC
 fixture requires incoming media before generating spoken output. This iOS/shared
