@@ -161,9 +161,11 @@ export class MobileApi implements PlayerBackend {
     return result.user;
   }
   async forget() {
+    const token = this.token;
     this.token = null;
     this.recovery = undefined;
     await SecureStore.deleteItemAsync("aside.token");
+    if (token) await this.liveJournal.forget(token);
   }
   async logout() {
     await this.json("/auth/logout", {});

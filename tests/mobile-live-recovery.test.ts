@@ -65,6 +65,15 @@ test("another account and corrupt storage cannot authorize session closure", asy
     assert.equal(f.value(), raw);
   }
 });
+
+test("logout removes its recovery credential without erasing another account's journal", async () => {
+  const f = fixture(),
+    journal = new LiveSessionJournal(f.storage);
+  await journal.forget("account-b");
+  assert.equal(f.value(), JSON.stringify(previous));
+  await journal.forget("account-a");
+  assert.equal(f.value(), null);
+});
 test("late old-session cleanup cannot erase a replacement session journal", async () => {
   const f = fixture(),
     journal = new LiveSessionJournal(f.storage);

@@ -36,10 +36,13 @@ export class LiveSessionJournal {
   remember(value: RememberedLive) {
     return this.serial(() => this.storage.write(JSON.stringify(value)));
   }
-  forget(token: string, sessionId: string) {
+  forget(token: string, sessionId?: string) {
     return this.serial(async () => {
       const old = await this.read();
-      if (old?.token === token && old.sessionId === sessionId)
+      if (
+        old?.token === token &&
+        (sessionId === undefined || old.sessionId === sessionId)
+      )
         await this.storage.remove();
     });
   }
